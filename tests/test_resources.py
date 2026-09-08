@@ -158,3 +158,113 @@ def test_prepare_h3_then_exception_releases_lock_without_repeating_callback(monk
     assert not rm.lock.locked()
     assert rm.lock.acquire(blocking=False)
     rm.lock.release()
+
+
+@pytest.mark.parametrize('previous,target', [('video', 'image'), ('image', 'video'), (None, 'image')])
+def test_comfy_family_switch_waits_for_release_under_shared_lock(monkeypatch, previous, target):
+    rm = manager()
+    rm.comfy_kind = previous
+    events = []
+    monkeypatch.setattr(rm, '_prepare_h3_locked', lambda: {'ready': True})
+    monkeypatch.setattr(rm, 'assert_idle', lambda: [{'url': 'http://127.0.0.1:8010', 'online': True, 'running': 0, 'pending': 0}])
+    monkeypatch.setattr(resources.time, 'sleep', lambda seconds: events.append('wait'))
+    memory = iter([{'used_mib': 22000}, {'used_mib': 1500}])
+    def snapshot():
+        assert rm.lock.locked()
+        events.append('memory')
+        return next(memory)
+    def free(url, **kwargs):
+        assert rm.lock.locked() and url == 'http://127.0.0.1:8010/free'
+        assert kwargs == {'json': {'unload_models': True, 'free_memory': True}, 'timeout': 8, 'trust_env': False}
+        events.append('free')
+        return SimpleNamespace(raise_for_status=lambda: None)
+    def submit():
+        assert rm.lock.locked() and rm.comfy_kind == target
+        assert events == ['free', 'wait', 'memory', 'wait', 'memory']
+        events.append('submit')
+        return 'own-prompt'
+    monkeypatch.setattr(resources, 'gpu_snapshot', snapshot)
+    monkeypatch.setattr(resources.httpx, 'post', free)
+    assert rm.prepare_comfy_then(target, submit) == 'own-prompt'
+    assert not rm.lock.locked() and events[-1] == 'submit'
+
+
+@pytest.mark.parametrize('previous,target', [('video', 'video'), ('image', 'image'), ('empty', 'image'), ('empty', 'video'), (None, 'video')])
+def test_same_comfy_family_or_verified_empty_stays_warm(monkeypatch, previous, target):
+    rm = manager()
+    rm.comfy_kind = previous
+    monkeypatch.setattr(rm, '_prepare_h3_locked', lambda: {'ready': True})
+    assert rm.prepare_comfy_then(target, lambda: 'queued') == 'queued'
+    assert rm.comfy_kind == target
+
+
+def test_busy_queue_prevents_family_release_and_submission(monkeypatch):
+    rm = manager()
+    rm.comfy_kind = 'image'
+    monkeypatch.setattr(rm, '_prepare_h3_locked', lambda: {'ready': True})
+    def busy():
+        raise resources.ResourceError('ComfyUI has running or queued work.')
+    monkeypatch.setattr(rm, 'assert_idle', busy)
+    with pytest.raises(resources.ResourceError, match='queued work'):
+        rm.prepare_h3_then(denied)
+    assert rm.comfy_kind == 'image' and not rm.lock.locked()
+
+
+def test_unknown_release_memory_never_submits_new_family(monkeypatch):
+    rm = manager()
+    rm.comfy_kind = 'image'
+    monkeypatch.setattr(rm, '_prepare_h3_locked', lambda: {'ready': True})
+    monkeypatch.setattr(rm, 'assert_idle', lambda: [{'url': 'http://127.0.0.1:8010', 'online': True}])
+    monkeypatch.setattr(resources.httpx, 'post', lambda *a, **k: SimpleNamespace(raise_for_status=lambda: None))
+    monkeypatch.setattr(resources.time, 'sleep', lambda *a: None)
+    ticks = iter([0, 41])
+    monkeypatch.setattr(resources.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(resources, 'gpu_snapshot', lambda: None)
+    with pytest.raises(resources.ResourceError, match='No new image or video was queued'):
+        rm.prepare_h3_then(denied)
+    assert rm.comfy_kind == 'image' and not rm.lock.locked()
+
+
+def test_image_switch_failure_keeps_conservative_family_after_lost_submission(monkeypatch):
+    rm = manager()
+    rm.comfy_kind = 'empty'
+    monkeypatch.setattr(rm, '_prepare_h3_locked', lambda: {'ready': True})
+    def lost():
+        raise httpx.ReadTimeout('Response lost')
+    with pytest.raises(httpx.ReadTimeout):
+        rm.prepare_comfy_then('image', lost)
+    assert rm.comfy_kind == 'image' and not rm.lock.locked()
+
+
+def test_invalid_comfy_family_cannot_acquire_lock():
+    rm = manager()
+    with pytest.raises(ValueError, match='image or video'):
+        rm.prepare_comfy_then('arbitrary', denied)
+    assert not rm.lock.locked()
+
+
+def test_comfy_family_is_durable_before_potentially_uncertain_post(tmp_path, monkeypatch):
+    path = tmp_path / 'resource_state.json'
+    rm = resources.ResourceManager(lambda: {}, denied, state_path=path)
+    rm.comfy_kind = 'empty'
+    monkeypatch.setattr(rm, '_prepare_h3_locked', lambda: {'ready': True})
+    def uncertain_post():
+        recovered = resources.ResourceManager(lambda: {}, denied, state_path=path)
+        assert recovered.comfy_kind == 'image'
+        raise httpx.ReadTimeout('Unknown acceptance')
+    with pytest.raises(httpx.ReadTimeout):
+        rm.prepare_comfy_then('image', uncertain_post)
+    assert resources.ResourceManager(lambda: {}, denied, state_path=path).comfy_kind == 'image'
+
+
+def test_corrupt_family_state_requires_release_instead_of_assuming_warm_h3(tmp_path, monkeypatch):
+    path = tmp_path / 'resource_state.json'
+    path.write_text('invalid json', encoding='utf-8')
+    rm = resources.ResourceManager(lambda: {}, denied, state_path=path)
+    assert rm.comfy_kind == 'unknown'
+    monkeypatch.setattr(rm, '_prepare_h3_locked', lambda: {'ready': True})
+    def busy():
+        raise resources.ResourceError('ComfyUI has running or queued work.')
+    monkeypatch.setattr(rm, 'assert_idle', busy)
+    with pytest.raises(resources.ResourceError, match='queued work'):
+        rm.prepare_h3_then(denied)

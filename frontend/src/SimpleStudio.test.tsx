@@ -16,7 +16,7 @@ function project(assets: Asset[]): Project {
     subjects: [], shots: [newShot(5)], soundscape: "", music: "", custom_instructions: "" };
 }
 
-function renderCount(p: Project) {
+function renderStudio(p: Project) {
   const noop = () => {}, asyncNoop = async () => {};
   const props: SimpleStudioProps = { project: p, update: noop, checkpointUpdate: noop,
     onRestore: noop, onReplacePhoto: asyncNoop, onAddFiles: asyncNoop, onGenerate: noop,
@@ -24,8 +24,11 @@ function renderCount(p: Project) {
     currentPrompt: "", resultFresh: false, referenceMap: [], onCopy: noop, onSave: noop,
     onAdvanced: noop, onProjects: noop, onNew: noop, onConnections: noop, onFiles: noop,
     onUndo: noop, canUndo: false, connectionOnline: false, onSendToComfy: noop,
-    canReturn: false, onContinue: noop };
-  const html = renderToStaticMarkup(<SimpleStudio {...props} />);
+    canReturn: false, onContinue: noop, comfyPanel:<div>Video fixture</div>, settingsPanel:<div>Render settings fixture</div> };
+  return renderToStaticMarkup(<SimpleStudio {...props} />);
+}
+function renderCount(p: Project) {
+  const html = renderStudio(p);
   return html.match(/<span class="simple-count">([^<]+)<\/span>/)?.[1];
 }
 
@@ -49,5 +52,28 @@ describe("Simple mode photo summary", () => {
     const p = project([photo("idea", "context")]); p.mode = "t2va";
     expect(renderCount(p)).toBe("0 video references · 1 inspiration");
     expect(renderCount(project([]))).toBe("0 photos in use");
+  });
+});
+
+describe('Simple editor workspace', () => {
+  it('keeps all editor tools in three accessible panels beside the video without the separate-clip shortcut', () => {
+    const html=renderStudio(project([photo('face')]));
+    expect(html).toContain('role="tablist" aria-label="Scene editor"');
+    expect(html).toContain('id="simple-tab-story" type="button" role="tab" aria-selected="true"');
+    expect(html).toContain('Story &amp; Dialogue');
+    expect(html).toContain('id="simple-panel-photos" hidden=""');
+    expect(html).toContain('id="simple-panel-settings" hidden=""');
+    expect(html).toContain('Render settings fixture');
+    expect(html).toContain('aria-label="Video and continuation"');
+    expect(html).toContain('Video fixture');
+    expect(html).toContain('Timing &amp; continuous filming');
+    expect(html).not.toContain('Continue the story in another clip');
+    expect(html).not.toContain('Start next');
+    expect(html).not.toContain('Plan a separate scene');
+    const settings=html.split('id="simple-panel-settings"')[1].split('</section>')[0];
+    expect(settings).toContain('Video length'); expect(settings).toContain('Shape');
+  });
+  it('starts a project without photos on the Photos tab', () => {
+    expect(renderStudio(project([]))).toContain('id="simple-tab-photos" type="button" role="tab" aria-selected="true"');
   });
 });

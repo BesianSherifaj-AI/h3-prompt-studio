@@ -177,7 +177,7 @@ class VideoRunManager:
     def _public(self, record):
         fields = ('id', 'request_id', 'project_id', 'status', 'stage', 'error', 'warning', 'seed', 'duration',
                   'width', 'height', 'resolution', 'steps', 'frames', 'created_at', 'parent_run_id', 'continuation_source',
-                  'has_snapshot', 'server_execution_seconds')
+                  'has_snapshot', 'server_execution_seconds', 'overlap_frames', 'new_seconds')
         public = {key: copy.deepcopy(record.get(key)) for key in fields}
         public['title'] = record.get('title', '')
         public['favorite'] = record.get('favorite', False)
@@ -185,6 +185,8 @@ class VideoRunManager:
         public['elapsed_seconds'] = max(0, (finished or time.time()) - record['created_at'])
         available = record['status'] == 'succeeded' and bool(record.get('video'))
         public['video_url'] = f'/api/video/runs/{record["id"]}/video' if available else None
+        public['scene_video_url'] = f'/api/video/runs/{record["id"]}/scene' if available else None
+        public['ending_image_url'] = f'/api/video/runs/{record["id"]}/ending' if available else None
         public['download_url'] = public['video_url'] + '?download=1' if available else None
         public['operation'] = record.get('kind', 'generate')
         public['can_reroll'] = available and record.get('kind') != 'combine'
@@ -317,6 +319,36 @@ class VideoRunManager:
     def get(self, run_id):
         with self.lock:
             record = self._record(run_id)
+            return self._public(record)
+
+    def cancel(self, run_id):
+        """Stop only this owned request; never interrupt an unrelated running job."""
+        with self.lock:
+            record = self._record(run_id)
+            if record['status'] not in ACTIVE:
+                return self._public(record)
+            self._save(record, cancel_requested=True)
+            if record.get('processing') and not record.get('submission_intent'):
+                self._save(record, stage='Stopping before submission')
+                return self._public(record)
+            if not record.get('prompt_id') and record.get('submission_intent'):
+                raise VideoRunError('The queue response is uncertain. Reconnect this request before stopping it.')
+            if record.get('prompt_id'):
+                with self.client_factory() as client:
+                    base = local_url(record['comfy_url'])
+                    response = client.get(base + '/queue', timeout=8)
+                    response.raise_for_status()
+                    queue = response.json()
+                    running = queue.get('queue_running', [])
+                    own = record['prompt_id']
+                    if any(len(item) > 1 and item[1] == own for item in running):
+                        if len(running) != 1:
+                            raise VideoRunError('Cannot isolate this running job. It was not interrupted.')
+                        response = client.post(base + '/interrupt', json={'prompt_id': own}, timeout=8)
+                    else:
+                        response = client.post(base + '/queue', json={'delete': [own]}, timeout=8)
+                    response.raise_for_status()
+            self._save(record, status='failed', cancelled=True, stage='Stopped by you', error='This take was stopped.', finished_at=time.time())
             return self._public(record)
 
     def update_metadata(self, run_id, changes):
@@ -561,13 +593,18 @@ class VideoRunManager:
             if record['kind'] != 'combine' and 'loras' in manifest:
                 render['loras'] = [{'name': item['name'], 'strength': item['strength'], 'enabled': True} for item in manifest['loras']]
             atomic_json(self._folder(run_id) / 'project.json', project)
+            overlap = manifest.get('mmh3', {}).get('overlap_frames', 0) if manifest.get('mmh3', {}).get('source') else 0
             self._save(record, comfy_url=base, width=manifest['width'], height=manifest['height'],
                        resolution=manifest.get('resolution'), duration=manifest.get('actual_duration', manifest.get('duration')),
                        steps=manifest.get('steps'), frames=manifest.get('frames'),
+                       overlap_frames=overlap, new_seconds=(max(0, manifest['frames'] - overlap) / 24 if manifest.get('frames') else None),
                        continuation_input_source=manifest.get('mmh3', {}).get('source'),
                        stage='Preparing GPU', graph_sha256=_digest(transfer['prompt']))
 
             def queue_once():
+                if record.get('cancel_requested'):
+                    self._save(record, status='failed', stage='Stopped by you', cancelled=True, error='This take was stopped before submission.', finished_at=time.time())
+                    return
                 self._idle(client, base)
                 self._save(record, submission_intent=True, submitted_at=time.time(), stage='Submitting video',
                            prompt_id=record['id'], prompt_id_confirmed=False)
@@ -591,6 +628,8 @@ class VideoRunManager:
                 if reply.get('error') or reply.get('node_errors'):
                     raise VideoRunError('ComfyUI returned an ambiguous submission response.')
                 self._save(record, prompt_id=prompt_id, prompt_id_confirmed=True, status='queued', stage='Queued in ComfyUI', error=None)
+                if record.get('cancel_requested'):
+                    self.cancel(record['id'])
 
             self._idle(client, base)
             self.resources.prepare_h3_then(queue_once)

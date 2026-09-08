@@ -61,6 +61,10 @@ import ModelPicker, { residentModelOptions } from './ModelPicker';
 import ContinuationLinkReview from './ContinuationLinkReview';
 import VideoWorkspace, { type VideoJob, type ContinuationSuggestions } from './VideoWorkspace';
 import { useVideoRuns } from './useVideoRuns';
+import { useStudioStoryLinks, studioLinkDefinitive } from './useStudioStoryLinks';
+import GameStudio from './GameStudio';
+import { ContinuationPlanner } from './TimelinePlanner';
+import './WorkspaceModes.css';
 import { completedVideoStory } from './videoStory';
 import { continuationRenderSettings, type ContinuationRenderPreset } from './quickPreview';
 import { createContinuation } from './timelineHelpers';
@@ -207,6 +211,13 @@ function Modal({ title, subtitle, onClose, children, wide = false }: any) {
 }
 
 export default function App() {
+  const [workspaceMode, setWorkspaceMode] = useState<'studio'|'game'>(()=>{try{return localStorage.getItem('h3-workspace-mode')==='game'?'game':'studio';}catch{return 'studio';}});
+  const [gameSource, setGameSource] = useState<string|undefined>();
+  const [gameSourceKey, setGameSourceKey] = useState(0);
+  const [studioStoryId,setStudioStoryId] = useState('');
+  const [studioStory,setStudioStory] = useState<any>(null);
+  const studioStoryRevision = useRef(0);
+  const studioStoryIdRef = useRef(studioStoryId); studioStoryIdRef.current=studioStoryId;
   const [view, setView] = useState<"simple" | "advanced">(() => {
     try { return localStorage.getItem("h3-studio-view") === "advanced" ? "advanced" : "simple"; }
     catch { return "simple"; }
@@ -252,7 +263,27 @@ export default function App() {
     saveTimer = useRef<any>(null),
     saveInFlight = useRef<Promise<any>|null>(null);
   projectRef.current = p;
-  const videos = useVideoRuns(p?.id || '');
+  const videos = useVideoRuns(p?.id || '', {storyId:studioStoryId || undefined,jobs:studioStory?.id===studioStoryId?studioStory.jobs:[]});
+  const studioLinks = useStudioStoryLinks(story=>{
+    if(studioStoryIdRef.current===story.id){studioStoryRevision.current++;setStudioStory(story);}
+    setError(current=>current.startsWith('Your video is saved. Reconnecting its story link')?'':current);
+  },setError);
+  useEffect(()=>{try{localStorage.setItem('h3-workspace-mode',workspaceMode);}catch{/* Optional storage. */}},[workspaceMode]);
+  useEffect(()=>{
+    if(!p)return;
+    let storyId=p.story_session_id || '';
+    try{storyId ||= localStorage.getItem('h3-studio-story:'+p.id)||'';
+    }catch{/* Recoverable without browser storage. */}
+    studioLinks.restore(p.id);
+    setStudioStoryId(storyId);
+    if(!storyId)setStudioStory(null);
+  },[p?.id]);
+  useEffect(()=>{
+    if(!studioStoryId)return;
+    let alive=true;let timer:ReturnType<typeof setTimeout>;
+    const poll=async()=>{const revision=studioStoryRevision.current;try{const value=await api('/stories/'+studioStoryId);if(alive&&revision===studioStoryRevision.current)setStudioStory(value);}catch{/* Preserve last known story while reconnecting. */}
+      if(alive)timer=setTimeout(poll,2500);};void poll();return()=>{alive=false;clearTimeout(timer);};
+  },[studioStoryId]);
   const queueProjectSave = (value:Project) => {
     const snapshot=structuredClone(value);
     const next=(saveInFlight.current||Promise.resolve()).catch(()=>{}).then(()=>api('/projects',snapshot));
@@ -888,7 +919,7 @@ export default function App() {
     catch(e){setError((e as Error).message);throw e;}
     finally {videoAction.current=false;setBusy('');}
   };
-  const queueVideo = async (exact:{project:Project;prompt:string}, parentRunId?:string) => {
+  const queueVideo = async (exact:{project:Project;prompt:string}, parentRunId?:string, storyParent?:string) => {
     if(JSON.stringify(projectRef.current)!==JSON.stringify(exact.project)) throw new Error('The story or settings changed. Review them and generate the updated version.');
     setBusy('Sending your video to ComfyUI');
     await queueProjectSave(exact.project);
@@ -896,8 +927,14 @@ export default function App() {
     const continuation=exact.project.simple?.continuation;
     const sourceMatches=continuation?.previous_video_source===exact.project.comfy_render?.continuation_source;
     const parent=parentRunId || (sourceMatches?continuation?.previous_video_run_id:undefined);
-    await videos.submit('/video/runs',{project:exact.project,prompt:exact.prompt,...(parent?{parent_run_id:parent}:{})},exact.project.id);
-    requestAnimationFrame(()=>document.querySelector('.video-workspace')?.scrollIntoView({behavior:'smooth',block:'start'}));
+    let requestId:string|undefined;
+    try {
+      await videos.submit('/video/runs',{project:exact.project,prompt:exact.prompt,...(parent?{parent_run_id:parent}:{})},exact.project.id,id=>{
+        requestId=id;
+        if(exact.project.story_session_id&&(storyParent||parent)) studioLinks.register({kind:'continuation',storyId:exact.project.story_session_id,runId:id,projectId:exact.project.id,parent:storyParent||parent!});
+      });
+    } catch(error) { if(requestId&&studioLinkDefinitive(error))studioLinks.forget(requestId); throw error; }
+    if(!parent&&!storyParent) requestAnimationFrame(()=>document.querySelector('.video-workspace')?.scrollIntoView({behavior:'smooth',block:'start'}));
   };
   const generateVideo = (preset:ContinuationRenderPreset='inherit')=>videoTask(async()=>{
     const source=structuredClone(projectRef.current!);
@@ -917,28 +954,59 @@ export default function App() {
     await queueVideo(exact);
   });
   const rerollVideo = (job:VideoJob)=>videoTask(async()=>{
+    // Even the first alternate belongs to an explicit Studio story. It stays a
+    // preview until the user chooses its branch; it is never appended as a scene.
+    const source:Project=await api('/video/runs/'+job.id+'/project');
+    let story=studioStoryId?await api('/stories/'+studioStoryId):null;
+    if(!story||story.mode!=='studio'||(story.jobs||story.clips||[]).every((item:VideoJob)=>item.id!==job.id)) story=await api('/stories',{request_id:uid(),project:source,mode:'studio',source_run_id:job.id});
+    studioStoryRevision.current++;setStudioStoryId(story.id);setStudioStory(story);
+    if(projectRef.current&&projectRef.current.story_session_id!==story.id){const linked={...projectRef.current,story_session_id:story.id};projectRef.current=linked;setP(linked);}
+    try{localStorage.setItem('h3-studio-story:'+source.id,story.id);if(projectRef.current)localStorage.setItem('h3-studio-story:'+projectRef.current.id,story.id);}catch{/* Optional storage. */}
     setBusy('Trying another seed · keeping this take’s prompt and settings');
-    const next=await videos.submit('/video/runs/'+job.id+'/reroll',{},job.project_id);
+    let requestId:string|undefined,next:VideoJob|undefined;
+    try { next=await videos.submit('/video/runs/'+job.id+'/reroll',{},job.project_id,id=>{
+      requestId=id;studioLinks.register({kind:'alternate',storyId:story.id,runId:id,projectId:job.project_id,originalRunId:job.id});
+    }); } catch(error) {if(requestId&&studioLinkDefinitive(error))studioLinks.forget(requestId);throw error;}
     if(next&&projectRef.current?.id===job.project_id&&Number.isSafeInteger(next.seed)){
       setP(current=>current?{...current,comfy_render:{...current.comfy_render,seed:next.seed}}:current);
     }
   });
-  const continueVideo = (selectedJob:VideoJob, idea:string, duration:number, preset:ContinuationRenderPreset='inherit')=>videoTask(async()=>{
+  const continueVideo = (selectedJob:VideoJob, idea:string, duration:number, preset:ContinuationRenderPreset='inherit', options?:{planned?:boolean})=>videoTask(async()=>{
     const job:VideoJob=selectedJob.operation==='combine'&&selectedJob.continue_from_run_id
       ? await api('/video/runs/'+selectedJob.continue_from_run_id) : selectedJob;
     if(!job.continuation_source)throw new Error('This take has no saved motion state. Choose a completed take with continuation enabled.');
     setBusy('Reading this video’s ending and story');
     const source:Project=await api('/video/runs/'+job.id+'/project');
     const ending:Asset=await api('/video/runs/'+job.id+'/ending-image',{});
-    const next=createContinuation(source,{request:idea,duration});
+    const story=studioStoryId?await api('/stories/'+studioStoryId):await api('/stories',{request_id:uid(),project:source,mode:'studio',source_run_id:job.id});
+    if(story.active_run_id!==job.id)throw new Error('This is an earlier ending. Choose Branch from here to continue it.');
+    studioStoryRevision.current++;setStudioStoryId(story.id);setStudioStory(story);
+    try{localStorage.setItem('h3-studio-story:'+source.id,story.id);}catch{/* Optional storage. */}
+    let plan:any=null;
+    if(!options?.planned){
+      setBusy('Writing what happens next');
+      plan=(await api('/video/runs/'+job.id+'/plan-continuation',{message:idea,duration})).plan;
+    }
+    const next=createContinuation(source,{request:plan?.action||idea,duration});
+    next.story_session_id=story.id;
     next.assets=next.assets.filter((asset:any)=>!asset.video_run_ending);
     next.assets.push(ending);
-    next.comfy_render={...next.comfy_render,continuation_source:job.continuation_source,continuation_overlap_frames:39,save_mmh3:true,
+    next.comfy_render={...next.comfy_render,continuation_source:job.continuation_source,continuation_overlap_frames:39,duration_basis:'new_footage',save_mmh3:true,
       seed:Number.isSafeInteger(job.seed)&&job.seed!<Number.MAX_SAFE_INTEGER?job.seed!+1:0};
     next.comfy_render=continuationRenderSettings(next.comfy_render,next.mode,preset);
     next.simple.continuation={...next.simple.continuation,continuity_basis:'saved_joint_av_latent_and_ending_image',ending_image_asset_id:ending.id,
       previous_video_run_id:job.id,previous_video_source:job.continuation_source,
       previous_story:completedVideoStory(source)};
+    if(plan){
+      next.shots[0].action=plan.action;next.shots[0].setting=plan.setting;next.shots[0].final_state=plan.final_state;
+      next.shots[0].dialogue=(plan.dialogue||[]).map((line:any)=>{
+        const speaker=next.subjects.find(s=>s.name.toLowerCase()===line.speaker.toLowerCase());
+        if(!speaker)throw new Error('The assistant named an unknown speaker. Add that character or revise the request.');
+        return{id:uid(),speaker_id:speaker.id,text:line.text,language:'English',delivery:'natural and clear'};
+      });
+      if(plan.transition==='cut'){delete next.comfy_render.continuation_source;delete next.comfy_render.duration_basis;delete next.simple.continuation;}
+    }
+    next.custom_instructions='Only the NEW action happens now. Do not replay completed actions or previous dialogue. Scene timings describe new footage after any saved motion context.';
     ensurePromptTags(next);
     await saveNow();
     setP(next);projectRef.current=next;setSimpleResult(null);setCompileResult(null);setHistory([]);setProposal(null);
@@ -948,7 +1016,7 @@ export default function App() {
     // wording faithfully; another planner pass can change that choice.
     const exact=await generateSimplePrompt(false,false);
     if(!exact)throw new Error('The next clip is saved. Make its prompt to finish planning before rendering.');
-    await queueVideo(exact,job.id);
+    await queueVideo(exact,plan?.transition==='cut'?undefined:job.id,job.id);
   });
   const suggestVideo = async(job:VideoJob,duration:number,direction?:string):Promise<ContinuationSuggestions>=>{
     if(videoAction.current || busy || videos.active) throw new Error('Wait for the current operation to finish, then refresh ideas.');
@@ -966,12 +1034,28 @@ export default function App() {
     await videos.reload();
   };
 
+  const branchVideo = async(job:VideoJob)=>{
+    if(!studioStoryId)throw new Error('Continue a story first before choosing another branch.');
+    studioStoryRevision.current++;
+    const story=await api('/stories/'+studioStoryId+'/branch',{request_id:uid(),run_id:job.id});studioStoryRevision.current++;setStudioStory(story);
+  };
+  const playGame = (job:VideoJob)=>{setGameSource(job.id);setGameSourceKey(value=>value+1);setWorkspaceMode('game');};
+  const promptModelPicker=<ModelPicker settings={settings} models={connection.lm?.models} online={!!connection.lm?.online} busy={busy||videos.active}
+    onRefresh={refresh} onConnections={()=>{refresh();setModal('connections');}}
+    onLoad={()=>run('Preparing the assistant',async()=>{await api('/gpu/prepare-ai',{});await refresh();})}
+    onResident={model=>run('Preparing the 0.8B assistant',async()=>{setSettings(await api('/settings',{model,ai_memory_mode:'resident_small',context_length:4096}));await api('/gpu/prepare-ai',{});await refresh();})}
+    onSelect={model=>run('Saving prompt model',async()=>{const small=residentModelOptions(connection.lm?.models).some(m=>m.id===model);
+      setSettings(await api('/settings',{model,ai_memory_mode:small&&settings.ai_memory_mode==='resident_small'?'resident_small':'exclusive',context_length:small?4096:8192}));})}/>;
+
   return (
     <div
       className={
         "studio " + (view === "simple" ? "simple-view " : "") + (showAI ? "ai-open " : "") + (showRefs ? "refs-open" : "")
       }
     >
+      <nav className="workspace-mode-bar" aria-label="Workspace mode"><strong>H3 Prompt Studio</strong><div><button aria-pressed={workspaceMode==='studio'} onClick={()=>setWorkspaceMode('studio')}>Studio</button><button aria-pressed={workspaceMode==='game'} onClick={()=>setWorkspaceMode('game')}>Game</button></div><span>{workspaceMode==='studio'?'Direct your scenes':'Play a character. Let the story respond.'}</span></nav>
+      <div className="workspace-pane" hidden={workspaceMode!=='game'}><GameStudio project={p} modelPicker={promptModelPicker} onAddFiles={addFiles} onUploadFiles={async files=>{const assets:Asset[]=[];for(const file of files){const form=new FormData();form.append('file',file);assets.push(await api('/assets',undefined,form));}return assets;}} onStudio={()=>setWorkspaceMode('studio')} initialSourceRunId={gameSource} initialSourceKey={gameSourceKey}/></div>
+      <div className="workspace-pane" hidden={workspaceMode!=='studio'}>
       {view === "simple" && <SimpleStudio
         project={p} update={update} checkpointUpdate={checkpointUpdate} onRestore={restoreLibraryCopy} onReplacePhoto={replaceReference} onAddFiles={(files) => addFiles(files)} onGenerate={()=>generateSimplePrompt()} onBuild={()=>generateSimplePrompt(false)}
         busy={busy} renderBusy={videos.active} progress={connection.stage && connection.stage !== "idle" ? connection.stage : busy}
@@ -984,20 +1068,15 @@ export default function App() {
         onUndo={() => { if (history.length) { setP(history[history.length - 1]); setHistory((h) => h.slice(0, -1)); setSimpleResult(null); } }}
         canUndo={history.length > 0} connectionOnline={!!connection.lm?.online} onSendToComfy={sendToComfy} canReturn={canReturn}
         onContinue={continueProject}
-        modelPicker={<ModelPicker settings={settings} models={connection.lm?.models} online={!!connection.lm?.online} busy={busy||videos.active}
-          onRefresh={refresh} onConnections={()=>{refresh();setModal('connections');}}
-          onLoad={()=>run('Loading the small assistant alongside H3',async()=>{await api('/gpu/prepare-ai',{});await refresh();toast('Assistant ready. H3 can stay loaded.');})}
-          onResident={model=>run('Preparing the 0.8B assistant alongside H3',async()=>{setSettings(await api('/settings',{model,ai_memory_mode:'resident_small',context_length:4096}));await api('/gpu/prepare-ai',{});await refresh();toast('0.8B assistant ready. Continue video will suggest the next scene.');})}
-          onSelect={model=>run('Saving prompt model',async()=>{const small=residentModelOptions(connection.lm?.models).some(m=>m.id===model);
-            setSettings(await api('/settings',{model,ai_memory_mode:small&&settings.ai_memory_mode==='resident_small'?'resident_small':'exclusive',context_length:small?4096:8192}));
-            toast('Prompt model selected. It will load when you make a prompt.');})}/>}
+        modelPicker={promptModelPicker}
         comfyPanel={<><VideoWorkspace project={p} promptReady={simpleResultFresh} busy={busy||videos.submitting} jobs={videos.jobs} currentJob={videos.currentJob}
+          storyId={studioStoryId||undefined} activeEndpointId={studioStory?.id===studioStoryId?studioStory.active_run_id:undefined} storyClips={studioStory?.id===studioStoryId?studioStory.clips:undefined} onBranch={branchVideo} onPlayGame={playGame}
           onSelectJob={videos.onSelectJob} onGenerate={generateVideo} onReroll={rerollVideo} onContinue={continueVideo} onSuggest={suggestVideo} onCombine={combineVideo} onResolve={resolveVideo} onUpdateTake={videos.updateMetadata}
-          advanced={<ComfyPanel project={p} prompt={compiled.prompt} ready={simpleResultFresh} busy={!!busy||videos.active}
+          />{videos.error&&<p className="comfy-error" role="alert">{videos.error}</p>}</>}
+        settingsPanel={<ComfyPanel project={p} prompt={compiled.prompt} ready={simpleResultFresh} busy={!!busy||videos.active}
           onSettings={value=>setP(current=>current?{...current,comfy_render:value}:current)}
           onContinuationSource={value=>update(d=>{if(value&&!['ref2va','t2va'].includes(d.mode))setSimpleMode(d,'t2va');d.comfy_render={...d.comfy_render,continuation_source:value};})}
-          embedded={!!bridge.current?.context?.embedded} sendEmbedded={ticket=>bridge.current?.sendTransfer(ticket)===true}/>}/>
-          {videos.error&&<p className="comfy-error" role="alert">{videos.error}</p>}</>}
+          embedded={!!bridge.current?.context?.embedded} sendEmbedded={ticket=>bridge.current?.sendTransfer(ticket)===true}/>}
       />}
       {view === "advanced" && <>
       <header className="topbar">
@@ -2491,6 +2570,7 @@ export default function App() {
         </aside>
       </div>
       </>}
+      </div>
       {view === "simple" && bridgeImport && <div className="banner bridge-banner">
         <span>ComfyUI sent photos and a prompt. Open them as a new project?</span>
         <button onClick={applyBridgeImport} disabled={!!busy}>Open from ComfyUI</button>
@@ -2507,6 +2587,7 @@ export default function App() {
           subtitle="Make a simple visual guide, then turn it into clear direction."
           onClose={() => setModal("")}
         >
+          <ContinuationPlanner project={p} update={update} onContinue={continueProject} busy={!!busy}/>
           <MotionTools
             duration={shot?.duration || p.duration}
             subjects={p.subjects}

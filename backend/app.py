@@ -34,6 +34,8 @@ STATE_LOCK = threading.RLock()
 TRANSFERS = {}
 TRANSFER_TTL = 15 * 60
 VIDEO_RUNS = None
+STORIES = None
+ASSET_RUNS = None
 VIDEO_FILE_LOCKS = {}
 DEFAULT_SETTINGS = {'lm_url': 'http://127.0.0.1:1234/v1', 'model': '', 'context_length': 8192,
                     'comfy_urls': ['http://127.0.0.1:8188', 'http://127.0.0.1:8000', 'http://127.0.0.1:8010'], 'persona': 'universal', 'last_project': '',
@@ -46,8 +48,8 @@ def client():
     from .lmstudio import LMStudioClient
     return LMStudioClient(base_url=SETTINGS['lm_url'], timeout=180)
 
-RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client)
-app = FastAPI(title='H3 Prompt Studio', version='1.0.0', docs_url='/api/docs')
+RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client, state_path=DATA / 'resource_state.json')
+app = FastAPI(title='H3 Prompt Studio', version='1.1.0', docs_url='/api/docs')
 BRIDGE_PORTS = ('8188', '8000', '8010')
 LOCAL_ORIGINS = [f'http://{host}:{port}' for host in ('127.0.0.1', 'localhost') for port in (8766, 8188, 8010, 8000)]
 app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'PATCH'], allow_headers=['Content-Type', 'X-H3-Bridge', 'X-H3-Token'])
@@ -133,7 +135,7 @@ def bootstrap():
     projects = list_projects()
     last = SETTINGS.get('last_project')
     project = load_project(last) if last and any(p['id'] == last for p in projects) else new_project()
-    return {'version': '1.0.0', 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': SETTINGS,
+    return {'version': '1.1.0', 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': SETTINGS,
             'project': project, 'projects': projects, 'personas': PERSONAS}
 
 def output_locations():
@@ -433,6 +435,10 @@ def video_run_resolve(run_id: str):
 def video_run_reroll(run_id: str, body: dict):
     return video_manager().reroll(body.get('request_id'), safe_id(run_id))
 
+@app.post('/api/video/runs/{run_id}/cancel')
+def video_run_cancel(run_id: str):
+    return video_manager().cancel(safe_id(run_id))
+
 @app.post('/api/video/runs/{run_id}/combine')
 def video_run_combine(run_id: str, body: dict):
     return video_manager().combine(body.get('request_id'), safe_id(run_id))
@@ -532,6 +538,187 @@ def video_run_suggest(run_id: str, body: dict):
 @app.post('/api/gpu/prepare-ai')
 def prepare_ai(body: dict):
     return RESOURCES.run_ai(body.get('model') or SETTINGS['model'])
+
+def asset_manager():
+    global ASSET_RUNS
+    with STATE_LOCK:
+        if ASSET_RUNS is None:
+            from .asset_runs import AssetRunManager
+            ASSET_RUNS = AssetRunManager(DATA, RESOURCES, lambda: copy.deepcopy(SETTINGS), store_asset)
+        return ASSET_RUNS
+
+def story_manager():
+    global STORIES
+    with STATE_LOCK:
+        if STORIES is None:
+            from .stories import StoryManager
+            def save_story_project(project):
+                check_project(project)
+                atomic_json(DATA / 'projects' / (project['id'] + '.json'), project)
+            STORIES = StoryManager(DATA, video_manager, RESOURCES, client, lambda: copy.deepcopy(SETTINGS),
+                                   save_story_project, video_run_ending_image, image_data, asset_manager)
+        return STORIES
+
+@app.get('/api/assets/generators')
+def asset_generators():
+    return asset_manager().options()
+
+@app.post('/api/asset-runs')
+def asset_run_create(body: dict):
+    return asset_manager().submit(body.get('request_id'), body.get('spec', {}))
+
+@app.get('/api/asset-runs/{run_id}')
+def asset_run_status(run_id: str):
+    return asset_manager().refresh(safe_id(run_id))
+
+@app.post('/api/asset-runs/{run_id}/cancel')
+def asset_run_cancel(run_id: str):
+    return asset_manager().cancel(safe_id(run_id))
+
+@app.post('/api/asset-runs/{run_id}/resume')
+def asset_run_resume(run_id: str):
+    return asset_manager().resume(safe_id(run_id))
+
+@app.post('/api/asset-runs/{run_id}/retry')
+def asset_run_retry(run_id: str, body: dict):
+    return asset_manager().retry(safe_id(run_id), safe_id(body.get('request_id')))
+
+@app.get('/api/stories')
+def stories_list():
+    return {'stories': story_manager().list()}
+
+@app.post('/api/stories')
+def story_create(body: dict):
+    return story_manager().create(body)
+
+@app.get('/api/stories/{story_id}')
+def story_get(story_id: str):
+    return story_manager().get(story_id)
+
+@app.patch('/api/stories/{story_id}')
+def story_update(story_id: str, body: dict):
+    return story_manager().update(story_id, body)
+
+@app.post('/api/stories/{story_id}/branch')
+def story_branch(story_id: str, body: dict):
+    return story_manager().branch(story_id, body.get('run_id'), body.get('request_id'))
+
+@app.post('/api/stories/{story_id}/attach')
+def story_attach(story_id: str, body: dict):
+    return story_manager().attach_run(story_id, body.get('run_id'), body.get('expected_parent'))
+
+@app.post('/api/stories/{story_id}/alternates')
+def story_alternate(story_id: str, body: dict):
+    return story_manager().register_alternate(story_id, body.get('run_id'), body.get('original_run_id'))
+
+@app.post('/api/stories/{story_id}/turns')
+def story_turn_create(story_id: str, body: dict):
+    return story_manager().submit(story_id, body)
+
+@app.post('/api/stories/{story_id}/turns/{turn_id}/{action}')
+def story_turn_action(story_id: str, turn_id: str, action: str, body: dict):
+    return story_manager().action(story_id, turn_id, action, body)
+
+@app.post('/api/video/runs/{run_id}/plan-continuation')
+def plan_video_continuation(run_id: str, body: dict):
+    manager = story_manager()
+    run = manager._run(safe_id(run_id))
+    if run['status'] != 'succeeded' or not run.get('continuation_source'):
+        raise ValueError('Choose a completed take with a saved ending.')
+    source = video_manager().snapshot(run['id'])
+    story = {'mode': 'studio', 'player_name': '', 'premise': source['story']['text'], 'settings': {'style': ''},
+             'branches': {'temporary': manager._lineage(run['id'])}, 'observed_by_run': {}}
+    duration = body.get('duration', 5)
+    from .stories import settings_for, text
+    settings_for({'duration': duration})
+    turn = {'branch_id': 'temporary', 'duration': duration, 'message': text(body.get('message', ''), 4000), 'parent_run_id': run['id']}
+    if not turn['message']:
+        raise ValueError('Describe what happens next or ask the assistant to choose.')
+    plan = manager.plan(story, turn, source, video_run_ending_image(run['id']))
+    if plan['asset_requests']:
+        raise ValueError('This idea needs new images. Use Game to create them automatically, or add references in Studio first.')
+    return {'plan': plan, 'source_run_id': run['id']}
+
+@app.get('/api/video/runs/{run_id}/ending')
+def video_ending_preview(run_id: str):
+    asset = video_run_ending_image(safe_id(run_id))
+    return FileResponse(DATA / 'assets' / safe_id(asset['id']) / 'source.png', media_type='image/png')
+
+def scene_video_path(run_id):
+    run_id = safe_id(run_id)
+    source = cached_run_video(run_id)
+    record = video_manager().get(run_id)
+    overlap = record.get('overlap_frames')
+    if overlap is None:
+        # Old records retain their original frame budget; inspect the saved transfer
+        # only when playback is requested, never during history polling.
+        timing = video_manager()._load(run_id, 'transfer.json')['manifest'].get('mmh3', {})
+        overlap = timing.get('overlap_frames', 0) if timing.get('source') else 0
+    if not overlap:
+        return source
+    output = source.parent / f'scene-context-{overlap}.mp4'
+    with STATE_LOCK:
+        lock = VIDEO_FILE_LOCKS.setdefault('scene:' + run_id, threading.Lock())
+    with lock:
+        if output.is_file() and output.stat().st_size:
+            return output
+        temporary = output.with_name(output.stem + '-building.mp4')
+        seconds = overlap / 24
+        result = subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source),
+            '-vf', f'trim=start_frame={overlap},setpts=PTS-STARTPTS', '-af', f'atrim=start={seconds},asetpts=PTS-STARTPTS',
+            '-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-threads', '4',
+            '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', str(temporary)],
+            capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if result.returncode:
+            raise ValueError('The new-footage preview could not be prepared. The original video is still available.')
+        temporary.replace(output)
+        return output
+
+@app.get('/api/video/runs/{run_id}/scene')
+def video_scene_preview(run_id: str):
+    return FileResponse(scene_video_path(run_id), media_type='video/mp4')
+
+@app.get('/api/stories/{story_id}/video')
+def story_film(story_id: str):
+    story = story_manager().get(story_id)
+    clips = story['clips']
+    if not clips:
+        raise ValueError('Generate a scene before saving the film.')
+    if len(clips) > 100:
+        raise ValueError('Export a branch with at most 100 clips.')
+    digest = hashlib.sha256(json.dumps([r['id'] for r in clips]).encode()).hexdigest()[:20]
+    folder = DATA / 'story_films' / safe_id(story_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    output = folder / (digest + '.mp4')
+    with STATE_LOCK:
+        lock = VIDEO_FILE_LOCKS.setdefault('film:' + story_id, threading.Lock())
+    with lock:
+        if not output.is_file():
+            width, height = clips[0]['width'], clips[0]['height']
+            normalized = []
+            for clip in clips:
+                path = folder / (clip['id'] + f'-{width}x{height}.mp4')
+                if not path.is_file():
+                    source = scene_video_path(clip['id'])
+                    result = subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source),
+                        '-vf', f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1',
+                        '-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-threads', '4',
+                        '-c:a', 'aac', '-ar', '32000', '-ac', '2', str(path)], capture_output=True, timeout=180,
+                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                    if result.returncode:
+                        path.unlink(missing_ok=True)
+                        raise ValueError('The film could not be assembled. Your individual clips are saved.')
+                normalized.append(path)
+            listing = folder / (digest + '.txt')
+            listing.write_text('\n'.join("file '" + p.name + "'" for p in normalized), 'utf-8')
+            temporary = output.with_name(digest + '-building.mp4')
+            result = subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '1',
+                '-i', str(listing), '-c', 'copy', '-map_metadata', '-1', '-movflags', '+faststart', str(temporary)],
+                capture_output=True, timeout=90, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            if result.returncode:
+                raise ValueError('The film export did not finish. Individual clips are still available.')
+            temporary.replace(output)
+    return FileResponse(output, media_type='video/mp4', filename='H3-Story-' + story_id + '.mp4')
 
 @app.post('/api/gpu/prepare-h3')
 def prepare_h3(body: dict):

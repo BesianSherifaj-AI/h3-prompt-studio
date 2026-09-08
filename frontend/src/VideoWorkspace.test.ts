@@ -2,11 +2,18 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Project } from "./model";
-import VideoWorkspace, { continuationIdeaChoices, continuationSizeLabel, continuationSuggestionIsCurrent, elapsedVideoTime, videoComparisonChoices, videoJobIsPending, videoTakeTitle, videoWorkspaceState, type VideoJob } from "./VideoWorkspace";
+import VideoWorkspace, { continuationIdeaChoices, continuationIsPlanned, continuationSizeLabel, continuationSuggestionIsCurrent, elapsedVideoTime, sceneVideoUrl, storyPlaylist, videoComparisonChoices, videoJobIsPending, videoTakeTitle, videoWorkspaceState, type VideoJob } from "./VideoWorkspace";
 
 const run = (change: Partial<VideoJob> = {}): VideoJob => ({ id: "take-1", project_id: "project-a", status: "succeeded", seed: 42, duration: 5, video_url: "/api/video/runs/take-1/video", continuation_source: "mmh3/take-1.mmh3", has_snapshot: true, ...change });
 
 describe("video workspace action eligibility", () => {
+  it('renders safely before take history and video metadata arrive', () => {
+    const project={id:'new-project',mode:'ref2va',duration:5} as Project;
+    const html=renderToStaticMarkup(createElement(VideoWorkspace,{project,promptReady:false,busy:false,jobs:[],currentJob:null,
+      onSelectJob:()=>{},onGenerate:()=>{},onReroll:()=>{},onContinue:()=>{}}));
+    expect(html).toContain('Your next video starts here');
+    expect(html).toContain('Generate video');
+  });
   it("keeps successful takes available for new seeds and actual continuation", () => {
     const job = run(), state = videoWorkspaceState("project-a", [job], job);
     expect(state.playable).toBe(true); expect(state.canReroll).toBe(true); expect(state.canContinue).toBe(true); expect(state.working).toBe(false);
@@ -133,5 +140,61 @@ describe("take review helpers", () => {
     expect(videoComparisonChoices('project-a',list,run({operation:'combine'}))).toEqual([]);
     expect(videoComparisonChoices('project-a',list,run({project_id:'elsewhere'}))).toEqual([]);
     expect(videoComparisonChoices('project-a',list,run({status:'running'}))).toEqual([]);
+  });
+});
+
+describe('story endpoint and playback', () => {
+  const opening = run({id:'opening', project_id:'opening-project', story_id:'story-a', title:'Opening'});
+  const endpoint = run({id:'ending', project_id:'next-project', story_id:'story-a', title:'At the door', scene_video_url:'/ending/new-footage', ending_image_url:'/ending/frame'});
+  const story = {storyId:'story-a', activeEndpointId:endpoint.id};
+  it('keeps Continue tied to the explicit endpoint while an older project is previewed', () => {
+    const state = videoWorkspaceState('next-project',[endpoint,opening],opening,false,story);
+    expect(state.current).toEqual(opening);
+    expect(state.source).toEqual(endpoint);
+    expect(state.canContinue).toBe(true);
+    expect(state.takes).toHaveLength(2);
+  });
+  it('never substitutes a preview for a missing or unset story endpoint', () => {
+    for(const activeEndpointId of ['missing','',undefined]) {
+      const state=videoWorkspaceState('next-project',[opening,endpoint],opening,false,{storyId:'story-a',activeEndpointId});
+      expect(state.source).toBeNull(); expect(state.canContinue).toBe(false);
+    }
+  });
+  it('keeps source capability separate from history capability and respects every pending story render', () => {
+    const noMotion={...opening,continuation_source:null};
+    expect(videoWorkspaceState('next-project',[endpoint,noMotion],noMotion,false,story).canContinue).toBe(true);
+    expect(videoWorkspaceState('next-project',[{...endpoint,can_continue:false},opening],opening,false,story).canContinue).toBe(false);
+    expect(videoWorkspaceState('next-project',[endpoint,{...opening,status:'running'}],endpoint,false,story).canContinue).toBe(false);
+  });
+  it('excludes explicitly foreign stories and unknown previews from a story-scoped list', () => {
+    const foreign={...opening,id:'foreign',story_id:'other'};
+    const state=videoWorkspaceState('next-project',[endpoint,foreign],foreign,false,story);
+    expect(state.takes).toEqual([endpoint]); expect(state.current).toBeNull(); expect(state.source).toEqual(endpoint);
+    expect(videoWorkspaceState('next-project',[endpoint],opening,false,story).current).toBeNull();
+  });
+  it('plays accepted new-footage URLs in caller order, excluding joins, duplicates and unfinished clips', () => {
+    const list=[opening,endpoint,{...endpoint},run({id:'bad',status:'failed'}),run({id:'join',operation:'combine'}),run({id:'foreign',story_id:'other'})];
+    expect(storyPlaylist(list,'story-a')).toEqual([opening,endpoint]);
+    expect(sceneVideoUrl(endpoint)).toBe('/ending/new-footage'); expect(sceneVideoUrl(opening)).toBe(opening.video_url);
+    expect(sceneVideoUrl(null)).toBe(''); expect(list).toHaveLength(6);
+  });
+  it('renders source identity next to the player and keeps original footage in details', () => {
+    const project = {id:'next-project',mode:'ref2va',duration:5} as Project;
+    const html=renderToStaticMarkup(createElement(VideoWorkspace,{project,promptReady:true,busy:false,jobs:[endpoint,opening],currentJob:endpoint,
+      ...story,storyClips:[opening,endpoint],onSelectJob:()=>{},onGenerate:()=>{},onReroll:()=>{},onContinue:()=>{},onBranch:()=>{},onPlayGame:()=>{}}));
+    expect(html).toContain('src="/ending/new-footage"');
+    expect(html).toContain('href="'+endpoint.video_url+'"');
+    expect(html).toContain('Continuing after At the door');
+    expect(html).toContain('src="/ending/frame"');
+    expect(html).toContain('Latest scene'); expect(html).toContain('Whole story'); expect(html).toContain('Play from here');
+    expect(html.indexOf('Continue from this ending</span>')).toBeLessThan(html.indexOf('Try another take</span>'));
+    expect(html.indexOf('Try another take</span>')).toBeLessThan(html.indexOf('Generate video</span>'));
+  });
+  it('only marks an explicitly selected, unchanged suggestion as already planned', () => {
+    const selected='She opens the door.', suggestions={suggestions:[{title:'Open the door',idea:selected}]};
+    expect(continuationIsPlanned(selected,selected,suggestions)).toBe(true);
+    for(const idea of [selected+' ',selected+' Then she speaks.',''])expect(continuationIsPlanned(idea,selected,suggestions)).toBe(false);
+    expect(continuationIsPlanned(selected,'',suggestions)).toBe(false);
+    expect(continuationIsPlanned(selected,selected,{suggestions:[]})).toBe(false);
   });
 });

@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $studioRoot 'dist\index.html') -Path
 
 function Test-StudioResponse {
     param($Health)
-    return ($null -ne $Health -and $Health.version -eq '1.0.0' -and
+    return ($null -ne $Health -and $Health.version -match '^1\.\d+\.\d+$' -and
             $Health.token -is [string] -and $Health.token.Length -ge 32 -and
             $null -ne $Health.project -and $Health.project.schema_version -eq 1 -and
             $Health.project.id -is [string])

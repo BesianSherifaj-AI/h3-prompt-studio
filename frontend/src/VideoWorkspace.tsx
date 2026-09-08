@@ -9,12 +9,15 @@ export type VideoJob = {
   id: string;
   request_id?: string;
   project_id: string;
+  story_id?: string;
   status: "preparing" | "queued" | "running" | "succeeded" | "failed" | "uncertain";
   stage?: string;
   error?: string | null;
   warning?: string | null;
   seed?: number;
   duration?: number;
+  new_seconds?: number | null;
+  overlap_frames?: number | null;
   width?: number;
   height?: number;
   steps?: number | null;
@@ -22,6 +25,8 @@ export type VideoJob = {
   created_at?: number;
   elapsed_seconds?: number;
   video_url?: string | null;
+  scene_video_url?: string | null;
+  ending_image_url?: string | null;
   download_url?: string | null;
   continuation_source?: string | null;
   parent_run_id?: string | null;
@@ -41,10 +46,15 @@ export type VideoWorkspaceProps = {
   busy: boolean | string;
   jobs: VideoJob[];
   currentJob?: VideoJob | null;
+  storyId?: string;
+  activeEndpointId?: string;
+  storyClips?: VideoJob[];
+  onBranch?: (job: VideoJob) => void | Promise<void>;
+  onPlayGame?: (job: VideoJob) => void | Promise<void>;
   onSelectJob: (job: VideoJob) => void;
   onGenerate: (renderPreset?: ContinuationRenderPreset) => void | Promise<void>;
   onReroll: (job: VideoJob) => void | Promise<void>;
-  onContinue: (job: VideoJob, nextIdea: string, duration: number, renderPreset?: ContinuationRenderPreset) => void | Promise<void>;
+  onContinue: (job: VideoJob, nextIdea: string, duration: number, renderPreset?: ContinuationRenderPreset, options?: { planned?: boolean }) => void | Promise<void>;
   onUpdateTake?: (job: VideoJob, patch: { title?: string; favorite?: boolean }) => void | Promise<void>;
   onSuggest?: (job: VideoJob, duration: number, direction?: string) => Promise<ContinuationSuggestions>;
   onCombine?: (job: VideoJob) => void | Promise<void>;
@@ -112,27 +122,46 @@ export function videoComparisonChoices(projectId: string, jobs: VideoJob[], sele
     job.operation !== "combine" && !seen.has(job.id) && !!seen.add(job.id));
 }
 
-/** Every visible result and action belongs to the current project. */
-export function videoWorkspaceState(projectId: string, jobs: VideoJob[] = [], selected?: VideoJob | null, busy: boolean | string = false) {
+export function sceneVideoUrl(job?: VideoJob | null) {
+  return job?.scene_video_url || job?.video_url || '';
+}
+
+/** The caller supplies the accepted clips in story order; no join request is needed. */
+export function storyPlaylist(clips: VideoJob[] = [], storyId?: string) {
   const seen = new Set<string>();
-  const takes = jobs.filter(job => job?.project_id === projectId && job.id && !seen.has(job.id) && !!seen.add(job.id));
-  const current = selected?.project_id === projectId ? (takes.find(job => job.id === selected.id) || selected) : null;
+  return clips.filter(job => job.status === 'succeeded' && sceneVideoUrl(job) && job.operation !== 'combine' &&
+    (!storyId || !job.story_id || job.story_id === storyId) && !seen.has(job.id) && !!seen.add(job.id));
+}
+
+export function continuationIsPlanned(idea: string, selectedIdea: string, suggestions?: ContinuationSuggestions | null) {
+  return !!selectedIdea && idea === selectedIdea && !!suggestions?.suggestions.some(choice => choice.idea === selectedIdea);
+}
+
+/** Every visible result and action belongs to the current project. */
+export function videoWorkspaceState(projectId: string, jobs: VideoJob[] = [], selected?: VideoJob | null, busy: boolean | string = false,
+  story: {storyId?: string; activeEndpointId?: string} = {}) {
+  const seen = new Set<string>();
+  const inScope = (job: VideoJob) => story.storyId ? !job.story_id || job.story_id === story.storyId : job.project_id === projectId;
+  const takes = jobs.filter(job => job && inScope(job) && job.id && !seen.has(job.id) && !!seen.add(job.id));
+  const current = selected && inScope(selected) ? (takes.find(job => job.id === selected.id) || (!story.storyId ? selected : null)) : null;
+  // Never silently continue a history preview, or substitute another take for a missing endpoint.
+  const source = story.activeEndpointId !== undefined ? takes.find(job => job.id === story.activeEndpointId) || null : story.storyId ? null : current;
   const pending = takes.find(videoJobIsPending) || (videoJobIsPending(current) ? current : null);
   const working = Boolean(busy || pending);
   const playable = current?.status === "succeeded" && !!current.video_url;
   const continuationChain = !!current?.parent_run_id && !!current?.continuation_source &&
     (current.can_combine === true || (current.can_combine === undefined && current.operation === "continue"));
-  const verifiedCombinedEnding=current?.operation==='combine'&&current.can_continue===true&&
-    typeof current.continue_from_run_id==='string'&&!!current.continue_from_run_id.trim()&&current.continue_from_run_id!==current.id;
-  return { takes, current, pending, working, playable,
+  const verifiedCombinedEnding=source?.operation==='combine'&&source.can_continue===true&&
+    typeof source.continue_from_run_id==='string'&&!!source.continue_from_run_id.trim()&&source.continue_from_run_id!==source.id;
+  return { takes, current, source, pending, working, playable,
     showCombine: current?.operation === "combine" || continuationChain,
     canReroll: !!playable && !working && current?.has_snapshot !== false && current?.operation !== "combine" && current?.can_reroll !== false,
-    canContinue: !!playable && !working && current?.can_continue !== false && (verifiedCombinedEnding ||
-      (!!current?.continuation_source && current?.has_snapshot !== false && current?.operation !== "combine")),
+    canContinue: source?.status === 'succeeded' && !!source.video_url && !working && source.can_continue !== false && (verifiedCombinedEnding ||
+      (!!source.continuation_source && source.has_snapshot !== false && source.operation !== "combine")),
     canCombine: !!playable && !working && continuationChain && current?.operation !== "combine" };
 }
 
-export default function VideoWorkspace({ project, promptReady, busy, jobs, currentJob, onSelectJob, onGenerate, onReroll, onContinue, onSuggest, onCombine, onResolve, onUpdateTake, advanced }: VideoWorkspaceProps) {
+export default function VideoWorkspace({ project, promptReady, busy, jobs, currentJob, storyId, activeEndpointId, storyClips, onBranch, onPlayGame, onSelectJob, onGenerate, onReroll, onContinue, onSuggest, onCombine, onResolve, onUpdateTake, advanced }: VideoWorkspaceProps) {
   const id = useId();
   const [continuing, setContinuing] = useState(false), [idea, setIdea] = useState(""), [length, setLength] = useState(5);
   const [renderPreset, setRenderPreset] = useState<ContinuationRenderPreset>("inherit");
@@ -145,16 +174,26 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
   const [submitting, setSubmitting] = useState(false), [actionError, setActionError] = useState("");
   const [suggested, setSuggested] = useState<ContinuationSuggestions | null>(null);
   const [suggesting, setSuggesting] = useState(false), [suggestionError, setSuggestionError] = useState("");
+  const [selectedIdea, setSelectedIdea] = useState('');
+  const [playback, setPlayback] = useState<'scene' | 'story'>('scene'), [playlistIndex, setPlaylistIndex] = useState(0);
+  const [mediaLength, setMediaLength] = useState<{id:string;seconds:number}|null>(null);
+  const autoplayNext = useRef(false), directionRef = useRef<HTMLTextAreaElement>(null);
   const suggestionRevision = useRef(0);
   const suggestionInFlight = useRef<number | null>(null);
-  const state = videoWorkspaceState(project.id, jobs, currentJob, busy || submitting || suggesting);
-  const { current, pending, takes, working, playable, canReroll, canContinue, canCombine, showCombine } = state;
+  const state = videoWorkspaceState(project.id, jobs, currentJob, busy || submitting || suggesting, {storyId, activeEndpointId});
+  const { current, source, pending, takes, working, playable, canReroll, canContinue, canCombine, showCombine } = state;
+  const hasResult = takes.some(job => job.status === 'succeeded' && !!job.video_url);
+  const playlist = storyPlaylist(storyClips, storyId);
+  const playing = playback === 'story' ? playlist[Math.min(playlistIndex, Math.max(0, playlist.length - 1))] : current;
+  const playingUrl = sceneVideoUrl(playing);
+  const endingUrl = source?.ending_image_url || (draftScope === `${source?.project_id}:${source?.id}` ? suggested?.ending_image_url : undefined);
+  const sourceProjectId = source?.project_id || project.id;
   const status = pending || current;
   const measuredTime = elapsedVideoTime(status?.elapsed_seconds);
-  const runDuration = Number((current?.duration ?? project.duration).toFixed(2));
+  const runDuration = Number((mediaLength && mediaLength.id===current?.id ? mediaLength.seconds : current?.new_seconds ?? current?.duration ?? project.duration).toFixed(2));
   const dimensions = current?.width && current?.height ? `${current.width} × ${current.height}` : `${project.comfy_render?.resolution || "0.3"} MP`;
   const seed = current?.seed;
-  const continuationSize = continuationSizeLabel(current);
+  const continuationSize = continuationSizeLabel(source);
   const generationPresetSize = project.comfy_render?.continuation_source ? "source size" : "0.3 MP";
   metadataScope.current = `${project.id}:${current?.id || ""}`;
   const takeNumber = (job: VideoJob) => Math.max(1, takes.length - takes.findIndex(take => take.id === job.id));
@@ -168,21 +207,22 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
     catch (error) { if (scope === metadataScope.current) setMetadataError(error instanceof Error ? error.message : "Could not save this take. Try again."); }
     finally { metadataInFlight.current = false; setMetadataBusy(false); }
   };
-  const suggestionContext = useRef<SuggestionContext>({ open: continuing, projectId: project.id, runId: current?.id, duration: length, direction: idea });
-  suggestionContext.current = { open: continuing, projectId: project.id, runId: current?.id, duration: length, direction: idea };
+  const suggestionContext = useRef<SuggestionContext>({ open: continuing, projectId: sourceProjectId, runId: source?.id, duration: length, direction: idea });
+  suggestionContext.current = { open: continuing, projectId: sourceProjectId, runId: source?.id, duration: length, direction: idea };
   const invalidateSuggestions = () => { suggestionRevision.current += 1; };
   const requestSuggestions = async (duration = length, direction = idea) => {
-    if (!onSuggest || !current || working || suggestionInFlight.current !== null) return;
+    if (!onSuggest || !source || working || suggestionInFlight.current !== null) return;
     const revision = ++suggestionRevision.current;
     suggestionInFlight.current = revision;
-    const context = { open: true, projectId: project.id, runId: current.id, duration, direction };
+    const context = { open: true, projectId: sourceProjectId, runId: source.id, duration, direction };
     suggestionContext.current = context;
     setSuggesting(true); setSuggestionError("");
     try {
-      const result = await onSuggest(current, duration, direction.trim() || undefined);
+      const result = await onSuggest(source, duration, direction.trim() || undefined);
       if (revision !== suggestionRevision.current || !continuationSuggestionIsCurrent(context, suggestionContext.current)) return;
       const suggestions = continuationIdeaChoices(result);
       setSuggested({ ...result, suggestions });
+      setSelectedIdea('');
       setRestoredDraft(false);
       if (!suggestions.length) setSuggestionError("No scene ideas came back. Refresh ideas or write what happens next below.");
     } catch (error) {
@@ -204,16 +244,25 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
   };
   useEffect(() => {
     suggestionRevision.current += 1;
-    const restored = current?.id ? loadContinuationDraft(project.id, current.id) : null;
-    setContinuing(false); setIdea(restored?.idea || ""); setLength(restored?.duration || 5); setRenderPreset(restored?.renderPreset || "inherit"); setActionError("");
-    setRenaming(false); setMetadataError(""); setComparing(false); setCompareId("");
+    const restored = source?.id ? loadContinuationDraft(sourceProjectId, source.id) : null;
+    setContinuing(false); setIdea(restored?.idea || ""); setLength(Math.min(13, restored?.duration || 5)); setRenderPreset(restored?.renderPreset || "inherit"); setActionError("");
+    setSelectedIdea('');
     setSuggested(restored?.suggestions || null); setSuggestionError(""); setRestoredDraft(!!restored);
-    setDraftScope(`${project.id}:${current?.id || ""}`);
-  }, [project.id, current?.id]);
+    setDraftScope(`${sourceProjectId}:${source?.id || ""}`);
+  }, [sourceProjectId, source?.id]);
   useEffect(() => {
-    if (!current?.id || draftScope !== `${project.id}:${current.id}` || (!continuing && !idea && !suggested)) return;
-    saveContinuationDraft(project.id, current.id, { idea, duration: length, renderPreset, ...(suggested ? { suggestions: suggested } : {}) });
-  }, [draftScope, project.id, current?.id, continuing, idea, length, renderPreset, suggested]);
+    if (!source?.id || draftScope !== `${sourceProjectId}:${source.id}` || (!continuing && !idea && !suggested)) return;
+    saveContinuationDraft(sourceProjectId, source.id, { idea, duration: length, renderPreset, ...(suggested ? { suggestions: suggested } : {}) });
+  }, [draftScope, sourceProjectId, source?.id, continuing, idea, length, renderPreset, suggested]);
+  useEffect(() => {
+    setRenaming(false); setMetadataError(''); setComparing(false); setCompareId(''); setPlayback('scene'); autoplayNext.current = false;
+  }, [current?.id]);
+  useEffect(() => { setPlaylistIndex(0); autoplayNext.current = false; }, [storyId]);
+  useEffect(() => {
+    if (!continuing) return;
+    directionRef.current?.focus({preventScroll:true});
+    directionRef.current?.closest('.video-workspace-continue')?.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }, [continuing]);
   useEffect(() => { setGeneratePreset("inherit"); }, [project.id]);
   useEffect(() => () => { suggestionRevision.current += 1; }, []);
 
@@ -231,14 +280,78 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
     {renaming && current && <form className="video-workspace-rename" onSubmit={event => { event.preventDefault(); void updateTake({ title: takeTitle.trim() }); }}><label htmlFor={`${id}-take-title`}>Take name</label><input id={`${id}-take-title`} value={takeTitle} maxLength={80} placeholder={`Take ${takeNumber(current)}`} onChange={event => setTakeTitle(event.target.value)} disabled={metadataBusy} autoFocus /><button type="submit" disabled={metadataBusy}>Save name</button><button type="button" aria-label="Cancel rename" disabled={metadataBusy} onClick={() => setRenaming(false)}><X size={15} aria-hidden="true" /></button></form>}
     {metadataError && <p className="video-workspace-error" role="alert">{metadataError}</p>}
 
-    <div className={`video-workspace-preview ${playable ? "has-video" : ""}`}>
-      {playable ? <video key={`${current!.id}:${current!.video_url}`} src={current!.video_url!} controls playsInline preload="metadata" aria-label="Selected video" /> :
+    {!!playlist.length && <div className="video-workspace-playback-tabs" role="group" aria-label="Playback view">
+      <button type="button" aria-pressed={playback === 'scene' && (!source || current?.id === source.id)} onClick={() => {setPlayback('scene'); autoplayNext.current = false; if(source)onSelectJob(source);}}>Latest scene</button>
+      <button type="button" aria-pressed={playback === 'story'} onClick={() => {setPlayback('story'); setPlaylistIndex(0); autoplayNext.current = false;}}>Whole story · {playlist.length} scenes</button>
+      {storyId && <a href={`/api/stories/${storyId}/video`} download>Save whole story</a>}
+    </div>}
+    {playback === 'story' && playing && <p className="video-workspace-help" role="status">Scene {Math.min(playlistIndex + 1, playlist.length)} of {playlist.length} · {videoTakeTitle(playing)}. Plays the accepted clips in order.</p>}
+    <div className={`video-workspace-preview ${playing?.status === 'succeeded' && playingUrl ? "has-video" : ""}`}>
+      {playing?.status === 'succeeded' && playingUrl ? <video key={`${playing.id}:${playingUrl}`} src={playingUrl} controls playsInline preload="metadata" aria-label="Selected video"
+        onEnded={() => {if(playback === 'story' && playlistIndex < playlist.length - 1) {autoplayNext.current = true; setPlaylistIndex(index => index + 1);} else autoplayNext.current = false;}}
+        onLoadedMetadata={event => {if(Number.isFinite(event.currentTarget.duration))setMediaLength({id:playing.id,seconds:event.currentTarget.duration});if(autoplayNext.current) {autoplayNext.current = false; void event.currentTarget.play().catch(() => {});}}} /> :
         <div className="video-workspace-empty">
           <div className="video-workspace-preview-icon">{pending && pending.status !== "uncertain" ? <LoaderCircle className="video-workspace-spin" size={30} aria-hidden="true" /> : <Film size={30} aria-hidden="true" />}</div>
           <strong>{status ? labels[status.status] : "Your next video starts here"}</strong>
           <p>{pending ? "You can keep this page open. Your result will appear here when it is ready." : current?.status === "failed" ? "Your story and references are saved. Review the message below before generating again." : "Write your idea, add your photos, then generate a take."}</p>
         </div>}
     </div>
+
+    <div className="video-workspace-actions">
+      {hasResult && <><button className="video-workspace-generate" type="button" disabled={!canContinue} onClick={() => {
+        setContinuing(true); setActionError('');
+        if (!continuing && !suggested?.suggestions.length) void requestSuggestions();
+      }} title="Continue the active story ending. Previewing history does not change this source."><ArrowRight size={17} aria-hidden="true" /><span>Continue from this ending</span></button>
+      <button type="button" disabled={!canReroll} onClick={() => current && void runAction(() => onReroll(current))} title="Keep this take's prompt, photos and settings, and render with a new seed."><Shuffle size={17} aria-hidden="true" /><span>Try another take</span></button></>}
+      <button className={!hasResult ? 'video-workspace-generate' : ''} type="button" disabled={working} onClick={() => void runAction(() => onGenerate(generatePreset))}><Play size={17} fill="currentColor" aria-hidden="true" /><span>Generate video</span></button>
+    </div>
+    {source && <div className="video-workspace-source" aria-label="Continuation source">
+      {endingUrl && <img src={endingUrl} alt="Ending frame used for continuation" />}
+      <div><strong>Continuing after {videoTakeTitle(source, takeNumber(source))}</strong><span>{source.id !== current?.id ? 'You are previewing history. Your story still continues from this ending.' : 'The saved ending and motion carry into the next scene automatically.'}</span></div>
+      {onPlayGame && <button type="button" disabled={!canContinue} onClick={() => void runAction(() => onPlayGame(source))}>Play from here</button>}
+    </div>}
+    {storyId && !source && <p className="video-workspace-help">{activeEndpointId ? 'Loading the saved story ending. Continuation will be ready when it is available.' : 'Generate your opening scene to start this story.'}</p>}
+    {onBranch && current && current.id !== source?.id && <button className="video-workspace-branch" type="button"
+      disabled={working || !videoWorkspaceState(current.project_id, [current], current).canContinue}
+      onClick={() => void runAction(() => onBranch(current))}>Branch from this preview</button>}
+
+    {continuing && source && <div className="video-workspace-continue" role="region" aria-label="Continue selected video">
+      <div className="video-workspace-continue-heading"><div><span className="video-workspace-eyebrow"><Sparkles size={13} aria-hidden="true" /> INTERACTIVE STORY</span><h4>What happens after this ending?</h4></div><button type="button" aria-label="Cancel continuation" className="video-workspace-close" onClick={() => {
+        invalidateSuggestions(); suggestionContext.current = { ...suggestionContext.current, open: false }; setContinuing(false);
+      }} disabled={submitting}><X size={17} aria-hidden="true" /></button></div>
+      <p>Pick a next scene, edit it if you want, then watch the story continue. The last frame and story come from this video automatically. Your original take stays saved.</p>
+      {restoredDraft && <p className="video-workspace-settings-note" role="status">Saved scene draft restored. Refresh ideas for new choices.</p>}
+      {endingUrl && <figure className="video-workspace-ending"><img src={endingUrl} alt="Actual last frame of the selected video" /><figcaption><strong>Your starting point</strong><span>This ending frame is included automatically when planning the next clip.</span></figcaption></figure>}
+      {onSuggest && <div className="video-workspace-suggestions" aria-label="Suggested next scenes">
+        <div className="video-workspace-suggestions-heading"><strong>Ideas for the next {length} seconds</strong><button type="button" disabled={working || suggesting} onClick={() => void requestSuggestions()}><RefreshCw size={13} aria-hidden="true" /> Refresh ideas</button></div>
+        {suggesting && <p className="video-workspace-suggestion-status" role="status"><LoaderCircle size={14} className="video-workspace-spin" aria-hidden="true" /> Looking at the ending and thinking of next scenes…</p>}
+        {suggestionError && <p className="video-workspace-suggestion-error" role="alert">{suggestionError}</p>}
+        {!!suggested?.suggestions.length && <div className="video-workspace-idea-grid">{suggested.suggestions.map((choice, index) => <button type="button" key={`${index}:${choice.idea}`} disabled={working} aria-pressed={idea === choice.idea && selectedIdea === choice.idea} onClick={() => { setSelectedIdea(choice.idea); changeIdea(choice.idea); }}><span className="video-workspace-idea-number">{index + 1}</span><strong>{choice.title}</strong><span>{choice.idea}</span></button>)}</div>}
+        {suggested?.model && <small className="video-workspace-suggestion-model">Ideas by {suggested.model}</small>}
+      </div>}
+      <label htmlFor={`${id}-idea`}>What happens next?</label>
+      <textarea ref={directionRef} id={`${id}-idea`} value={idea} onChange={event => changeIdea(event.target.value)} rows={3} maxLength={1000} disabled={working && !suggesting} placeholder="She opens the box, smiles, and turns toward the window. Keep the same room and one continuous shot." />
+      <label className="video-workspace-preset" htmlFor={`${id}-continue-preset`}><span>Continuation quality<small>Quick draft checks motion. Quality preview adds detail.</small></span><select id={`${id}-continue-preset`} aria-label="Continuation quality" value={renderPreset} onChange={event => setRenderPreset(event.target.value as ContinuationRenderPreset)} disabled={working}><option value="inherit">This take’s settings</option><option value="draft">Quick draft · {continuationSize.presetSize} / 4 steps</option><option value="quality">Quality preview · {continuationSize.presetSize} / 8 steps</option></select></label>
+      <p className="video-workspace-settings-note">{continuationSize.explanation}</p>
+      <p className="video-workspace-settings-note">Uses this take’s saved video settings unless you choose a preview preset. Keeps the clip length you select.</p>
+      <div className="video-workspace-continue-footer"><label htmlFor={`${id}-length`}><span>New action length</span><select id={`${id}-length`} aria-label="Next clip length" value={length} onChange={event => {
+        const duration = Number(event.target.value); invalidateSuggestions(); setLength(duration); setSelectedIdea('');
+        suggestionContext.current = { ...suggestionContext.current, duration };
+        const restored = loadContinuationDraft(sourceProjectId, source.id, { duration });
+        if (restored) {
+          setIdea(restored.idea); setRenderPreset(restored.renderPreset); setSuggested(restored.suggestions || null); setRestoredDraft(true);
+          suggestionContext.current = { ...suggestionContext.current, direction: restored.idea };
+          return;
+        }
+        setSuggested(value => value ? { ...value, suggestions: [] } : null);
+        setRestoredDraft(false);
+        void requestSuggestions(duration);
+      }} disabled={working}>{[4, 5, 7, 10, 13].map(seconds => <option key={seconds} value={seconds}>{seconds === 4 ? "4 seconds · quick test" : `${seconds} seconds of new action`}</option>)}</select></label><button className="video-workspace-generate" type="button" disabled={!canContinue || !idea.trim()} onClick={() => {
+        invalidateSuggestions(); void runAction(() => onContinue(source, idea.trim(), length, renderPreset, {planned:continuationIsPlanned(idea, selectedIdea, suggested)}));
+      }}><ArrowRight size={16} aria-hidden="true" /> Generate next {length} seconds</button></div>
+      <small>{continuationIsPlanned(idea, selectedIdea, suggested) ? "Your selected suggestion is ready to render." : "AI develops your direction into actions and dialogue before rendering."} This length adds new action after the saved opening. H3 rounds to supported frames; Latest scene skips the copied opening.</small>
+    </div>}
+
 
     {comparing && current && compareTake && <section className="video-workspace-compare" aria-label="Compare selected takes">
       <div className="video-workspace-compare-heading"><label htmlFor={`${id}-compare`}>Compare with<select id={`${id}-compare`} aria-label="Compare with" value={compareTake.id} onChange={event => setCompareId(event.target.value)}>{compareChoices.map(job => <option key={job.id} value={job.id}>{videoTakeTitle(job, takeNumber(job))}</option>)}</select></label><button type="button" aria-label="Close comparison" onClick={() => setComparing(false)}><X size={16} aria-hidden="true" /></button></div>
@@ -248,7 +361,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
 
     <div className="video-workspace-result-info">
       <div className="video-workspace-badges" aria-label="Video details">{current?.operation === "combine" && <span>Combined film</span>}<span>{runDuration}s</span><span>{dimensions}</span>{current?.steps != null && current.steps > 0 && <span>{current.steps} steps</span>}{Number.isSafeInteger(seed) && <span>Seed {seed}</span>}</div>
-      {playable && current?.download_url && <a className="video-workspace-download" href={current.download_url} download><Download size={14} aria-hidden="true" /> Save video</a>}
+      {playable && current?.download_url && <a className="video-workspace-download" href={current.scene_video_url || current.download_url} download><Download size={14} aria-hidden="true" /> Save scene</a>}
     </div>
 
     {(status || busy || submitting) && <div className={`video-workspace-status ${status?.status === "failed" || status?.status === "uncertain" ? "needs-attention" : ""}`} role="status" aria-live="polite">
@@ -267,54 +380,9 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
     }}><RefreshCw size={15}/> Check &amp; unlock</button><span>Recover its result if available. If this request is no longer running, unlock new generations. Existing videos are kept.</span></div>}
 
     <label className="video-workspace-preset" htmlFor={`${id}-generate-preset`}><span>Video quality<small>{project.comfy_render?.continuation_source ? "Uses the saved clip size; preview presets change steps." : "Applies to Generate video."}</small></span><select id={`${id}-generate-preset`} aria-label="Video quality" value={generatePreset} onChange={event => setGeneratePreset(event.target.value as ContinuationRenderPreset)} disabled={working}><option value="inherit">Current video settings</option><option value="draft">Quick draft · {generationPresetSize} / 4 steps</option><option value="quality">Quality preview · {generationPresetSize} / 8 steps</option></select></label>
-    <div className="video-workspace-actions">
-      <button className="video-workspace-generate" type="button" disabled={working} onClick={() => void runAction(() => onGenerate(generatePreset))}><Play size={17} fill="currentColor" aria-hidden="true" /><span>Generate video</span></button>
-      <button type="button" disabled={!canReroll} onClick={() => current && void runAction(() => onReroll(current))} title="Keep this take's prompt, photos and settings, and render with a new seed."><Shuffle size={17} aria-hidden="true" /><span>Try another seed</span></button>
-      <button type="button" disabled={!canContinue} onClick={() => {
-        setContinuing(true); setActionError("");
-        if (!continuing && !suggested?.suggestions.length) void requestSuggestions();
-      }} title="Continue the selected video's actual ending with a new idea."><ArrowRight size={17} aria-hidden="true" /><span>Continue video</span></button>
-    </div>
-    {onCombine && showCombine && <div className="video-workspace-combine"><button type="button" disabled={!canCombine} onClick={() => current && void runAction(() => onCombine(current))}><Layers2 size={15} aria-hidden="true" /> Combine clips</button><span>{current?.operation === "combine" ? current.can_continue===true&&current.continue_from_run_id ? "Your joined film is ready in the player. Continue video picks up from the final clip automatically." : "Your joined film is ready in the player. Select an individual take to continue its story." : "Join this continuation with its earlier clips into one video."}</span></div>}
-    <p className="video-workspace-help">{!promptReady ? "Generate makes your prompt first, then renders your video." : "Generate uses your current prompt and settings."} {playable ? "Try another seed keeps this take’s prompt, photos and settings." : "After a take finishes, compare a new seed or continue its story."}</p>
+    {onCombine && showCombine && <div className="video-workspace-combine"><button type="button" disabled={!canCombine} onClick={() => current && void runAction(() => onCombine(current))}><Layers2 size={15} aria-hidden="true" /> Combine clips</button><span>{current?.operation === "combine" ? current.can_continue===true&&current.continue_from_run_id ? "Your joined film is ready in the player. Continue from this ending picks up from the final clip automatically." : "Your joined film is ready in the player. Select an individual take to continue its story." : "Join this continuation with its earlier clips into one video."}</span></div>}
+    <p className="video-workspace-help">{!promptReady ? "Generate makes your prompt first, then renders your video." : "Generate uses your current prompt and settings."} {playable ? "Try another take keeps the selected take’s prompt, photos and settings." : "After a take finishes, compare a new seed or continue its story."}</p>
     {playable && !current?.continuation_source && !current?.warning && current?.operation !== "combine" && <p className="video-workspace-help">This take has no saved motion state. Enable Save continuation state in generation settings for videos you want to extend.</p>}
-
-    {continuing && current && <div className="video-workspace-continue" role="region" aria-label="Continue selected video">
-      <div className="video-workspace-continue-heading"><div><span className="video-workspace-eyebrow"><Sparkles size={13} aria-hidden="true" /> INTERACTIVE STORY</span><h4>What happens after this ending?</h4></div><button type="button" aria-label="Cancel continuation" className="video-workspace-close" onClick={() => {
-        invalidateSuggestions(); suggestionContext.current = { ...suggestionContext.current, open: false }; setContinuing(false);
-      }} disabled={submitting}><X size={17} aria-hidden="true" /></button></div>
-      <p>Pick a next scene, edit it if you want, then watch the story continue. The last frame and story come from this video automatically. Your original take stays saved.</p>
-      {restoredDraft && <p className="video-workspace-settings-note" role="status">Saved scene draft restored. Refresh ideas for new choices.</p>}
-      {suggested?.ending_image_url && <figure className="video-workspace-ending"><img src={suggested.ending_image_url} alt="Actual last frame of the selected video" /><figcaption><strong>Your starting point</strong><span>This ending frame is included automatically when planning the next clip.</span></figcaption></figure>}
-      {onSuggest && <div className="video-workspace-suggestions" aria-label="Suggested next scenes">
-        <div className="video-workspace-suggestions-heading"><strong>Ideas for the next {length} seconds</strong><button type="button" disabled={working || suggesting} onClick={() => void requestSuggestions()}><RefreshCw size={13} aria-hidden="true" /> Refresh ideas</button></div>
-        {suggesting && <p className="video-workspace-suggestion-status" role="status"><LoaderCircle size={14} className="video-workspace-spin" aria-hidden="true" /> Looking at the ending and thinking of next scenes…</p>}
-        {suggestionError && <p className="video-workspace-suggestion-error" role="alert">{suggestionError}</p>}
-        {!!suggested?.suggestions.length && <div className="video-workspace-idea-grid">{suggested.suggestions.map((choice, index) => <button type="button" key={`${index}:${choice.idea}`} disabled={working} aria-pressed={idea === choice.idea} onClick={() => changeIdea(choice.idea)}><span className="video-workspace-idea-number">{index + 1}</span><strong>{choice.title}</strong><span>{choice.idea}</span></button>)}</div>}
-        {suggested?.model && <small className="video-workspace-suggestion-model">Ideas by {suggested.model}</small>}
-      </div>}
-      <label htmlFor={`${id}-idea`}>What happens next?</label>
-      <textarea id={`${id}-idea`} value={idea} onChange={event => changeIdea(event.target.value)} rows={3} maxLength={1000} disabled={working && !suggesting} placeholder="She opens the box, smiles, and turns toward the window. Keep the same room and one continuous shot." />
-      <label className="video-workspace-preset" htmlFor={`${id}-continue-preset`}><span>Continuation quality<small>Quick draft checks motion. Quality preview adds detail.</small></span><select id={`${id}-continue-preset`} aria-label="Continuation quality" value={renderPreset} onChange={event => setRenderPreset(event.target.value as ContinuationRenderPreset)} disabled={working}><option value="inherit">This take’s settings</option><option value="draft">Quick draft · {continuationSize.presetSize} / 4 steps</option><option value="quality">Quality preview · {continuationSize.presetSize} / 8 steps</option></select></label>
-      <p className="video-workspace-settings-note">{continuationSize.explanation}</p>
-      <p className="video-workspace-settings-note">Uses this take’s saved video settings unless you choose a preview preset. Keeps the clip length you select.</p>
-      <div className="video-workspace-continue-footer"><label htmlFor={`${id}-length`}><span>Next clip length</span><select id={`${id}-length`} aria-label="Next clip length" value={length} onChange={event => {
-        const duration = Number(event.target.value); invalidateSuggestions(); setLength(duration);
-        suggestionContext.current = { ...suggestionContext.current, duration };
-        const restored = loadContinuationDraft(project.id, current.id, { duration });
-        if (restored) {
-          setIdea(restored.idea); setRenderPreset(restored.renderPreset); setSuggested(restored.suggestions || null); setRestoredDraft(true);
-          suggestionContext.current = { ...suggestionContext.current, direction: restored.idea };
-          return;
-        }
-        setSuggested(value => value ? { ...value, suggestions: [] } : null);
-        setRestoredDraft(false);
-        void requestSuggestions(duration);
-      }} disabled={working}>{[4, 5, 7, 10, 15].map(seconds => <option key={seconds} value={seconds}>{seconds === 4 ? "4 seconds · quick test" : `${seconds} seconds`}</option>)}</select></label><button className="video-workspace-generate" type="button" disabled={!canContinue || !idea.trim()} onClick={() => {
-        invalidateSuggestions(); void runAction(() => onContinue(current, idea.trim(), length, renderPreset));
-      }}><ArrowRight size={16} aria-hidden="true" /> Generate next {length} seconds</button></div>
-      <small>Your chosen scene is used as written. The clip includes a short overlap with its source to preserve motion.</small>
-    </div>}
 
     {takes.length > 0 && <div className="video-workspace-takes"><div className="video-workspace-takes-heading"><h4>Recent takes</h4><span>{takes.length} saved {takes.length === 1 ? "run" : "runs"}</span></div><div className="video-workspace-takes-strip" aria-label="Recent video takes">
       {takes.map((job, index) => <button type="button" key={job.id} className={`video-workspace-take ${current?.id === job.id ? "selected" : ""}`} aria-label={`Select take ${takes.length - index}`} aria-pressed={current?.id === job.id} onClick={() => onSelectJob(job)}>
@@ -323,6 +391,11 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
       </button>)}
     </div></div>}
 
+    {playable && current?.video_url && <details className="video-workspace-raw-details"><summary>Clip details & original output</summary>
+      <p>{current.scene_video_url ? 'Scene playback uses the new footage. The original output can include preserved motion from the previous clip.' : 'This is the full generated clip. Saved-state continuations can include a short preserved opening from the previous clip.'}</p>
+      <a href={current.video_url} target="_blank" rel="noreferrer">View original generated clip</a>
+      {current.parent_run_id && <p>The parent take is saved with this clip. Branches keep their own source ending.</p>}
+    </details>}
     {advanced && <details className="video-workspace-advanced"><summary><Settings2 size={15} aria-hidden="true" /><span>Generation settings</span><ChevronDown size={15} aria-hidden="true" /></summary><div>{advanced}</div></details>}
   </section>;
 }

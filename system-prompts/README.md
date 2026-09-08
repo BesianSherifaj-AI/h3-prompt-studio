@@ -6,4 +6,4 @@ These plain-text prompts are separate from the app's structured JSON proposal pr
 
 The exporter also supports I2VA, L2VA and T2VA through `backend.prompts.export_system_prompt(persona, mode)`, including an optional `persona: custom style directions` suffix. The sixteen provided files cover the requested reference and first/last modes.
 
-Source specification: `research/h3-prompt-studio-spec.md` in the parent workspace. This is an independent writing aid, not a reproduction of the hosted Context-IR service.
+See the bundled [H3 contract](../CONTRACT.md) for supported conditioning and prompt behavior. This is an independent writing aid, not a reproduction of the hosted Context-IR service.

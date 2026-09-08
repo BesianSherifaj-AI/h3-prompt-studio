@@ -37,7 +37,7 @@ import SceneDirector from './SceneDirector';
 import TemplateShelf from './TemplateShelf';
 import PhotoTools, { ReferenceInsert } from './PhotoTools';
 import IdeaBuilder from './IdeaBuilder';
-import { TimelinePlanner, ContinuationPlanner } from './TimelinePlanner';
+import { TimelinePlanner } from './TimelinePlanner';
 import { ensurePromptTags } from './tags';
 
 export type SimpleStudioProps = {
@@ -73,6 +73,7 @@ export type SimpleStudioProps = {
   onContinue: (next:Project)=>void;
   modelPicker?: React.ReactNode;
   comfyPanel?: React.ReactNode;
+  settingsPanel?: React.ReactNode;
 };
 
 const PHOTO_TYPES = [
@@ -113,6 +114,7 @@ export default function SimpleStudio(props: SimpleStudioProps) {
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<Asset | null>(null);
   const [uploadError, setUploadError] = useState("");
+  const [editorTab, setEditorTab] = useState<'photos' | 'story' | 'settings'>(p.assets.length ? 'story' : 'photos');
   const [showScenes, setShowScenes] = useState(
     p.shots.length > 1 || p.shots.some((s) => s.dialogue.length > 0),
   );
@@ -236,10 +238,22 @@ export default function SimpleStudio(props: SimpleStudioProps) {
           <span>Saved automatically</span>
         </div>
 
-        <section
+        <div className="simple-workspace-layout">
+        <div className="simple-editor">
+        <div className="simple-editor-tabs" role="tablist" aria-label="Scene editor">
+          {([['photos', 'Photos'], ['story', 'Story & Dialogue'], ['settings', 'Settings']] as const).map(([tab, label], index) =>
+            <button key={tab} id={`simple-tab-${tab}`} type="button" role="tab" aria-selected={editorTab === tab}
+              aria-controls={`simple-panel-${tab}`} tabIndex={editorTab === tab ? 0 : -1}
+              onClick={() => setEditorTab(tab)} onKeyDown={event => {
+                const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+                if (!offset && event.key !== 'Home' && event.key !== 'End') return;
+                event.preventDefault();
+                const next = (['photos', 'story', 'settings'] as const)[event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + offset + 3) % 3];
+                setEditorTab(next); document.getElementById(`simple-tab-${next}`)?.focus();
+              }}>{label}</button>)}
+        </div>
+        <section role="tabpanel" id="simple-panel-photos" hidden={editorTab !== 'photos'} aria-labelledby="simple-tab-photos"
           className="simple-section"
-          id="simple-photos"
-          aria-labelledby="simple-photos-title"
         >
           <div className="simple-section-heading">
             <span className="simple-step">1</span>
@@ -594,10 +608,8 @@ export default function SimpleStudio(props: SimpleStudioProps) {
           </button>
         </section>
 
-        <section
+        <section role="tabpanel" id="simple-panel-story" hidden={editorTab !== 'story'} aria-labelledby="simple-tab-story"
           className="simple-section"
-          id="simple-idea"
-          aria-labelledby="simple-idea-title"
         >
           <div className="simple-section-heading">
             <span className="simple-step">2</span>
@@ -626,120 +638,6 @@ export default function SimpleStudio(props: SimpleStudioProps) {
               />
             </Field>
             {!!activeImages.length&&<ReferenceInsert project={p} onInsert={tag=>insertReference(tag)}/>}
-            <div className="simple-options">
-              <Field label="Video length">
-                <select
-                  value={p.duration}
-                  onChange={(e) =>
-                    update((d) => {
-                      d.duration = Number(e.target.value);
-                      d.shots = retime(d.shots, d.duration);
-                    })
-                  }
-                >
-                  {Array.from(new Set([5, 7, 10, 15, p.duration]))
-                    .sort((a, b) => a - b)
-                    .map((n) => (
-                      <option key={n} value={n}>
-                        {n} seconds
-                      </option>
-                    ))}
-                </select>
-              </Field>
-              <Field label="Shape">
-                <select
-                  value={p.aspect_ratio}
-                  onChange={(e) =>
-                    update((d) => {
-                      d.aspect_ratio = e.target.value;
-                    })
-                  }
-                >
-                  <option value="16:9">Wide · 16:9</option>
-                  <option value="9:16">Vertical · 9:16</option>
-                  <option value="1:1">Square · 1:1</option>
-                  <option value="4:3">Classic · 4:3</option>
-                  <option value="3:4">Portrait · 3:4</option>
-                </select>
-              </Field>
-              <Field label="How should the video use your photos?">
-                <select
-                  value={p.mode}
-                  onChange={(e) =>
-                    update((d) => setSimpleMode(d, e.target.value))
-                  }
-                >
-                  <option value="ref2va">Reference photos</option>
-                  <option value="i2va">First frame only</option>
-                  <option value="fl2va">First + last frame</option>
-                  <option value="l2va">Last frame only</option>
-                  <option value="t2va">Text only</option>
-                </select>
-              </Field>
-            </div>
-            {p.mode !== "ref2va" && (
-              <div className="simple-keyframes">
-                {["i2va", "fl2va"].includes(p.mode) && (
-                  <Field label="Starting image">
-                    <select
-                      value={
-                        activeImages.find((a) => a.role === "first_frame")
-                          ?.id || ""
-                      }
-                      onChange={(e) =>
-                        update((d) =>
-                          setKeyframe(d, e.target.value, "first_frame"),
-                        )
-                      }
-                    >
-                      <option value="" disabled>
-                        Choose the first frame…
-                      </option>
-                      {images.map((a, i) => (
-                        <option key={a.id} value={a.id}>
-                          Photo {i + 1} · {a.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                )}
-                {["l2va", "fl2va"].includes(p.mode) && (
-                  <Field label="Ending image">
-                    <select
-                      value={
-                        activeImages.find((a) => a.role === "last_frame")?.id ||
-                        ""
-                      }
-                      onChange={(e) =>
-                        update((d) =>
-                          setKeyframe(d, e.target.value, "last_frame"),
-                        )
-                      }
-                    >
-                      <option value="" disabled>
-                        Choose the last frame…
-                      </option>
-                      {images.map((a, i) => (
-                        <option key={a.id} value={a.id}>
-                          Photo {i + 1} · {a.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                )}
-                <p>
-                  {p.mode === "i2va"
-                    ? "The video starts from one image. No ending image is needed."
-                    : p.mode === "l2va"
-                      ? "The video ends at your chosen image. No starting image is needed."
-                      : p.mode === "fl2va"
-                        ? "Choose the image where the video starts and the image where it ends."
-                        : "AI can use your photos for ideas; the video receives text only."}
-                  {!!inspirationImages.length &&
-                    " Other photos help AI describe the scene; they are not sent to H3 as separate image references."}
-                </p>
-              </div>
-            )}
             {!!people.length && (
               <details className="simple-people-actions">
                 <summary>
@@ -998,9 +896,131 @@ export default function SimpleStudio(props: SimpleStudioProps) {
             </details>
           </fieldset>
           <TimelinePlanner project={p} update={update} checkpointUpdate={props.checkpointUpdate}/>
-          <ContinuationPlanner project={p} update={update} onContinue={props.onContinue} busy={unavailable}/>
+        </section>
+        <section role="tabpanel" id="simple-panel-settings" hidden={editorTab !== 'settings'} aria-labelledby="simple-tab-settings" className="simple-section simple-settings-panel">
+          <h2>Scene settings</h2>
+          <fieldset disabled={unavailable}>
+            <div className="simple-options">
+              <Field label="Video length">
+                <select
+                  value={p.duration}
+                  onChange={(e) =>
+                    update((d) => {
+                      d.duration = Number(e.target.value);
+                      d.shots = retime(d.shots, d.duration);
+                    })
+                  }
+                >
+                  {Array.from(new Set([5, 7, 10, 15, p.duration]))
+                    .sort((a, b) => a - b)
+                    .map((n) => (
+                      <option key={n} value={n}>
+                        {n} seconds
+                      </option>
+                    ))}
+                </select>
+              </Field>
+              <Field label="Shape">
+                <select
+                  value={p.aspect_ratio}
+                  onChange={(e) =>
+                    update((d) => {
+                      d.aspect_ratio = e.target.value;
+                    })
+                  }
+                >
+                  <option value="16:9">Wide · 16:9</option>
+                  <option value="9:16">Vertical · 9:16</option>
+                  <option value="1:1">Square · 1:1</option>
+                  <option value="4:3">Classic · 4:3</option>
+                  <option value="3:4">Portrait · 3:4</option>
+                </select>
+              </Field>
+              <Field label="How should the video use your photos?">
+                <select
+                  value={p.mode}
+                  onChange={(e) =>
+                    update((d) => setSimpleMode(d, e.target.value))
+                  }
+                >
+                  <option value="ref2va">Reference photos</option>
+                  <option value="i2va">First frame only</option>
+                  <option value="fl2va">First + last frame</option>
+                  <option value="l2va">Last frame only</option>
+                  <option value="t2va">Text only</option>
+                </select>
+              </Field>
+            </div>
+            {p.mode !== "ref2va" && (
+              <div className="simple-keyframes">
+                {["i2va", "fl2va"].includes(p.mode) && (
+                  <Field label="Starting image">
+                    <select
+                      value={
+                        activeImages.find((a) => a.role === "first_frame")
+                          ?.id || ""
+                      }
+                      onChange={(e) =>
+                        update((d) =>
+                          setKeyframe(d, e.target.value, "first_frame"),
+                        )
+                      }
+                    >
+                      <option value="" disabled>
+                        Choose the first frame…
+                      </option>
+                      {images.map((a, i) => (
+                        <option key={a.id} value={a.id}>
+                          Photo {i + 1} · {a.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+                {["l2va", "fl2va"].includes(p.mode) && (
+                  <Field label="Ending image">
+                    <select
+                      value={
+                        activeImages.find((a) => a.role === "last_frame")?.id ||
+                        ""
+                      }
+                      onChange={(e) =>
+                        update((d) =>
+                          setKeyframe(d, e.target.value, "last_frame"),
+                        )
+                      }
+                    >
+                      <option value="" disabled>
+                        Choose the last frame…
+                      </option>
+                      {images.map((a, i) => (
+                        <option key={a.id} value={a.id}>
+                          Photo {i + 1} · {a.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+                <p>
+                  {p.mode === "i2va"
+                    ? "The video starts from one image. No ending image is needed."
+                    : p.mode === "l2va"
+                      ? "The video ends at your chosen image. No starting image is needed."
+                      : p.mode === "fl2va"
+                        ? "Choose the image where the video starts and the image where it ends."
+                        : "AI can use your photos for ideas; the video receives text only."}
+                  {!!inspirationImages.length &&
+                    " Other photos help AI describe the scene; they are not sent to H3 as separate image references."}
+                </p>
+              </div>
+            )}
+          </fieldset>
+
           <TemplateShelf project={p} update={props.checkpointUpdate} onRestore={props.onRestore} currentPrompt={props.currentPrompt} resultFresh={props.resultFresh} busy={unavailable}/>
           {props.modelPicker}
+          {props.settingsPanel}
+        </section>
+        <div className="simple-editor-footer">
           <div className="simple-generate-area">
             <button
               className="simple-generate"
@@ -1034,9 +1054,11 @@ export default function SimpleStudio(props: SimpleStudioProps) {
               {props.notice}
             </div>
           )}
-        </section>
+        </div>
+        </div>
 
-        {props.comfyPanel}
+        <aside className="simple-video-column" aria-label="Video and continuation">{props.comfyPanel}</aside>
+        </div>
         <section
           className="simple-section simple-result"
           id="simple-result"

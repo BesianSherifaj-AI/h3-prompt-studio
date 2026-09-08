@@ -575,6 +575,7 @@ def test_new_comfy_job_during_release_prevents_lm_load(monkeypatch):
 
 def test_prepare_h3_does_not_demand_h3_unload_when_no_lm(monkeypatch):
     rm, lm = manager()
+    monkeypatch.setattr(httpx, 'get', lambda url, **kw: response(url, {'queue_running': [], 'queue_pending': []}))
     monkeypatch.setattr(resources, "gpu_snapshot", lambda: {"used_mib": 23600})
     monkeypatch.setattr(resources.time, "sleep", denied)
     result = rm.prepare_h3()
@@ -583,6 +584,7 @@ def test_prepare_h3_does_not_demand_h3_unload_when_no_lm(monkeypatch):
 
 def test_prepare_h3_unloads_only_owned_instance_and_serializes(monkeypatch):
     lm = FakeLM([{"id": "owned", "model_key": "vision"}]); rm, _ = manager(lm)
+    monkeypatch.setattr(httpx, 'get', lambda url, **kw: response(url, {'queue_running': [], 'queue_pending': []}))
     rm.instance_id = "owned"; rm.model_key = "vision"
     snapshots = iter([6000, 2000, 2000])
     monkeypatch.setattr(resources, "gpu_snapshot", lambda: {"used_mib": next(snapshots, 2000)})
@@ -596,6 +598,7 @@ def test_prepare_h3_unloads_only_owned_instance_and_serializes(monkeypatch):
 
 def test_prepare_h3_refuses_other_loaded_model(monkeypatch):
     rm, lm = manager(FakeLM([{"id": "foreign", "model_key": "other"}]))
+    monkeypatch.setattr(httpx, 'get', lambda url, **kw: response(url, {'queue_running': [], 'queue_pending': []}))
     monkeypatch.setattr(resources, "gpu_snapshot", lambda: {"used_mib": 10000})
     with pytest.raises(resources.ResourceError, match="outside this Studio"):
         rm.prepare_h3()
@@ -685,6 +688,7 @@ def test_stale_baseline_cannot_be_applied_to_another_instance(monkeypatch):
 
 def test_unload_clears_owned_memory_baseline(monkeypatch):
     rm, lm = manager(FakeLM([{'id': 'owned', 'model_key': 'vision'}]))
+    monkeypatch.setattr(httpx, 'get', lambda url, **kw: response(url, {'queue_running': [], 'queue_pending': []}))
     rm.instance_id = rm.baseline_instance_id = 'owned'
     rm.model_key = 'vision'; rm.ai_idle_memory_mib = 9200
     monkeypatch.setattr(resources, 'gpu_snapshot', lambda: {'used_mib': 1000})

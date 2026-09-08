@@ -386,10 +386,14 @@ def compile_project(project: dict) -> dict:
         issue("warning", "empty_creative_brief", "story.text", "Provide a story or shot action for a meaningful generation request.")
     if profile == "custom" and not custom.strip():
         issue("warning", "empty_custom_directions", "custom_instructions", "Custom profile has no additional directions and uses official syntax.")
-    native_frames = int(duration * 24)
-    while native_frames % 17 != 5:
-        native_frames += 1
-    issue("warning", "comfy_native_duration", "duration", f"The timeline targets {duration:.2f}s; local ComfyUI uses {native_frames} native frames ({native_frames / 24:.3f}s at 24fps). Prompt text does not trim the generated output.")
+    from .video_timing import frame_budget
+    try:
+        timing = frame_budget(float(duration), project.get('comfy_render') or {})
+        native_frames = timing['frames']
+        detail = f" Includes motion context; adds {timing['new_seconds']:.3f}s of new footage." if timing['overlap_frames'] else ''
+        issue("warning", "comfy_native_duration", "duration", f"The timeline targets {duration:.2f}s; local ComfyUI uses {native_frames} native frames ({native_frames / 24:.3f}s at 24fps).{detail} Prompt text does not trim the generated output.")
+    except ValueError as exc:
+        issue('error', 'continuation_duration', 'duration', str(exc))
     if any(i["severity"] == "error" for i in issues):
         return result()
 

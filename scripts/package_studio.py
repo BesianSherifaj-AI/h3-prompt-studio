@@ -9,8 +9,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FOLDERS = ('backend', 'dist', 'system-prompts', 'examples', 'demo', 'docs', 'licenses',
-           'comfy_extension', 'frontend/src', 'tests', 'scripts')
-FILES = ('README.md', 'VERIFICATION.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE',
+           'comfy_extension', 'frontend/src', 'tests', 'scripts', 'tools')
+FILES = ('README.md', 'VERIFICATION.md', 'VERIFICATION_V1.1.md', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE',
          'COMFY_BRIDGE_SETUP.md', 'COMFY_FLOW.md', 'CREATIVE_TOOLS.md', 'CONTRACT.md',
          'Launch.ps1', 'Setup.ps1', 'requirements.txt', 'requirements.lock.txt',
          'pytest.ini', 'frontend/package.json', 'frontend/package-lock.json',

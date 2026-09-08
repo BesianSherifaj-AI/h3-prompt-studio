@@ -64,6 +64,15 @@ def test_running_comfy_job_blocks_switch_before_any_model_change(setup, monkeypa
     assert manager.instance_id == 'old-instance'
 
 
+@pytest.mark.parametrize('kind', ['image', 'video'])
+def test_running_comfy_job_blocks_render_handoff_before_unloading_ai(setup, monkeypatch, kind):
+    manager, models = setup
+    monkeypatch.setattr(manager, 'queues', lambda: [{'url': 'http://127.0.0.1:8010', 'online': True, 'running': 1, 'pending': 0}])
+    with pytest.raises(resources.ResourceError, match='running or queued'):
+        manager.prepare_comfy_then(kind, lambda: pytest.fail('Must not submit'))
+    assert models.calls == [] and manager.instance_id == 'old-instance'
+
+
 def test_failed_release_never_loads_a_second_model(setup):
     manager, models = setup
     models.unload_succeeds = False

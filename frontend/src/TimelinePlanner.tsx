@@ -97,7 +97,7 @@ export function ContinuationPlanner({ project: p, update, onContinue, busy = fal
   const set = (key: string, value: string | number) => update((d) => { ((d.simple ??= {}).next_clip_draft ??= {})[key] = value; });
   useEffect(() => setError(""), [p.id]);
   return <details className="timeline-planner continuation-planner">
-    <summary>Continue the story in another clip <span>next {duration} seconds</span></summary>
+    <summary>Plan a separate scene <span>next {duration} seconds</span></summary>
     {p.simple?.continuation && <p className="timeline-state">This is clip {p.simple.continuation.segment_index}, covering {formatTime(priorStart)}–{formatTime(priorStart + p.duration)}s of your longer story.</p>}
     <p className="timeline-help">Keep this project and start a separate next clip with the same people, clothes, photo tags and style. Then use “Make my prompt” to develop what happens next.</p>
     <div className="continuation-fields">
@@ -118,7 +118,7 @@ export function ContinuationPlanner({ project: p, update, onContinue, busy = fal
     <button type="button" disabled={busy} onClick={() => {
       try { const next = createContinuation(p, { request, duration, ending, firstFrameAssetId: firstFrameAssetId || undefined }); setError(""); onContinue(next); }
       catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    }}>Start next {duration}-second clip · {formatTime(nextStart)}–{formatTime(nextStart + duration)}s</button>
+    }}>Create separate {duration}-second scene · {formatTime(nextStart)}–{formatTime(nextStart + duration)}s</button>
     {error && <p className="timeline-error" role="alert">{error}</p>}
   </details>;
 }

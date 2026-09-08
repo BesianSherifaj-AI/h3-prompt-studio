@@ -93,7 +93,12 @@ def _settings(project, settings):
     seed = settings.get('seed', 9072026)
     if type(seed) is not int or not 0 <= seed <= 2**53 - 1:
         raise TransferError('The seed must be a whole number from 0 through 9007199254740991.')
-    frames = math.ceil((int(duration) * 24 - 5) / 17) * 17 + 5
+    from .video_timing import frame_budget
+    try:
+        timing = frame_budget(duration, settings)
+    except ValueError as exc:
+        raise TransferError(str(exc)) from exc
+    frames = timing['frames']
     return {'mode': mode, 'duration': int(duration), 'resolution': resolution, 'aspect_ratio': aspect,
             'width': width, 'height': height, 'megapixels': width * height / 1_000_000,
             'frames': frames, 'fps': 24, 'actual_duration': frames / 24,

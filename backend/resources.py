@@ -1,13 +1,16 @@
 """Serialize app inference and verify local GPU hand-offs without interrupting jobs."""
 from __future__ import annotations
+import json
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 from .lmstudio import RESIDENT_PREFIX
+from .projects import atomic_json
 try:
     import psutil
 except ImportError:  # A partial installation still checks HTTP; it never assumes idle.
@@ -57,19 +60,110 @@ def gpu_snapshot():
         return None
 
 class ResourceManager:
-    def __init__(self, get_settings, get_client):
+    def __init__(self, get_settings, get_client, *, state_path=None):
         self.get_settings, self.get_client = get_settings, get_client
         self.lock = threading.Lock()
         self.stage = 'idle'
         self.instance_id = None
         self.model_key = None
+        self.instance_endpoint = None
+        self.exclusive_ownership = None
         self.ai_idle_memory_mib = None
         self.baseline_instance_id = None
         self.last_error = None
+        # None preserves a warm H3 session on first use. The first image job
+        # always releases unknown Comfy weights; subsequent family switches are
+        # explicit. 'empty' means a verified release during an AI hand-off.
+        self.comfy_kind = None
+        self.state_path = Path(state_path) if state_path is not None else None
+        if self.state_path is not None and self.state_path.exists():
+            try:
+                state = json.loads(self.state_path.read_text(encoding='utf-8'))
+                previous = state.get('comfy_kind')
+                self.comfy_kind = previous if previous in ('image', 'video', 'empty') else 'unknown'
+                # This is only a candidate. Never restore ownership or a
+                # previous process's VRAM baseline without live inventory.
+                self.exclusive_ownership = self._saved_ownership(state.get('exclusive_instance'))
+            except (OSError, ValueError, AttributeError):
+                # An unreadable marker cannot establish that H3 is still warm.
+                self.comfy_kind = 'unknown'
+
+    @staticmethod
+    def _endpoint(value):
+        if not isinstance(value, str):
+            return None
+        parsed = urlparse(local_url(value))
+        if parsed.path.rstrip('/') not in ('', '/v1'):
+            raise ValueError('Use the LM Studio endpoint, optionally ending in /v1.')
+        return f'{parsed.scheme}://{parsed.netloc}'
+
+    def _client_endpoint(self, client):
+        actual = self._endpoint(getattr(client, 'origin', None))
+        configured = self._endpoint(self.get_settings().get('lm_url'))
+        if actual and configured and actual != configured:
+            raise ResourceError('The LM Studio connection changed. Retry with the configured endpoint; no model was unloaded.')
+        return actual or configured
+
+    @classmethod
+    def _saved_ownership(cls, value):
+        if (not isinstance(value, dict) or set(value) != {'endpoint', 'instance_id', 'model_key'}
+                or not all(isinstance(item, str) and item and len(item) <= 512
+                           and not any(ord(char) < 32 for char in item) for item in value.values())):
+            return None
+        try:
+            return value if cls._endpoint(value['endpoint']) == value['endpoint'] else None
+        except ValueError:
+            return None
+
+    def _save_state(self):
+        if self.state_path is not None:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            # Both fields share one marker: changing ownership must never erase
+            # the family of a potentially accepted ComfyUI queue submission.
+            atomic_json(self.state_path, {'comfy_kind': self.comfy_kind,
+                                         'exclusive_instance': self.exclusive_ownership})
+
+    def _set_comfy_kind(self, kind):
+        self.comfy_kind = kind
+        self._save_state()
 
     def _forget_instance(self):
         self.instance_id, self.model_key = None, None
+        self.instance_endpoint, self.exclusive_ownership = None, None
         self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+        self._save_state()
+
+    def _restore_exclusive(self, client, loaded):
+        endpoint = self._client_endpoint(client)
+        if self.instance_endpoint and self.instance_endpoint != endpoint:
+            self._forget_instance()
+            return False
+        saved = self.exclusive_ownership
+        if not saved:
+            return False
+        matches = [item for item in loaded if item.get('id', item.get('instance_id')) == saved['instance_id']]
+        if (endpoint != saved['endpoint'] or len(matches) != 1
+                or matches[0].get('model_key', matches[0].get('model')) != saved['model_key']):
+            self._forget_instance()
+            return False
+        if (self.instance_id != saved['instance_id'] or self.model_key != saved['model_key']
+                or self.instance_endpoint != endpoint):
+            self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+        self.instance_id, self.model_key = saved['instance_id'], saved['model_key']
+        self.instance_endpoint = endpoint
+        return True
+
+    def _remember_exclusive(self, client):
+        endpoint = self._client_endpoint(client)
+        loaded = client.loaded_instances()
+        matches = [item for item in loaded if item.get('id', item.get('instance_id')) == self.instance_id]
+        if (len(matches) != 1 or matches[0].get('model_key', matches[0].get('model')) != self.model_key):
+            self._forget_instance()
+            raise ResourceError('The selected AI instance changed before ownership could be verified. Retry preparing AI.')
+        self.instance_endpoint = endpoint
+        self.exclusive_ownership = ({'endpoint': endpoint, 'instance_id': self.instance_id, 'model_key': self.model_key}
+                                    if endpoint else None)
+        self._save_state()
 
     def queues(self):
         queues = []
@@ -123,7 +217,9 @@ class ResourceManager:
                 or verified.get('profile') != 'resident_small_cpu'):
             raise ResourceError('The previous resident model could not be verified; no model was unloaded.')
         self.instance_id, self.model_key = ident, previous_model
+        self.instance_endpoint, self.exclusive_ownership = self._client_endpoint(client), None
         self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+        self._save_state()
         return True
 
     def _prepare_ai(self, model):
@@ -134,6 +230,7 @@ class ResourceManager:
         queues = self.assert_idle()
         online = [q for q in queues if q['online']]
         loaded = client.loaded_instances()
+        self._restore_exclusive(client, loaded)
         self._adopt_previous_resident(client, loaded)
         instance_id = lambda item: item.get('id', item.get('instance_id'))
         if self.instance_id and self.model_key != model:
@@ -176,6 +273,7 @@ class ResourceManager:
                 self.assert_idle()
                 memory = gpu_snapshot()
                 if memory and memory['used_mib'] < release_limit:
+                    self._set_comfy_kind('empty')
                     break
                 if time.monotonic() > deadline:
                     raise ResourceError('H3 memory release could not be verified. Close the H3 model/ComfyUI and retry; no new LM Studio model was loaded.')
@@ -208,6 +306,7 @@ class ResourceManager:
                 self.ai_idle_memory_mib = baseline['used_mib']
                 self.baseline_instance_id = self.instance_id
         self.model_key = model
+        self._remember_exclusive(client)
         self.stage = 'AI ready'
         self.last_error = None
         return {'ready': True, 'instance_id': self.instance_id, 'model': model, 'gpu': gpu_snapshot()}
@@ -222,6 +321,7 @@ class ResourceManager:
         client = self.get_client()
         client.resident_model_info(model)
         loaded = client.loaded_instances()
+        self._restore_exclusive(client, loaded)
         instance_id = lambda item: item.get('id', item.get('instance_id'))
         if self.instance_id and self.model_key != model:
             # Changing the selected model may release only the instance this
@@ -244,7 +344,9 @@ class ResourceManager:
             self.stage = 'loading resident CPU vision model'
             result = client.load_resident_model(model)
         self.instance_id, self.model_key = result['instance_id'], model
+        self.instance_endpoint, self.exclusive_ownership = self._client_endpoint(client), None
         self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+        self._save_state()
         self.assert_idle()
         self.stage, self.last_error = 'AI ready · H3 kept loaded', None
         return {**result, 'memory_mode': 'resident_small', 'gpu': gpu_snapshot()}
@@ -254,6 +356,7 @@ class ResourceManager:
         self.assert_idle()
         client = self.get_client()
         loaded = client.loaded_instances()
+        self._restore_exclusive(client, loaded)
         if loaded:
             model = self.get_settings().get('model')
             client.resident_model_info(model)
@@ -262,6 +365,9 @@ class ResourceManager:
             ident = loaded[0].get('id', loaded[0].get('instance_id'))
             result = client.verify_resident_model(model, ident)
             self.instance_id, self.model_key = result['instance_id'], model
+            self.instance_endpoint, self.exclusive_ownership = self._client_endpoint(client), None
+            self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+            self._save_state()
             message = 'The resident CPU vision model stays loaded while H3 renders.'
         else:
             self._forget_instance()
@@ -293,22 +399,74 @@ class ResourceManager:
         return self.prepare_h3_then()
 
     def prepare_h3_then(self, operation=None):
-        """Keep AI excluded until a caller has finished its one queue submission."""
+        """Compatibility entry point for the video worker."""
+        return self.prepare_comfy_then('video', operation)
+
+    def prepare_comfy_then(self, kind, operation=None):
+        """Keep AI excluded through one image or video queue submission.
+
+        The callback must recheck its exact queue and persist its submission
+        intent before POST. The lock is deliberately not held while Comfy
+        renders: subsequent AI/image/video work is excluded by queue checks.
+        """
+        if kind not in ('image', 'video'):
+            raise ValueError('Choose image or video for the ComfyUI hand-off.')
         if not self.lock.acquire(blocking=False):
             raise ResourceError('AI is still working. H3 has not been queued; wait and retry.')
         try:
             prepared = self._prepare_h3_locked()
+            self._release_comfy_family(kind)
+            # Record before the callback: even a lost POST response may have
+            # started this family. Conservatively release it at the next switch.
+            self._set_comfy_kind(kind)
+            self.stage = 'Image model ready' if kind == 'image' else 'H3 ready'
             return operation() if operation is not None else prepared
+        except Exception as exc:
+            self.last_error, self.stage = str(exc), 'needs attention'
+            raise
         finally:
             self.lock.release()
 
+    def _release_comfy_family(self, kind):
+        switch = (self.comfy_kind in ('image', 'video') and self.comfy_kind != kind)
+        if not switch and self.comfy_kind != 'unknown' and not (kind == 'image' and self.comfy_kind is None):
+            return
+        queues = self.assert_idle()
+        online = [item for item in queues if item['online']]
+        if not online:
+            self._set_comfy_kind('empty')
+            return
+        self.stage = 'releasing previous ComfyUI model'
+        for item in online:
+            # Recheck before every server mutation; never release during work.
+            self.assert_idle()
+            response = httpx.post(item['url'] + '/free',
+                                  json={'unload_models': True, 'free_memory': True},
+                                  timeout=8, trust_env=False)
+            response.raise_for_status()
+        # /free is handled asynchronously by Comfy's worker. A successful HTTP
+        # response alone does not establish that the old weights left VRAM.
+        deadline = time.monotonic() + 40
+        time.sleep(1.25)
+        while True:
+            self.assert_idle()
+            memory = gpu_snapshot()
+            if memory and memory['used_mib'] < 4096:
+                self._set_comfy_kind('empty')
+                return
+            if time.monotonic() >= deadline:
+                raise ResourceError('The previous ComfyUI model has not released GPU memory. No new image or video was queued; retry after it is released.')
+            time.sleep(1)
+
     def _prepare_h3_locked(self):
         try:
+            self.assert_idle()
             if self.get_settings().get('ai_memory_mode', 'exclusive') == 'resident_small':
                 return self._prepare_resident_h3()
             self.stage = 'releasing AI memory'
             client = self.get_client()
             loaded = client.loaded_instances()
+            self._restore_exclusive(client, loaded)
             released_cpu_resident = self._adopt_previous_resident(client, loaded)
             memory_before = gpu_snapshot()
             released = False
@@ -317,6 +475,8 @@ class ResourceManager:
                     client.unload_model(self.instance_id)
                     released = True
             remaining = client.loaded_instances()
+            if self.instance_id and not any(m.get('id', m.get('instance_id')) == self.instance_id for m in remaining):
+                self._forget_instance()
             if remaining:
                 raise ResourceError('LM Studio still has a model loaded outside this Studio session. Unload it in LM Studio before running H3.')
             self._forget_instance()

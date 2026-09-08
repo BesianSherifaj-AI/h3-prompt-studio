@@ -95,7 +95,7 @@
   color: #b5c5ba;
 }
 .simple-main {
-  max-width: 1160px;
+  max-width: 1660px;
   padding: 41px 30px 26px;
   margin: 0 auto;
 }
@@ -980,3 +980,9 @@
     animation: none;
   }
 }
+.simple-workspace-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:24px;margin-bottom:24px}
+.simple-editor,.simple-video-column{min-width:0}.simple-video-column{position:sticky;top:18px;max-height:calc(100dvh - 36px);overflow:auto;scrollbar-width:thin;scrollbar-color:#4b6455 transparent;border-radius:20px;overscroll-behavior:contain}.simple-video-column .video-workspace{margin-top:0}
+.simple-editor-tabs{display:flex;gap:5px;padding:5px;margin-bottom:14px;background:#19231d;border:1px solid #34463b;border-radius:12px}.simple-editor-tabs button{flex:1;background:transparent;border:1px solid transparent;color:#a9c0b0;white-space:normal;padding:10px 8px}.simple-editor-tabs button[aria-selected=true]{background:#304737;border-color:#668874;color:#e8f8ee}
+.simple-editor [hidden]{display:none!important}.simple-editor .simple-section{padding:20px;margin-bottom:15px}.simple-editor .simple-options{grid-template-columns:1fr 1fr}.simple-editor .simple-options>.simple-field:last-child{grid-column:1/-1}.simple-editor .simple-section-heading{flex-wrap:wrap}.simple-editor .simple-count{flex-basis:100%;margin-left:43px;padding-top:0}.simple-settings-panel>h2{font-size:20px;margin:0 0 20px}.simple-editor-footer{padding:0 12px 15px}.simple-editor .simple-photo-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:1080px){.simple-workspace-layout{grid-template-columns:1fr;gap:16px}.simple-video-column{position:static;max-height:none;overflow:visible}.simple-main{max-width:850px}.simple-editor .simple-count{flex-basis:auto;margin-left:auto}.simple-editor-tabs{position:sticky;top:0;z-index:2}}
+@media(max-width:600px){.simple-editor .simple-options{grid-template-columns:1fr}.simple-editor .simple-section{padding:16px}.simple-editor .simple-count{flex-basis:100%;margin-left:0}.simple-editor .simple-photo-grid{grid-template-columns:1fr}.simple-workspace-layout{gap:8px}}
