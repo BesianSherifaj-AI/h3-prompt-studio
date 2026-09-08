@@ -1,0 +1,510 @@
+{
+  "title": "The Message",
+  "format_version": 1,
+  "scenes": [
+    {
+      "scene": 1,
+      "title": "The Message · 1 · The handoff",
+      "video_file": "clips/scene-1.mp4",
+      "video_sha256": "7d3c0ae9ac7c80537a9874b5fb5bc41b22ff248f7721ba43780ff66f6beec963",
+      "full_av_decode": true,
+      "streams": [
+        {
+          "type": "video",
+          "codec": "h264",
+          "width": 736,
+          "height": 416,
+          "fps": "24/1",
+          "frames": "243",
+          "sample_rate": null,
+          "channels": null,
+          "duration": "10.125000"
+        },
+        {
+          "type": "audio",
+          "codec": "aac",
+          "width": null,
+          "height": null,
+          "fps": "0/0",
+          "frames": "318",
+          "sample_rate": "32000",
+          "channels": 2,
+          "duration": "10.125000"
+        }
+      ],
+      "authoring_seconds": 10,
+      "actual_seconds": 10.125,
+      "server_execution_seconds": 100.658,
+      "render_settings": {
+        "mode": "ref2va",
+        "resolution": "0.3",
+        "width": 736,
+        "height": 416,
+        "frames": 243,
+        "fps": 24,
+        "steps": 8,
+        "seed": 908202601,
+        "attention": "H3 SLA · Kitchen · 85% sparsity",
+        "text_encoder": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+        "loras": [
+          {
+            "name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+            "strength": 1.0,
+            "compatibility": "tested",
+            "compatible_modes": [
+              "ref2va"
+            ]
+          }
+        ],
+        "prompt_sha256": "bf0cefddba5eb5e6a097827b549765f7b6d4fe99010dce7b85b5eeec368397e1",
+        "image_bytes_verified": true
+      },
+      "conditioned_reference_tags": [
+        "arin-face",
+        "elira-face",
+        "arin-outfit",
+        "elira-outfit",
+        "note",
+        "key",
+        "lighter",
+        "cafe"
+      ],
+      "inspiration_tags": [
+        "alley",
+        "rooftop"
+      ],
+      "shot_count": 4,
+      "visual_review": {
+        "basis": "16 sampled frames; full video and audio decode. Independent speech review is recorded separately below.",
+        "observed": [
+          "Stable adult character identities and black/burgundy outfits.",
+          "Cafe setting, opposing closeups, hand insert, note handoff, reading and final look.",
+          "No visible split screen, captions or subtitles."
+        ],
+        "limitations": [
+          "The note is already partly unfolded before the final unfold beat.",
+          "Reaching for the handoff starts before the dedicated insert shot."
+        ]
+      },
+      "speech_review": {
+        "recognizer": "faster-whisper small",
+        "device": "cpu",
+        "compute_type": "int8",
+        "cpu_threads": 4,
+        "local_files_only": true,
+        "initial_prompt": null,
+        "hotwords": null,
+        "language": "en",
+        "transcript": "I found something you need to see. Then stop hiding it.",
+        "expected_dialogue": [
+          {
+            "shot": 1,
+            "speaker": "Arin",
+            "text": "I found something you need to see.",
+            "normalized_phrase_present_in_transcript": true
+          },
+          {
+            "shot": 2,
+            "speaker": "Elira",
+            "text": "Then stop hiding it.",
+            "normalized_phrase_present_in_transcript": true
+          }
+        ],
+        "comparison": {
+          "word_edit_distance": 0,
+          "expected_word_count": 11,
+          "transcribed_word_count": 11,
+          "word_error_rate": 0.0,
+          "normalized_words_match": true,
+          "changes": []
+        },
+        "interpretation": "ASR is a rough independent transcription, not a guarantee of audible wording, speaker assignment, voice quality, lip sync, or sound-effect quality. Mismatches can be synthesis errors or recognition errors; listen to the source to decide."
+      },
+      "portable_project": {
+        "filename": "The-Message-Scene-1.zip",
+        "download_url": "https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.0.0/The-Message-Scene-1.zip",
+        "sha256": "054d7b4ab6c29efb6e14cd639fd92721de36a33d345aa60b1870ed7a5b49fdf3",
+        "bytes": 21050285,
+        "zip_entries": 31,
+        "stored_images": 10,
+        "private_path_and_secret_scan": "passed"
+      }
+    },
+    {
+      "scene": 2,
+      "title": "The Message · 2 · The rooftop door",
+      "video_file": "clips/scene-2.mp4",
+      "video_sha256": "c9575ae48f9585e25195285468a3ab9ad144fa94e0eedfca8f83c4e5d7e0905b",
+      "full_av_decode": true,
+      "streams": [
+        {
+          "type": "video",
+          "codec": "h264",
+          "width": 736,
+          "height": 416,
+          "fps": "24/1",
+          "frames": "243",
+          "sample_rate": null,
+          "channels": null,
+          "duration": "10.125000"
+        },
+        {
+          "type": "audio",
+          "codec": "aac",
+          "width": null,
+          "height": null,
+          "fps": "0/0",
+          "frames": "318",
+          "sample_rate": "32000",
+          "channels": 2,
+          "duration": "10.125000"
+        }
+      ],
+      "authoring_seconds": 10,
+      "actual_seconds": 10.125,
+      "server_execution_seconds": 90.061,
+      "render_settings": {
+        "mode": "ref2va",
+        "resolution": "0.3",
+        "width": 736,
+        "height": 416,
+        "frames": 243,
+        "fps": 24,
+        "steps": 8,
+        "seed": 908202602,
+        "attention": "H3 SLA · Kitchen · 85% sparsity",
+        "text_encoder": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+        "loras": [
+          {
+            "name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+            "strength": 1.0,
+            "compatibility": "tested",
+            "compatible_modes": [
+              "ref2va"
+            ]
+          }
+        ],
+        "prompt_sha256": "0ee2e0e7fa1e391c6dd9e40b3a2bba08fd2d7e159ea54d2f8c1c9295cbeb43e3",
+        "image_bytes_verified": true
+      },
+      "conditioned_reference_tags": [
+        "arin-face",
+        "elira-face",
+        "arin-outfit",
+        "elira-outfit",
+        "note",
+        "key",
+        "lighter",
+        "alley"
+      ],
+      "inspiration_tags": [
+        "cafe",
+        "rooftop"
+      ],
+      "shot_count": 5,
+      "visual_review": {
+        "basis": "16 sampled frames; full video and audio decode. Independent speech review is recorded separately below.",
+        "observed": [
+          "Stable identities and outfits in the wet neon alley.",
+          "Key handoff, Elira holding the note and key, opposing dialogue closeups and open-door ending."
+        ],
+        "limitations": [
+          "Exact key insertion, turning and withdrawal are compressed and not unambiguously visible in sampled frames."
+        ]
+      },
+      "speech_review": {
+        "recognizer": "faster-whisper small",
+        "device": "cpu",
+        "compute_type": "int8",
+        "cpu_threads": 4,
+        "local_files_only": true,
+        "initial_prompt": null,
+        "hotwords": null,
+        "language": "en",
+        "transcript": "This key came with the message. It opens the rooftop door.",
+        "expected_dialogue": [
+          {
+            "shot": 3,
+            "speaker": "Elira",
+            "text": "This key came with the message?",
+            "normalized_phrase_present_in_transcript": true
+          },
+          {
+            "shot": 4,
+            "speaker": "Arin",
+            "text": "It opens the rooftop door.",
+            "normalized_phrase_present_in_transcript": true
+          }
+        ],
+        "comparison": {
+          "word_edit_distance": 0,
+          "expected_word_count": 11,
+          "transcribed_word_count": 11,
+          "word_error_rate": 0.0,
+          "normalized_words_match": true,
+          "changes": []
+        },
+        "interpretation": "ASR is a rough independent transcription, not a guarantee of audible wording, speaker assignment, voice quality, lip sync, or sound-effect quality. Mismatches can be synthesis errors or recognition errors; listen to the source to decide."
+      },
+      "portable_project": {
+        "filename": "The-Message-Scene-2.zip",
+        "download_url": "https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.0.0/The-Message-Scene-2.zip",
+        "sha256": "80b4b9050da20f52fc0d5b6264849a2cd669ec8b54260b9928a1dbf3c488015b",
+        "bytes": 21050394,
+        "zip_entries": 31,
+        "stored_images": 10,
+        "private_path_and_secret_scan": "passed"
+      }
+    },
+    {
+      "scene": 3,
+      "title": "The Message · 3 · The hidden writing",
+      "video_file": "clips/scene-3.mp4",
+      "video_sha256": "e661f5e90c7a8db77eb484b3a33ffaacaa799e6b9d74c378748b28a7cf757a37",
+      "full_av_decode": true,
+      "streams": [
+        {
+          "type": "video",
+          "codec": "h264",
+          "width": 736,
+          "height": 416,
+          "fps": "24/1",
+          "frames": "243",
+          "sample_rate": null,
+          "channels": null,
+          "duration": "10.125000"
+        },
+        {
+          "type": "audio",
+          "codec": "aac",
+          "width": null,
+          "height": null,
+          "fps": "0/0",
+          "frames": "318",
+          "sample_rate": "32000",
+          "channels": 2,
+          "duration": "10.125000"
+        }
+      ],
+      "authoring_seconds": 10,
+      "actual_seconds": 10.125,
+      "server_execution_seconds": 88.228,
+      "render_settings": {
+        "mode": "ref2va",
+        "resolution": "0.3",
+        "width": 736,
+        "height": 416,
+        "frames": 243,
+        "fps": 24,
+        "steps": 8,
+        "seed": 908202603,
+        "attention": "H3 SLA · Kitchen · 85% sparsity",
+        "text_encoder": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+        "loras": [
+          {
+            "name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+            "strength": 1.0,
+            "compatibility": "tested",
+            "compatible_modes": [
+              "ref2va"
+            ]
+          }
+        ],
+        "prompt_sha256": "8c8881dfe4436508e668d42d22b64fba363e6ee4c5a993b11839e96c36944e60",
+        "image_bytes_verified": true
+      },
+      "conditioned_reference_tags": [
+        "arin-face",
+        "elira-face",
+        "arin-outfit",
+        "elira-outfit",
+        "note",
+        "key",
+        "lighter",
+        "rooftop"
+      ],
+      "inspiration_tags": [
+        "cafe",
+        "alley"
+      ],
+      "shot_count": 5,
+      "visual_review": {
+        "basis": "16 sampled frames; full video and audio decode. Independent speech review is recorded separately below.",
+        "observed": [
+          "Stable identities and outfits on the rooftop.",
+          "Lighter extraction and ignition, note and key, dialogue closeups and a final two-shot.",
+          "Paper remains intact."
+        ],
+        "limitations": [
+          "Elira appears to hold the note in her right hand and key in her left, opposite to the specified assignments.",
+          "Visible air gap between flame and paper is not consistently guaranteed."
+        ]
+      },
+      "speech_review": {
+        "recognizer": "faster-whisper small",
+        "device": "cpu",
+        "compute_type": "int8",
+        "cpu_threads": 4,
+        "local_files_only": true,
+        "initial_prompt": null,
+        "hotwords": null,
+        "language": "en",
+        "transcript": "Use the flame there's writing in the margin I see it we do this together",
+        "expected_dialogue": [
+          {
+            "shot": 3,
+            "speaker": "Arin",
+            "text": "Use the flame. There’s writing in the margin.",
+            "normalized_phrase_present_in_transcript": true
+          },
+          {
+            "shot": 4,
+            "speaker": "Elira",
+            "text": "I see it. We do this together.",
+            "normalized_phrase_present_in_transcript": true
+          }
+        ],
+        "comparison": {
+          "word_edit_distance": 0,
+          "expected_word_count": 15,
+          "transcribed_word_count": 15,
+          "word_error_rate": 0.0,
+          "normalized_words_match": true,
+          "changes": []
+        },
+        "interpretation": "ASR is a rough independent transcription, not a guarantee of audible wording, speaker assignment, voice quality, lip sync, or sound-effect quality. Mismatches can be synthesis errors or recognition errors; listen to the source to decide."
+      },
+      "portable_project": {
+        "filename": "The-Message-Scene-3.zip",
+        "download_url": "https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.0.0/The-Message-Scene-3.zip",
+        "sha256": "2ca010accc4b446105325024e72b29eaabbd60944c56dcf471a6d36fc10d655b",
+        "bytes": 21050575,
+        "zip_entries": 31,
+        "stored_images": 10,
+        "private_path_and_secret_scan": "passed"
+      }
+    }
+  ],
+  "shared_references": [
+    {
+      "file": "references/arin-face.png",
+      "name": "Arin facial identity",
+      "role": "face",
+      "dimensions": [
+        1122,
+        1402
+      ],
+      "sha256": "d46ab582964c4a3dece57ff267e9a2c9a6f89286548ac791ac5a8f2c7426c656"
+    },
+    {
+      "file": "references/elira-face.png",
+      "name": "Elira facial identity",
+      "role": "face",
+      "dimensions": [
+        1122,
+        1402
+      ],
+      "sha256": "6839d904b64911f8138d44ce975db05edd8ae8748386a7a4b2f105b824b23f01"
+    },
+    {
+      "file": "references/arin-outfit.png",
+      "name": "Arin outfit A",
+      "role": "wardrobe",
+      "dimensions": [
+        1122,
+        1402
+      ],
+      "sha256": "5d928ca2cd182a964035254610b9ce173e48cb144d69a9602ca1af8ebafa82e0"
+    },
+    {
+      "file": "references/elira-outfit.png",
+      "name": "Elira outfit A",
+      "role": "wardrobe",
+      "dimensions": [
+        1122,
+        1402
+      ],
+      "sha256": "b9d4e4f7ecbe7fe6d273f58f212245571989d91b3d48a00878d04829d756f46b"
+    },
+    {
+      "file": "references/note.png",
+      "name": "The handwritten message",
+      "role": "object",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "sha256": "3804aaeba4b4605479bb9a7db39b31752c9777e1a34cb2075d687e6aa14c460a"
+    },
+    {
+      "file": "references/key.png",
+      "name": "The brass rooftop key",
+      "role": "object",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "sha256": "c8046057ea98944b0fb5a98929f4bdd0b61275bbdff7a04bc5c2b41118e9f753"
+    },
+    {
+      "file": "references/lighter.png",
+      "name": "The silver flip lighter",
+      "role": "object",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "sha256": "f9bc49e5ead21ed518fd32a9e109dc23e1529bcf4892838c2a228211d4338a0c"
+    },
+    {
+      "file": "references/cafe.png",
+      "name": "Cafe at dusk",
+      "role": "background",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "sha256": "0617d436c6da8093e891594e1c0c9998f901285694b110a96b04fadfca781ee4"
+    },
+    {
+      "file": "references/alley.png",
+      "name": "Rainy neon alley",
+      "role": "background",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "sha256": "b2c81016da69460ca2ca039c8ad5a6efa9046092b0e43edeb58cd055366adb9b"
+    },
+    {
+      "file": "references/rooftop.png",
+      "name": "Sheltered rooftop at night",
+      "role": "background",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "sha256": "9a830ca5268f9d81629cf7a8635f6ad66ce76167271d938cb27fb41a1e9f7de3"
+    }
+  ],
+  "render_relationship": "Three separately authored Ref2VA clips, not a latent continuation chain.",
+  "extra_feature_verification": "verification/interactive-story.json",
+  "extra_clips": [
+    {
+      "file": "clips/story-game.mp4",
+      "sha256": "63653325e8594de3193d8709d78e755aad447bcd509855b13a69b70c19d178e4",
+      "source_sha256": "94d44bb2875f1b41daaa9de05003a1a6af075daa351733f00db5490b06b595e5",
+      "frames": 124,
+      "fps": 24,
+      "metadata_removed": true
+    },
+    {
+      "file": "clips/cafe-story-combined.mp4",
+      "sha256": "378e01102c6927016e19ccf3a015e845f3102f2b80bfeb1db93cd6e45d7704bc",
+      "source_sha256": "09444697ae61bbaeab0e6c3fa980cb284eba5762c4aa4e7b1942e97083f8ead6",
+      "frames": 328,
+      "fps": 24,
+      "metadata_removed": true
+    }
+  ]
+}

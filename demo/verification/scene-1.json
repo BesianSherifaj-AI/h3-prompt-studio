@@ -1,0 +1,128 @@
+{
+  "scene": 1,
+  "title": "The Message · 1 · The handoff",
+  "video_file": "clips/scene-1.mp4",
+  "video_sha256": "7d3c0ae9ac7c80537a9874b5fb5bc41b22ff248f7721ba43780ff66f6beec963",
+  "full_av_decode": true,
+  "streams": [
+    {
+      "type": "video",
+      "codec": "h264",
+      "width": 736,
+      "height": 416,
+      "fps": "24/1",
+      "frames": "243",
+      "sample_rate": null,
+      "channels": null,
+      "duration": "10.125000"
+    },
+    {
+      "type": "audio",
+      "codec": "aac",
+      "width": null,
+      "height": null,
+      "fps": "0/0",
+      "frames": "318",
+      "sample_rate": "32000",
+      "channels": 2,
+      "duration": "10.125000"
+    }
+  ],
+  "authoring_seconds": 10,
+  "actual_seconds": 10.125,
+  "server_execution_seconds": 100.658,
+  "render_settings": {
+    "mode": "ref2va",
+    "resolution": "0.3",
+    "width": 736,
+    "height": 416,
+    "frames": 243,
+    "fps": 24,
+    "steps": 8,
+    "seed": 908202601,
+    "attention": "H3 SLA · Kitchen · 85% sparsity",
+    "text_encoder": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+    "loras": [
+      {
+        "name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+        "strength": 1.0,
+        "compatibility": "tested",
+        "compatible_modes": [
+          "ref2va"
+        ]
+      }
+    ],
+    "prompt_sha256": "bf0cefddba5eb5e6a097827b549765f7b6d4fe99010dce7b85b5eeec368397e1",
+    "image_bytes_verified": true
+  },
+  "conditioned_reference_tags": [
+    "arin-face",
+    "elira-face",
+    "arin-outfit",
+    "elira-outfit",
+    "note",
+    "key",
+    "lighter",
+    "cafe"
+  ],
+  "inspiration_tags": [
+    "alley",
+    "rooftop"
+  ],
+  "shot_count": 4,
+  "visual_review": {
+    "basis": "16 sampled frames; full video and audio decode. Independent speech review is recorded separately below.",
+    "observed": [
+      "Stable adult character identities and black/burgundy outfits.",
+      "Cafe setting, opposing closeups, hand insert, note handoff, reading and final look.",
+      "No visible split screen, captions or subtitles."
+    ],
+    "limitations": [
+      "The note is already partly unfolded before the final unfold beat.",
+      "Reaching for the handoff starts before the dedicated insert shot."
+    ]
+  },
+  "speech_review": {
+    "recognizer": "faster-whisper small",
+    "device": "cpu",
+    "compute_type": "int8",
+    "cpu_threads": 4,
+    "local_files_only": true,
+    "initial_prompt": null,
+    "hotwords": null,
+    "language": "en",
+    "transcript": "I found something you need to see. Then stop hiding it.",
+    "expected_dialogue": [
+      {
+        "shot": 1,
+        "speaker": "Arin",
+        "text": "I found something you need to see.",
+        "normalized_phrase_present_in_transcript": true
+      },
+      {
+        "shot": 2,
+        "speaker": "Elira",
+        "text": "Then stop hiding it.",
+        "normalized_phrase_present_in_transcript": true
+      }
+    ],
+    "comparison": {
+      "word_edit_distance": 0,
+      "expected_word_count": 11,
+      "transcribed_word_count": 11,
+      "word_error_rate": 0.0,
+      "normalized_words_match": true,
+      "changes": []
+    },
+    "interpretation": "ASR is a rough independent transcription, not a guarantee of audible wording, speaker assignment, voice quality, lip sync, or sound-effect quality. Mismatches can be synthesis errors or recognition errors; listen to the source to decide."
+  },
+  "portable_project": {
+    "filename": "The-Message-Scene-1.zip",
+    "download_url": "https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.0.0/The-Message-Scene-1.zip",
+    "sha256": "054d7b4ab6c29efb6e14cd639fd92721de36a33d345aa60b1870ed7a5b49fdf3",
+    "bytes": 21050285,
+    "zip_entries": 31,
+    "stored_images": 10,
+    "private_path_and_secret_scan": "passed"
+  }
+}

@@ -1,0 +1,84 @@
+1
+00:00:00,000 --> 00:00:04,000
+H3 Prompt Studio
+Local vision prompting + ComfyUI video in one workspace.
+
+2
+00:00:04,000 --> 00:00:11,000
+Give every reference a role
+Two identities. Two assigned outfits. Your characters stay named.
+
+3
+00:00:11,000 --> 00:00:14,000
+Name the objects and places
+A note, a key, a lighter — with clear starting ownership.
+
+4
+00:00:14,000 --> 00:00:17,000
+Direct the shot in plain language
+Set the timing and camera. Add the exact words to speak.
+
+5
+00:00:17,000 --> 00:00:20,000
+Cut to another point of view
+Each scene has its own camera, action and speaker.
+
+6
+00:00:20,000 --> 00:00:24,000
+Choose your local prompt assistant
+Vision prompting with automatic model unloading.
+
+7
+00:00:24,000 --> 00:00:29,000
+Review the plan before it moves
+Your scenes, dialogue and connected references stay visible.
+
+8
+00:00:29,000 --> 00:00:32,000
+Generate and watch in Studio
+A finished take, its actual settings and a downloadable video.
+
+9
+00:00:32,000 --> 00:00:42,000
+The Message · 01 / Café
+Actual 0.3 MP / 8-step output · independently directed scene.
+
+10
+00:00:42,000 --> 00:00:52,000
+The Message · 02 / Alley
+Actual 0.3 MP / 8-step output · independently directed scene.
+
+11
+00:00:52,000 --> 00:01:02,000
+The Message · 03 / Rooftop
+Actual 0.3 MP / 8-step output · independently directed scene.
+
+12
+00:01:02,000 --> 00:01:07,000
+Keep the take you love
+Try another seed. Compare. Name your take. Save a favorite.
+
+13
+00:01:07,000 --> 00:01:11,000
+What happens after this ending?
+Three ideas from the actual ending and saved story.
+
+14
+00:01:11,000 --> 00:01:14,000
+Choose an idea or write your own
+Edit the next action. Pick the length and quality. Generate.
+
+15
+00:01:14,000 --> 00:01:19,000
+Story game / The key reveal
+Actual continuation preview, including saved motion context.
+
+16
+00:01:19,000 --> 00:01:22,000
+Watch the branch together
+Combine the compatible story clips and keep watching in Studio.
+
+17
+00:01:22,000 --> 00:01:28,000
+H3 Prompt Studio
+AI-generated examples · real app features · locally tested.

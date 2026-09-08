@@ -1,0 +1,32 @@
+{
+  "method": "Isolated public-backend TestClient import; temporary data; model/network/GPU operations disabled.",
+  "results": [
+    {
+      "scene": 1,
+      "import_status": 200,
+      "images": 10,
+      "photo_roles_and_tags_preserved": true,
+      "exact_dialogue_and_shots_preserved": true,
+      "compiled_prompt_identical": true,
+      "stored_image_hashes_match": true
+    },
+    {
+      "scene": 2,
+      "import_status": 200,
+      "images": 10,
+      "photo_roles_and_tags_preserved": true,
+      "exact_dialogue_and_shots_preserved": true,
+      "compiled_prompt_identical": true,
+      "stored_image_hashes_match": true
+    },
+    {
+      "scene": 3,
+      "import_status": 200,
+      "images": 10,
+      "photo_roles_and_tags_preserved": true,
+      "exact_dialogue_and_shots_preserved": true,
+      "compiled_prompt_identical": true,
+      "stored_image_hashes_match": true
+    }
+  ]
+}

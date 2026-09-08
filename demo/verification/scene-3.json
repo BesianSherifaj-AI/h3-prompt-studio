@@ -1,0 +1,128 @@
+{
+  "scene": 3,
+  "title": "The Message · 3 · The hidden writing",
+  "video_file": "clips/scene-3.mp4",
+  "video_sha256": "e661f5e90c7a8db77eb484b3a33ffaacaa799e6b9d74c378748b28a7cf757a37",
+  "full_av_decode": true,
+  "streams": [
+    {
+      "type": "video",
+      "codec": "h264",
+      "width": 736,
+      "height": 416,
+      "fps": "24/1",
+      "frames": "243",
+      "sample_rate": null,
+      "channels": null,
+      "duration": "10.125000"
+    },
+    {
+      "type": "audio",
+      "codec": "aac",
+      "width": null,
+      "height": null,
+      "fps": "0/0",
+      "frames": "318",
+      "sample_rate": "32000",
+      "channels": 2,
+      "duration": "10.125000"
+    }
+  ],
+  "authoring_seconds": 10,
+  "actual_seconds": 10.125,
+  "server_execution_seconds": 88.228,
+  "render_settings": {
+    "mode": "ref2va",
+    "resolution": "0.3",
+    "width": 736,
+    "height": 416,
+    "frames": 243,
+    "fps": 24,
+    "steps": 8,
+    "seed": 908202603,
+    "attention": "H3 SLA · Kitchen · 85% sparsity",
+    "text_encoder": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+    "loras": [
+      {
+        "name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+        "strength": 1.0,
+        "compatibility": "tested",
+        "compatible_modes": [
+          "ref2va"
+        ]
+      }
+    ],
+    "prompt_sha256": "8c8881dfe4436508e668d42d22b64fba363e6ee4c5a993b11839e96c36944e60",
+    "image_bytes_verified": true
+  },
+  "conditioned_reference_tags": [
+    "arin-face",
+    "elira-face",
+    "arin-outfit",
+    "elira-outfit",
+    "note",
+    "key",
+    "lighter",
+    "rooftop"
+  ],
+  "inspiration_tags": [
+    "cafe",
+    "alley"
+  ],
+  "shot_count": 5,
+  "visual_review": {
+    "basis": "16 sampled frames; full video and audio decode. Independent speech review is recorded separately below.",
+    "observed": [
+      "Stable identities and outfits on the rooftop.",
+      "Lighter extraction and ignition, note and key, dialogue closeups and a final two-shot.",
+      "Paper remains intact."
+    ],
+    "limitations": [
+      "Elira appears to hold the note in her right hand and key in her left, opposite to the specified assignments.",
+      "Visible air gap between flame and paper is not consistently guaranteed."
+    ]
+  },
+  "speech_review": {
+    "recognizer": "faster-whisper small",
+    "device": "cpu",
+    "compute_type": "int8",
+    "cpu_threads": 4,
+    "local_files_only": true,
+    "initial_prompt": null,
+    "hotwords": null,
+    "language": "en",
+    "transcript": "Use the flame there's writing in the margin I see it we do this together",
+    "expected_dialogue": [
+      {
+        "shot": 3,
+        "speaker": "Arin",
+        "text": "Use the flame. There’s writing in the margin.",
+        "normalized_phrase_present_in_transcript": true
+      },
+      {
+        "shot": 4,
+        "speaker": "Elira",
+        "text": "I see it. We do this together.",
+        "normalized_phrase_present_in_transcript": true
+      }
+    ],
+    "comparison": {
+      "word_edit_distance": 0,
+      "expected_word_count": 15,
+      "transcribed_word_count": 15,
+      "word_error_rate": 0.0,
+      "normalized_words_match": true,
+      "changes": []
+    },
+    "interpretation": "ASR is a rough independent transcription, not a guarantee of audible wording, speaker assignment, voice quality, lip sync, or sound-effect quality. Mismatches can be synthesis errors or recognition errors; listen to the source to decide."
+  },
+  "portable_project": {
+    "filename": "The-Message-Scene-3.zip",
+    "download_url": "https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.0.0/The-Message-Scene-3.zip",
+    "sha256": "2ca010accc4b446105325024e72b29eaabbd60944c56dcf471a6d36fc10d655b",
+    "bytes": 21050575,
+    "zip_entries": 31,
+    "stored_images": 10,
+    "private_path_and_secret_scan": "passed"
+  }
+}

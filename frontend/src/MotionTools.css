@@ -1,0 +1,59 @@
+.h3-motion-tools { color: #e8e8f0; font-size: 13px; min-width: 0; }
+.h3-motion-tools * { box-sizing: border-box; }
+.h3-motion-tools button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid #454456; border-radius: 8px; background: #272734; color: #eeeef5; padding: 9px 12px; font: inherit; cursor: pointer; line-height: 1.25; }
+.h3-motion-tools button:hover:not(:disabled) { background: #363647; border-color: #777289; }
+.h3-motion-tools button:disabled { cursor: default; opacity: .42; }
+.h3-motion-tools button:focus-visible, .h3-motion-tools a:focus-visible, .h3-motion-tools input:focus-visible, .h3-motion-tools select:focus-visible, .h3-motion-tools textarea:focus-visible { outline: 2px solid #b7a4ff; outline-offset: 3px; }
+.h3-motion-tools button[aria-pressed="true"], .h3-motion-tools .h3-tool-primary { background: #7151c8; border-color: #9675e8; color: #fff; }
+.h3-motion-tools button[aria-pressed="true"]:hover, .h3-motion-tools .h3-tool-primary:hover:not(:disabled) { background: #8160d8; }
+.h3-motion-tools label { font-size: 12px; color: #c6c5d5; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.h3-motion-tools input:not([type="range"]):not([type="color"]), .h3-motion-tools select, .h3-motion-tools textarea { min-width: 0; width: 100%; border: 1px solid #454456; border-radius: 7px; background: #1e1e2a; color: #f0f0f5; font: inherit; padding: 8px 10px; }
+.h3-motion-tools textarea { line-height: 1.55; resize: vertical; }
+.h3-motion-tools input[type="range"] { accent-color: #a788ed; width: 86px; }
+.h3-motion-tools input[type="color"] { width: 32px; height: 30px; padding: 1px; border: 1px solid #656274; border-radius: 5px; background: transparent; cursor: pointer; }
+.h3-motion-tools .h3-tools-tabs { display: flex; gap: 8px; border-bottom: 1px solid #393846; padding-bottom: 14px; margin-bottom: 20px; flex-wrap: wrap; }
+.h3-motion-tools .h3-tool-section { min-width: 0; }
+.h3-motion-tools .h3-tool-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.h3-motion-tools h3 { margin: 0 0 5px; font-size: 19px; font-weight: 650; color: #f5f3fb; }
+.h3-motion-tools p { margin: 0; line-height: 1.6; color: #b8b6c8; }
+.h3-motion-tools .h3-tool-badge { flex-shrink: 0; font-size: 11px; border: 1px solid #4b425e; background: #2e283d; border-radius: 99px; padding: 5px 9px; color: #cbbce9; }
+.h3-motion-tools .h3-sketch-toolbar, .h3-motion-tools .h3-plan-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+.h3-motion-tools .h3-tool-segment { display: flex; flex-wrap: wrap; gap: 4px; }
+.h3-motion-tools .h3-inline-control { flex-direction: row; align-items: center; gap: 7px; }
+.h3-motion-tools .h3-inline-control span { width: 16px; }
+.h3-motion-tools .h3-sketch-canvas, .h3-motion-tools .h3-movement-svg { display: block; width: 100%; height: auto; aspect-ratio: 736 / 416; border-radius: 10px; border: 1px solid #696576; background: #fff; touch-action: none; user-select: none; }
+.h3-motion-tools .h3-sketch-canvas { cursor: crosshair; }
+.h3-motion-tools .h3-movement-svg g[role="button"] { cursor: grab; }
+.h3-motion-tools .h3-movement-svg g[role="button"]:active { cursor: grabbing; }
+.h3-motion-tools .h3-movement-svg g[role="button"]:focus-visible { outline: none; filter: drop-shadow(0 0 3px #9178da); }
+.h3-motion-tools .h3-tool-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; margin-top: 13px; }
+.h3-motion-tools .h3-tool-actions > span { margin-right: auto; flex: 1 1 190px; color: #aaa7bd; font-size: 11px; line-height: 1.5; }
+.h3-motion-tools .h3-movement-controls { display: grid; grid-template-columns: 1.4fr .7fr 1fr 1fr 1.25fr; gap: 10px; margin: 14px 0; }
+.h3-motion-tools .h3-position-controls { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto auto; align-items: end; gap: 10px; margin: 14px 0; }
+.h3-motion-tools .h3-plan-toolbar > span { margin-left: auto; display: flex; align-items: center; gap: 5px; color: #b8b6c8; font-size: 11px; }
+.h3-motion-tools .h3-plan-toolbar i { width: 8px; height: 8px; border-radius: 99px; display: inline-block; margin-left: 6px; }
+.h3-motion-tools .h3-legend-subject { background: #ab88f1; }
+.h3-motion-tools .h3-legend-camera { background: #63b6ea; }
+.h3-motion-tools .h3-tool-note { font-size: 12px; background: #282735; border-left: 2px solid #736484; border-radius: 0 6px 6px 0; padding: 10px 12px; margin: 15px 0; }
+.h3-motion-tools .h3-instructions-label { margin-top: 16px; }
+.h3-motion-tools .h3-resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.h3-motion-tools .h3-resource-grid article { padding: 18px; background: #282734; border: 1px solid #41404e; border-radius: 12px; }
+.h3-motion-tools .h3-resource-meta { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #b5a7d2; margin-bottom: 12px; }
+.h3-motion-tools .h3-resource-title { display: inline-flex; gap: 8px; align-items: center; color: #f2eaff; font-size: 18px; font-weight: 650; text-decoration: none; }
+.h3-motion-tools .h3-resource-grid p { margin: 9px 0; color: #d0cddb; }
+.h3-motion-tools .h3-resource-grid small { display: block; color: #aaa6bb; font-size: 11px; line-height: 1.55; }
+.h3-motion-tools .h3-resource-license { color: #c9b3f5; font-size: 11px; display: inline-flex; align-items: center; gap: 5px; margin-top: 13px; }
+.h3-motion-tools .h3-tools-status { min-height: 24px; padding-top: 12px; color: #cabbea; }
+@media (max-width: 800px) {
+  .h3-motion-tools .h3-movement-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .h3-motion-tools .h3-position-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .h3-motion-tools .h3-tool-heading { flex-direction: column; gap: 8px; }
+  .h3-motion-tools .h3-plan-toolbar > span { margin-left: 0; }
+}
+@media (max-width: 520px) {
+  .h3-motion-tools .h3-resource-grid { grid-template-columns: 1fr; }
+  .h3-motion-tools .h3-position-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .h3-motion-tools .h3-tool-actions { justify-content: flex-start; }
+  .h3-motion-tools .h3-tool-actions > span { flex-basis: 100%; }
+  .h3-motion-tools .h3-plan-toolbar > span { flex-wrap: wrap; }
+}

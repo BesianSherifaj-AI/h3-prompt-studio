@@ -1,0 +1,145 @@
+{
+  "title": "The Message: tested reroll and interactive story branch",
+  "evidence_scope": "Recorded render/lineage/hash verification plus observed live GUI behavior and a reviewed restored-draft screenshot. UI restoration is an observed test, not an automated assertion.",
+  "reroll": {
+    "source": "Cafe Take 1",
+    "result": "Cafe Take 2",
+    "server_execution_seconds": 87.263,
+    "same_prompt": true,
+    "different_seed": true,
+    "different_decoded_video_pixels": true,
+    "takes": [
+      {
+        "seed": 908202601,
+        "prompt_sha256": "bf0cefddba5eb5e6a097827b549765f7b6d4fe99010dce7b85b5eeec368397e1",
+        "decoded_video_sha256": "8450fd29ced1098cadbd731dd6660cb00a5dca9dac8c5f67d69a1b0e41916099"
+      },
+      {
+        "seed": 908202602,
+        "prompt_sha256": "bf0cefddba5eb5e6a097827b549765f7b6d4fe99010dce7b85b5eeec368397e1",
+        "decoded_video_sha256": "c09ff443a61385311fc11d63d3748a838eef22a59edcb171cef39df3e096a43d"
+      }
+    ],
+    "visual_limitations": [
+      "Note unfolds and refolds approximately; exact origami and hand timing remain model-dependent."
+    ]
+  },
+  "story_choices": {
+    "model": "qwen3.8-27b@q4_k_s",
+    "memory_mode": "exclusive",
+    "gpu_unload_load_observed": true,
+    "input_basis": "Cafe Take 2 actual ending image and saved story context",
+    "choices": [
+      {
+        "title": "Elira Folds the Note",
+        "idea": "Elira uses her right hand to fold the note back into a compact rectangle. She tucks the folded paper into the front pocket of her burgundy jacket."
+      },
+      {
+        "title": "Arin Slides Out the Key",
+        "idea": "Arin reaches his right hand down toward his trouser pocket and slides out the small metal key. He holds it up between his thumb and forefinger for Elira to see."
+      },
+      {
+        "title": "Elira Tucks Note Away",
+        "idea": "Elira tucks the unfolded note into her back pocket without folding it. She shifts her gaze from Arin down toward the table surface."
+      }
+    ],
+    "selected_choice": 2,
+    "exact_selected_text_preserved_in_rendered_project": true,
+    "restored_draft": {
+      "test_type": "Observed live GUI test after reload/new frontend build",
+      "visible_status": "Saved scene draft restored. Refresh ideas for new choices.",
+      "same_three_choices_observed": true,
+      "selected_choice": 2,
+      "clip_length_seconds": 5,
+      "quality": "0.3 MP / 8 steps",
+      "reviewed_capture_sha256": "b49acfb69dacbbcbf4f29fe8b7650eeed421bc03c73b4c643243d142bd898dbe",
+      "choice_text_source": "Read from the reviewed actual GUI capture; selected text also matches the rendered project."
+    }
+  },
+  "game_render": {
+    "file": "clips/story-game.mp4",
+    "sha256": "63653325e8594de3193d8709d78e755aad447bcd509855b13a69b70c19d178e4",
+    "source_sha256": "94d44bb2875f1b41daaa9de05003a1a6af075daa351733f00db5490b06b595e5",
+    "full_av_decode": true,
+    "metadata_processing": "Global and stream metadata removed with FFmpeg stream copy; original source untouched. No video/audio re-encoding.",
+    "decoded_video_and_audio_identical_to_original": true,
+    "decoded_video_yuv420_sha256": "4d0087f1083053a444546c0c3151450e106be40def988b6414c75260e5f99d46",
+    "decoded_audio_pcm_s16le_sha256": "e69a93a0ecae96c8c607a82582f8bc10ffd4e6c944f33fc875f01dbc92c208f3",
+    "private_metadata_scan": "passed",
+    "width": 736,
+    "height": 416,
+    "fps": 24,
+    "frames": 124,
+    "actual_video_seconds": 5.166666666666667,
+    "mp4_duration_seconds": 5.167,
+    "server_execution_seconds": 77.741,
+    "steps": 8,
+    "source": "Cafe Take 2",
+    "source_exactly_matches_selected_take": true,
+    "copied_context_frames": 39,
+    "new_frames": 85,
+    "new_seconds": 3.5416666666666665,
+    "selected_action": "Arin reaches his right hand down toward his trouser pocket and slides out the small metal key. He holds it up between his thumb and forefinger for Elira to see.",
+    "visual_review": {
+      "basis": "16 sampled frames and complete audio/video decode.",
+      "observed": [
+        "The opening copied context matches the cafe ending with Elira and the note.",
+        "Arin reaches his right trouser pocket and reveals a small metal key.",
+        "Faces, clothes and cafe appearance remain consistent."
+      ],
+      "limitations": [
+        "The final shot places the key in Elira’s hand without showing a handoff; the selected suggestion only asked Arin to show it to her.",
+        "The note is no longer visible at the ending."
+      ],
+      "audio_review": "An independent CPU Whisper small pass returned an empty transcript, consistent with no intended dialogue. This does not establish sound-effect quality or guarantee absence of all speech; no listening assessment is claimed."
+    },
+    "speech_review": {
+      "recognizer": "faster-whisper small",
+      "device": "cpu",
+      "expected_dialogue": [],
+      "segments": [],
+      "transcript": "",
+      "interpretation": "ASR only; background sound quality and absence of all speech are not guaranteed.",
+      "source_original_sha256": "94d44bb2875f1b41daaa9de05003a1a6af075daa351733f00db5490b06b595e5"
+    }
+  },
+  "combined_render": {
+    "file": "clips/cafe-story-combined.mp4",
+    "sha256": "378e01102c6927016e19ccf3a015e845f3102f2b80bfeb1db93cd6e45d7704bc",
+    "source_sha256": "09444697ae61bbaeab0e6c3fa980cb284eba5762c4aa4e7b1942e97083f8ead6",
+    "full_av_decode": true,
+    "metadata_processing": "Global and stream metadata removed with FFmpeg stream copy; original source untouched. No video/audio re-encoding.",
+    "decoded_video_and_audio_identical_to_original": true,
+    "decoded_video_yuv420_sha256": "1d56e41583fb87baa072dd0f726dedd7a0d9aed9a7323e88d497eb01df777f10",
+    "decoded_audio_pcm_s16le_sha256": "83dc3b3efe3ba48949ffb4ddc92fe163aa0b2fe23ccfbf7997c9e60f5a1250c1",
+    "private_metadata_scan": "passed",
+    "width": 736,
+    "height": 416,
+    "fps": 24,
+    "frames": 328,
+    "actual_video_seconds": 13.666666666666666,
+    "mp4_duration_seconds": 13.667,
+    "server_execution_seconds": 20.096,
+    "sources": [
+      "Cafe Take 2",
+      "Story game: key reveal"
+    ],
+    "context_frames_removed": 39,
+    "assembly": "native latent join and decode",
+    "no_diffusion": true,
+    "original_cafe_take_not_duplicated": true,
+    "continue_uses_correct_final_individual_take": true,
+    "visual_review": {
+      "basis": "16 sampled frames with full AVdecode.",
+      "observed": [
+        "Cafe Take2 plays first, followed by the new key reveal without replaying the copied ending context.",
+        "Faces, outfits and cafe appearance remain consistent.",
+        "Combined ending matches the continuation: Elira is shown holding the key."
+      ],
+      "limitations": [
+        "The continuation itself transfers the key to Elira without a visible handoff, beyond the selected idea.",
+        "Spoken wording/voice quality are not independently verified by this review."
+      ]
+    }
+  }
+}

@@ -1,0 +1,134 @@
+.scene-director {
+  min-width: 0;
+  margin: 12px 0 18px;
+}
+.scene-director-main,
+.scene-director-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.scene-director-main:has(> :nth-child(3)) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.scene-director-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.scene-director-field > span,
+.scene-director legend {
+  font-size: 12px;
+  color: #c0d0c5;
+}
+.scene-director-field small {
+  color: #b1dbbc;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.scene-director-field input,
+.scene-director-field select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.scene-director .scene-director-hint {
+  margin: 7px 0 10px;
+  color: #98aaa0;
+  font-size: 12px;
+}
+.scene-director-more {
+  border-top: 1px solid #324139;
+  padding-top: 10px;
+}
+.scene-director-more > summary,
+.scene-director-builder > summary {
+  cursor: pointer;
+  color: #c7dbce;
+  font-size: 13px;
+}
+.scene-director-more > summary span {
+  color: #8fa297;
+  font-size: 11px;
+  margin-left: 5px;
+}
+.scene-director-options {
+  display: grid;
+  gap: 16px;
+  padding-top: 15px;
+}
+.scene-director-timing {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+}
+.scene-director-timing label {
+  flex: 0 0 155px;
+}
+.scene-director-timing p {
+  font-size: 12px;
+  color: #9cb0a2;
+  margin: 0 0 5px;
+}
+.scene-director-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.simple-studio .scene-director-buttons button,
+.simple-studio .scene-director-builder button,
+.simple-studio .scene-director-reset {
+  background: #24332a;
+  border: 1px solid #3b5143;
+  color: #d5e9dc;
+  padding: 6px 10px;
+  min-height: 34px;
+  font-size: 12px;
+}
+.scene-director-setups legend,
+.scene-director-people legend {
+  padding-bottom: 7px;
+}
+.scene-director-person {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(170px, 2fr);
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.scene-director-person span {
+  overflow-wrap: anywhere;
+}
+.scene-director-person select {
+  min-width: 0;
+  width: 100%;
+}
+.scene-director-reset {
+  margin-top: 10px;
+}
+.scene-director-builder > div {
+  margin: 12px 0;
+}
+@media (max-width: 650px) {
+  .scene-director-main,
+  .scene-director-main:has(> :nth-child(3)),
+  .scene-director-grid {
+    grid-template-columns: 1fr;
+  }
+  .scene-director-more > summary span {
+    display: block;
+    margin: 4px 0 0;
+  }
+  .scene-director-timing {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .scene-director-timing label {
+    flex-basis: auto;
+  }
+  .scene-director-person {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}

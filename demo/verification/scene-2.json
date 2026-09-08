@@ -1,0 +1,126 @@
+{
+  "scene": 2,
+  "title": "The Message · 2 · The rooftop door",
+  "video_file": "clips/scene-2.mp4",
+  "video_sha256": "c9575ae48f9585e25195285468a3ab9ad144fa94e0eedfca8f83c4e5d7e0905b",
+  "full_av_decode": true,
+  "streams": [
+    {
+      "type": "video",
+      "codec": "h264",
+      "width": 736,
+      "height": 416,
+      "fps": "24/1",
+      "frames": "243",
+      "sample_rate": null,
+      "channels": null,
+      "duration": "10.125000"
+    },
+    {
+      "type": "audio",
+      "codec": "aac",
+      "width": null,
+      "height": null,
+      "fps": "0/0",
+      "frames": "318",
+      "sample_rate": "32000",
+      "channels": 2,
+      "duration": "10.125000"
+    }
+  ],
+  "authoring_seconds": 10,
+  "actual_seconds": 10.125,
+  "server_execution_seconds": 90.061,
+  "render_settings": {
+    "mode": "ref2va",
+    "resolution": "0.3",
+    "width": 736,
+    "height": 416,
+    "frames": 243,
+    "fps": 24,
+    "steps": 8,
+    "seed": 908202602,
+    "attention": "H3 SLA · Kitchen · 85% sparsity",
+    "text_encoder": "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors",
+    "loras": [
+      {
+        "name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+        "strength": 1.0,
+        "compatibility": "tested",
+        "compatible_modes": [
+          "ref2va"
+        ]
+      }
+    ],
+    "prompt_sha256": "0ee2e0e7fa1e391c6dd9e40b3a2bba08fd2d7e159ea54d2f8c1c9295cbeb43e3",
+    "image_bytes_verified": true
+  },
+  "conditioned_reference_tags": [
+    "arin-face",
+    "elira-face",
+    "arin-outfit",
+    "elira-outfit",
+    "note",
+    "key",
+    "lighter",
+    "alley"
+  ],
+  "inspiration_tags": [
+    "cafe",
+    "rooftop"
+  ],
+  "shot_count": 5,
+  "visual_review": {
+    "basis": "16 sampled frames; full video and audio decode. Independent speech review is recorded separately below.",
+    "observed": [
+      "Stable identities and outfits in the wet neon alley.",
+      "Key handoff, Elira holding the note and key, opposing dialogue closeups and open-door ending."
+    ],
+    "limitations": [
+      "Exact key insertion, turning and withdrawal are compressed and not unambiguously visible in sampled frames."
+    ]
+  },
+  "speech_review": {
+    "recognizer": "faster-whisper small",
+    "device": "cpu",
+    "compute_type": "int8",
+    "cpu_threads": 4,
+    "local_files_only": true,
+    "initial_prompt": null,
+    "hotwords": null,
+    "language": "en",
+    "transcript": "This key came with the message. It opens the rooftop door.",
+    "expected_dialogue": [
+      {
+        "shot": 3,
+        "speaker": "Elira",
+        "text": "This key came with the message?",
+        "normalized_phrase_present_in_transcript": true
+      },
+      {
+        "shot": 4,
+        "speaker": "Arin",
+        "text": "It opens the rooftop door.",
+        "normalized_phrase_present_in_transcript": true
+      }
+    ],
+    "comparison": {
+      "word_edit_distance": 0,
+      "expected_word_count": 11,
+      "transcribed_word_count": 11,
+      "word_error_rate": 0.0,
+      "normalized_words_match": true,
+      "changes": []
+    },
+    "interpretation": "ASR is a rough independent transcription, not a guarantee of audible wording, speaker assignment, voice quality, lip sync, or sound-effect quality. Mismatches can be synthesis errors or recognition errors; listen to the source to decide."
+  },
+  "portable_project": {
+    "filename": "The-Message-Scene-2.zip",
+    "download_url": "https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.0.0/The-Message-Scene-2.zip",
+    "sha256": "80b4b9050da20f52fc0d5b6264849a2cd669ec8b54260b9928a1dbf3c488015b",
+    "bytes": 21050394,
+    "zip_entries": 31,
+    "stored_images": 10,
+    "private_path_and_secret_scan": "passed"
+  }
+}
