@@ -160,6 +160,9 @@ and any locked scene controls. Resolve vague continuation into a specific new NP
 Use continue in the same place with unchanged references; cut only for an actual new shot/place or
 new conditioning. Merely handling a known prop does not require a cut or an asset.
 New people need a stable name and a consistent text description, not a separate identity image.
+When generate_references is false, asset_requests must be []. H3 renders new people, streets,
+rooms, clothing and props directly from text; existing references remain available. Missing images
+are not a dependency of a text-only scene. Do not request an image to establish the first location.
 Use the current footage to preserve an already visible person's appearance when they are first named;
 do not generate a new face, redesign them or cut just to introduce them. A text-only newcomer can enter
 the current shot directly. Request an image only when the user asks for it or specific missing visual
@@ -523,7 +526,7 @@ def _effect_schema(world, *, allow_discovery_ids=False):
     return {'type': 'array', 'maxItems': 16 if variants else 0, 'items': {'oneOf': variants} if variants else EFFECT}
 
 
-def _narrative_schema(world, duration, requested_shots, identify_language=False, *, remaining_words=None, remaining_lines=None, inspection=None):
+def _narrative_schema(world, duration, requested_shots, identify_language=False, *, remaining_words=None, remaining_lines=None, inspection=None, generate_references=False):
     schema = _obj({k: copy.deepcopy(NARRATIVE_SCHEMA['properties'][k])
                    for k in ('transition', 'beats', 'effects', 'choices', 'asset_requests')})
     props = schema['properties']
@@ -547,6 +550,8 @@ def _narrative_schema(world, duration, requested_shots, identify_language=False,
             'description': 'Only the language name/code of the exact player quotations, or empty if uncertain. Never the quote itself, a sentence or an explanation; never translate their words.'}
         schema['required'].append('player_language')
     props['asset_requests']['description'] = 'Normally []. New people can use text descriptions and current footage without images. Request only user-requested assets or specifically required missing visual conditioning; preserve existing appearances.'
+    if not generate_references:
+        props['asset_requests'].update(maxItems=0, description='Must be []. Generate the scene directly from text and reuse existing references; automatic reference-image generation is disabled.')
     props['choices']['items']['properties']['message']['description'] = 'A brief player attempt or question. Contractions such as I\'ll are valid. Do not decide NPC actions.'
     if duration <= 5 and not requested_shots:
         props['beats']['maxItems'] = 1
@@ -808,7 +813,7 @@ def _check_inspection_effects(narrative, inspection, responses, authored_instruc
 
 
 def plan_turn(*, project, world, player_character_id, message, duration, predict,
-              guides=(), intent=None, mode='game', observed_state=None, initiative='balanced', premise=''):
+              guides=(), intent=None, mode='game', observed_state=None, initiative='balanced', premise='', generate_references=False):
     """Request isolated NPC responses, settle a narrative, then direct its beats.
 
     The ordinary short scene activates at most two NPC speakers. The second sees
@@ -822,6 +827,8 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
         raise ValueError('Describe a player action or request a continuation.')
     if not isinstance(premise, str):
         raise ValueError('The story premise must be text.')
+    if type(generate_references) is not bool:
+        raise ValueError('Generate reference images must be on or off.')
     if not isinstance(duration, (int, float)) or isinstance(duration, bool) or not math.isfinite(duration) or duration <= 0:
         raise ValueError('Choose a valid new-action duration.')
     if intent is not None:
@@ -912,6 +919,7 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
     narrative = _predict(predict, 'roleplay', 'world', (GAME_ENGINE_SYSTEM + '\n\n' if mode == 'game' else '') + NARRATIVE_SYSTEM, {
         'mode': mode, 'player_character_id': player_character_id, 'player_message': message,
         'story_premise': premise,
+        'generate_references': generate_references if mode == 'game' else True,
         'initiative': initiative,
         'world': context, 'resolved_intent': resolved, 'active_guides': guides_text,
         'read_only_inspection': inspection,
@@ -932,7 +940,8 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
         'requested_scene_controls': requested_shots,
         'beat_budget': 1 if duration <= 5 and not requested_shots else 6,
     }, _narrative_schema(world, duration, requested_shots, identify_language,
-                        remaining_words=remaining_words, remaining_lines=remaining_lines, inspection=inspection) if mode == 'game' else NARRATIVE_SCHEMA)
+                        remaining_words=remaining_words, remaining_lines=remaining_lines, inspection=inspection,
+                        generate_references=generate_references) if mode == 'game' else NARRATIVE_SCHEMA)
     inspection_exception = _check_inspection_effects(narrative, inspection, responses, authored_instructions, cast) if mode == 'game' else None
     introduction_lines = []
     if mode == 'game':

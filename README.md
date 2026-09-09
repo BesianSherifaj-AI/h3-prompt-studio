@@ -2,7 +2,7 @@
 
 A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
 
-Version **1.3.0** adds explicit scene continuity: who acts, who stays seated, which objects exist, their appearance and count, and where each starts and ends. Game keeps accepted world state between turns; Studio lets you edit the same controls directly. A reported visual mismatch pauses automatic progression for review. LM Studio handles vision and writing; ComfyUI renders video.
+Version **1.3.1** fixes text-only Game startup: ordinary actions no longer require an extra image generator by default, and unavailable ComfyUI servers are reported separately from missing model components. Scene continuity controls describe who acts, who stays seated, which objects exist, their appearance and count, and where each starts and ends. Game keeps accepted world state between turns; Studio lets you edit the same controls directly. A reported visual mismatch pauses automatic progression for review. LM Studio handles vision and writing; ComfyUI renders video.
 
 **[Scene continuity guide](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
 
@@ -10,7 +10,7 @@ The new [Coin Safety Inspector demonstration](demo/scene-continuity/README.md) e
 
 [![The Coin Safety Inspector — actual H3 frame](demo/scene-continuity/coin-poster.png)](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)
 
-**[Watch the new 30-second demo](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)** · **[Chase, one-minute parody and Studio images](demo/scene-continuity/README.md)** · **[Download v1.3.0](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/tag/v1.3.0)**
+**[Watch the 30-second demo](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)** · **[Chase, one-minute parody and Studio images](demo/scene-continuity/README.md)** · **[Download v1.3.1](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/tag/v1.3.1)**
 
 The earlier **v1.0** [The Message demo](demo/README.md) remains available: three actual 0.3 MP scenes, ten shared reference images, exact dialogue, measured render times, and portable projects. Its showreel and measurements describe that release. The visual review includes observed model mistakes.
 
@@ -68,7 +68,7 @@ The 0.3 MP preset is 736 × 416 in landscape. Quick drafts use a compatible four
 
 ## Play a story in Game
 
-1. Open **Game**, enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. Separate reference generation is available when a scene explicitly needs it.
+1. Open **Game**, enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. **Create extra reference images** is off by default; enable it when you want the assistant to request separate reference images. That option requires an available image generator and adds a generation step. Existing references remain usable with it off.
 2. New games default to **2D pixel art / 0.2 MP / three seconds / eight steps**. Landscape is608×320; a fresh clip has73frames (3.04 seconds). Change style, quality, duration and viewpoint freely in the editor. Existing games retain their saved settings. Turn on **Review before rendering** to inspect the response before rendering.
 3. Write a move such as `I look at the note and ask what it means.` Put exact spoken words in double quotes, for example `I say "Who sent this?"`. A response that changes quoted player speech is rejected before rendering.
 4. The game resolves known item and movement actions, while the assistant directs their presentation. Dialogue, combat and new situations use the creative planner. The scene renders, its ending is inspected, and accepted actions update the saved world. You can edit the response, try another take, branch from an older clip, or type your own next action.
@@ -157,7 +157,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.3.0 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.3.1 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.

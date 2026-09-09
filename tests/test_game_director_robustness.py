@@ -307,6 +307,7 @@ def test_a_new_npc_can_enter_and_speak_without_an_extra_actor_call(request_ident
         plan['beats'][0].update(action='A courier approaches Alex.', final_state='The courier stands beside Alex.')
     result = plan_turn(project=project, world=world, player_character_id='player',
                        message='A random NPC appears on the street.', duration=5,
+                       generate_references=request_identity_image,
                        predict=augmented_predictor(calls, edit))
     assert [call[0] for call in calls] == ['roleplay', 'director']
     assert result['dialogue'][0]['text'] == 'A message for you.'

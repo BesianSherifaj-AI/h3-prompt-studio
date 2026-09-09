@@ -1,5 +1,7 @@
 # Scene continuity validation — 9 September 2026
 
+**Scope correction for v1.3.1:** this report records v1.3.0 scene-continuity testing. Those checks missed a real startup failure: an automatically requested background image blocked a text-only Game turn when ComfyUI was offline, and the error incorrectly implied missing model files. v1.3.1 makes extra Game reference generation opt-in and distinguishes unavailable inventories from verified missing components. The reported failed turn was resumed in the installed app without an extra image job; its 608 × 320, 3.042-second clip played successfully and the game returned to the next-move state. See the [hotfix changelog](../CHANGELOG.md). The counts below describe the earlier release and do not establish universal play reliability.
+
 This release was checked at three separate levels: deterministic application tests, real local language-model planning, and actual H3 video. Passing one does not establish success at the others. The [research review](H3_SCENE_CONTROL_RESEARCH.md) documents the primary sources and which ideas were implemented; the [guide](SCENE_CONTINUITY.md) explains the controls.
 
 ## Automated checks

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api as request, ApiError } from "./api";
 import type { Project } from "./model";
 import {
-  normalizeImageGenerators,
+  imageGeneratorInventory,
   storyTurnPending,
   validStoryTicket,
   type ImageGeneratorModel,
@@ -98,6 +98,10 @@ export function useStorySession(skipRestore = false) {
   );
   const [generators, setGenerators] = useState<ImageGeneratorModel[]>([]),
     [defaultGenerator, setDefaultGenerator] = useState("");
+  const [generatorsLoading, setGeneratorsLoading] = useState(true),
+    [generatorsChecked, setGeneratorsChecked] = useState(false),
+    [generatorErrors, setGeneratorErrors] = useState<string[]>([]);
+  const generatorRevision = useRef(0);
   const selected = useRef(""),
     current = useRef<Story | null>(null),
     mutation = useRef(0),
@@ -106,6 +110,25 @@ export function useStorySession(skipRestore = false) {
     mounted = useRef(true),
     ticket = useRef<StoryTicket | null>(null);
   const createAttempt = useRef<PendingStoryCreation | null>(pendingCreation);
+  const refreshGenerators = useCallback(async () => {
+    const revision = ++generatorRevision.current;
+    setGeneratorsLoading(true);
+    try {
+      const result = await api("/assets/generators");
+      if (!mounted.current || revision !== generatorRevision.current) return;
+      setGenerators(imageGeneratorInventory(result));
+      setDefaultGenerator(typeof result?.default_model === "string" ? result.default_model : "");
+      setGeneratorErrors(Array.isArray(result?.errors) ? result.errors.filter((item: unknown): item is string => typeof item === "string" && !!item.trim()) : []);
+    } catch (error) {
+      if (!mounted.current || revision !== generatorRevision.current) return;
+      setGeneratorErrors([`Image generator inventory could not be checked. ${(error as Error).message || "Check the ComfyUI connection and refresh."}`]);
+    } finally {
+      if (mounted.current && revision === generatorRevision.current) {
+        setGeneratorsLoading(false);
+        setGeneratorsChecked(true);
+      }
+    }
+  }, []);
   const rememberCreation = useCallback((next: PendingStoryCreation | null) => {
     createAttempt.current = next;
     if (mounted.current) setPendingCreation(next);
@@ -209,11 +232,7 @@ export function useStorySession(skipRestore = false) {
     const init = async () => {
       const storiesRequest = api("/stories");
       // Opening a saved game does not need image-generator discovery to finish.
-      void api("/assets/generators").then(result => {
-        if (!alive) return;
-        setGenerators(normalizeImageGenerators(result?.generators || result?.models));
-        setDefaultGenerator(result?.default_model || "");
-      }).catch(() => { /* The configured default remains available. */ });
+      void refreshGenerators();
       const results = await Promise.allSettled([storiesRequest]);
       if (!alive) return;
       if (results[0].status === "fulfilled") {
@@ -268,8 +287,9 @@ export function useStorySession(skipRestore = false) {
       alive = false;
       mounted.current = false;
       pollRevision.current++;
+      generatorRevision.current++;
     };
-  }, [acceptCreation, selectStory, skipRestore]);
+  }, [acceptCreation, selectStory, skipRestore, refreshGenerators]);
   useEffect(() => {
     if (!selectedId) return;
     let alive = true,
@@ -550,6 +570,10 @@ export function useStorySession(skipRestore = false) {
     pendingCreation,
     generators,
     defaultGenerator,
+    generatorsLoading,
+    generatorsChecked,
+    generatorErrors,
+    refreshGenerators,
     selectStory,
     refresh,
     create,

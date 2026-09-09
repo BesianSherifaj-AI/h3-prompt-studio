@@ -18,13 +18,14 @@ const entity = (id, name, fields = {}) => ({ id, name, kind: 'object', asset_ids
 const story = { id: '11111111-1111-4111-8111-111111111111', title: 'Pixel street', project_id: project.id, project,
   mode: 'game', premise: project.story.text, player_name: 'Alex', player_character_id: 'player', active_branch_id: 'main',
   active_run_id: null, configuration_revision: 1, turns: [], clips: [], jobs: [], guides: [], choices: [],
-  settings: { duration: 3, resolution: '0.2', steps: 8, experimental_preview: true, review_before_render: false, assistant_provider: 'lmstudio', style: 'Pixel art' },
+  settings: { duration: 3, resolution: '0.2', steps: 8, experimental_preview: true, review_before_render: false, assistant_provider: 'lmstudio', style: 'Pixel art', image_model: 'saved-unavailable-model' },
   world: { schema_version: 1, current_location_id: 'street', rules: [], objectives: [], events: [],
     locations: [{ id: 'street', name: 'Lantern Street', description: '', exits: [{ target_id: 'alley' }], asset_ids: [] }, { id: 'alley', name: 'Alley', description: '', exits: ['street'], asset_ids: [] }],
     characters: [person('player', 'Alex'), person('mara', 'Mara'), person('guard', 'Fallen guard', { defeated: true }), { ...person('remote', 'Remote NPC'), location_id: 'alley' }],
     entities: [entity('key', 'Brass key', { holder_id: 'player' }), entity('coat', 'Blue coat', { worn_by_id: 'player' }), entity('coin', 'Silver coin'), entity('door', 'Oak door', { kind: 'door' })] } };
 const requests = [], errors = [];
 let loseAcknowledgement = false;
+let generatorChecks = 0, generatorOffline = true;
 function catalog() {
   const targets = [{ id: 'mara', name: 'Mara', kind: 'character' }, { id: 'guard', name: 'Fallen guard', kind: 'character' },
     ...story.world.entities.map(item => ({ id: item.id, name: item.name, kind: item.kind })), { id: 'alley', name: 'Alley', kind: 'location' }];
@@ -85,7 +86,12 @@ try {
       return json(turn);
     }
     if (pathname === '/connections') return json({ lm: { online: true, models: [] }, comfy: { online: false } });
-    if (pathname === '/assets/generators') return json({ generators: [], default_model: '' });
+    if (pathname === '/assets/generators') {
+      generatorChecks++;
+      if (request.method() !== 'GET') throw new Error('Checking availability must not mutate anything.');
+      return json(generatorOffline ? { generators: [], default_model: '', errors: ['ComfyUI node inventory is unavailable.'] }
+        : { generators: [{ id: 'h3-frame', name: 'H3 frame', available: true }], default_model: 'h3-frame', errors: [] });
+    }
     if (pathname === '/compile') return json({ valid: true, prompt: 'Mock preview', issues: [], references: [], timeline: [] });
     if (pathname === '/projects') return json(request.method() === 'POST' ? request.postDataJSON() : []);
     if (pathname === '/video/runs') return json({ runs: [] });
@@ -99,14 +105,30 @@ try {
   if (requests.length) throw new Error('Opening a game submitted an unsolicited move.');
   await page.getByRole('button', { name: 'Game settings', exact: true }).click();
   await page.getByRole('button', { name: 'Rendering', exact: true }).click();
+  await expect(page.getByLabel('Create extra reference images')).not.toBeChecked();
+  await expect(page.getByRole('combobox', { name: 'Image generator', exact: true })).toHaveValue('saved-unavailable-model');
+  await expect(page.getByRole('region', { name: 'Extra reference images' })).toContainText('does not confirm missing model files');
+  const checkedBeforeRefresh = generatorChecks;
+  generatorOffline = false;
+  await page.getByRole('button', { name: 'Refresh image generators', exact: true }).click();
+  await expect.poll(() => generatorChecks).toBe(checkedBeforeRefresh + 1);
+  await expect(page.getByRole('region', { name: 'Extra reference images' })).toContainText('Available: H3 frame');
+  await expect(page.getByRole('combobox', { name: 'Image generator', exact: true })).toHaveValue('saved-unavailable-model');
+  await expect(page.getByLabel('Create extra reference images')).not.toBeChecked();
+  if (requests.length) throw new Error('Refreshing generators queued a game move.');
+  await page.getByLabel('Create extra reference images').check();
   await expect(page.getByLabel('Quick item and movement actions')).toBeChecked();
   await page.getByLabel('Quick item and movement actions').uncheck();
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => story.settings.fast_actions).toBe(false);
+  await expect.poll(() => story.settings.generate_references).toBe(true);
+  expect(story.settings.image_model).toBe('saved-unavailable-model');
   await page.getByRole('button', { name: 'Close game editor', exact: true }).click();
   await page.getByRole('button', { name: 'Game settings', exact: true }).click();
   await page.getByRole('button', { name: 'Rendering', exact: true }).click();
   await expect(page.getByLabel('Quick item and movement actions')).not.toBeChecked();
+  await expect(page.getByLabel('Create extra reference images')).toBeChecked();
+  await expect(page.getByRole('combobox', { name: 'Image generator', exact: true })).toHaveValue('saved-unavailable-model');
   await page.getByRole('button', { name: 'Close game editor', exact: true }).click();
   await page.getByRole('button', { name: 'Check inventory', exact: true }).click();
   await expect(inventory).toBeFocused();

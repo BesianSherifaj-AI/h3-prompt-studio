@@ -64,6 +64,7 @@ export type StorySettings = {
   review_before_render: boolean;
   duration: number;
   image_model?: string;
+  generate_references?: boolean;
   resolution: string;
   steps: number;
   style?: string;
@@ -109,6 +110,7 @@ export type StoryTicket = {
 export const PIXEL_STYLE = "2D pixel art, hand-drawn 16-bit sprite animation, crisp visible square pixels, flat illustrated backgrounds, limited palette, readable silhouettes. No 3D voxel blocks, Minecraft or Roblox aesthetic.";
 export const DEFAULT_STORY_SETTINGS: StorySettings = {
   review_before_render: false,
+  generate_references: false,
   duration: 3,
   resolution: "0.2",
   experimental_preview: true,
@@ -231,6 +233,30 @@ export function normalizeImageGenerators(
       return [];
     })
     .filter((item) => !seen.has(item.id) && !!seen.add(item.id));
+}
+
+/** Only a successfully read server inventory can diagnose missing requirements. */
+export function imageGeneratorInventory(value: any): ImageGeneratorModel[] {
+  const models = normalizeImageGenerators(value?.generators || value?.models);
+  const listed = new Set(models.map(model => model.id));
+  const missing = new Map<string, string[]>();
+  for (const server of Array.isArray(value?.servers) ? value.servers : []) {
+    if (!server || typeof server.model_missing !== "object" || !server.model_missing) continue;
+    for (const [id, requirements] of Object.entries(server.model_missing)) {
+      if (listed.has(id) || !Array.isArray(requirements)) continue;
+      const names = requirements.filter((item): item is string => typeof item === "string" && !!item.trim());
+      if (!names.length) continue;
+      const lines = missing.get(id) || [];
+      lines.push(`${typeof server.comfy_url === "string" ? server.comfy_url : "Checked ComfyUI server"}: ${names.join(", ")}`);
+      missing.set(id, lines);
+    }
+  }
+  for (const [id, requirements] of missing) models.push({
+    id, name: id.replace(/\.safetensors$/i, "").replaceAll("_", " "),
+    available: false, compatible: false,
+    reason: `Missing requirements in the checked inventory: ${requirements.join("; ")}.`,
+  });
+  return models;
 }
 export function validStoryTicket(
   value: unknown,

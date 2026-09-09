@@ -53,4 +53,4 @@ jobs:
           node tools/browser_game_smoke.mjs
           node tools/browser_scene_continuity_smoke.mjs
       - name: Verify distributable packaging
-        run: python tools/package_release.py --version 1.3.0 --output-dir release/ci
+        run: python tools/package_release.py --version 1.3.1 --output-dir release/ci

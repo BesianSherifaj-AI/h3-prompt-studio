@@ -366,7 +366,7 @@ def test_generated_assets_keep_tags_owners_and_established_identity(rig):
              {'name': 'Nora lantern', 'prompt': 'One small brass lantern.', 'semantic_role': 'object', 'person_name': 'Nora', 'prompt_tag': 'nora-lantern'},
              {'name': 'Nora coat', 'prompt': 'One blue wool coat.', 'semantic_role': 'wardrobe', 'person_name': 'Nora', 'prompt_tag': 'nora-coat'}]
     rig.client.plans.append(plan(asset_requests=needs))
-    session = story(rig)
+    session = story(rig, settings={'generate_references': True})
     first = render(rig, session)
     assert first['status'] == 'succeeded', first.get('error')
     prepared = rig.videos.snapshot(first['run_id'])
@@ -413,7 +413,7 @@ def test_new_character_and_place_are_bound_once_in_an_explicit_scene_cut(rig):
               'semantic_role': 'background', 'person_name': '', 'prompt_tag': 'garden'}]
     rig.client.plans.append(plan(characters=cast, asset_requests=needs, action='Lio meets the visitors in the garden.',
                                  setting='Walled garden', dialogue=[{'speaker': 'Lio', 'text': 'Welcome to the garden.'}]))
-    session = story(rig, source=opening['id'])
+    session = story(rig, source=opening['id'], settings={'generate_references': True})
     turn = render(rig, session)
     assert turn['status'] == 'awaiting_review'
     assert not rig.assets.requests

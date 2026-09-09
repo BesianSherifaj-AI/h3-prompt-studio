@@ -321,6 +321,8 @@ Use transition continue for the same place and current cast. Use cut for moving 
 a new person, or a deliberate new shot. In a cut preserve character identity and explain the new location.
 Existing references have stable tags and owners. Never request replacement images for established faces.
 Generate asset_requests ONLY for genuinely missing visible people, outfits, props, or places needed NOW.
+When generate_references is false, asset_requests must be []. New scenes, people and objects can be
+rendered directly from text; missing reference images do not prevent a text-only scene.
 For missing character images request ONE character whole-look portrait per person, not separate face+clothes.
 Image prompts describe one clean reference image, never a sheet, split-screen, labels or captions. Include
 appearance, clothes and matching visual style. Every new speaker must be in characters with a short voice.
@@ -471,6 +473,8 @@ def settings_for(value):
         raise ValueError('Choose a supported video resolution.')
     if type(value.get('review_before_render', False)) is not bool:
         raise ValueError('Review before rendering must be on or off.')
+    if type(value.get('generate_references', False)) is not bool:
+        raise ValueError('Generate reference images must be on or off.')
     for key, choices in [('aspect_ratio', ('16:9', '9:16', '1:1', '4:3', '3:4')),
                          ('initiative', ('balanced', 'reactive', 'proactive')),
                          ('assistant_provider', ('lmstudio', 'supervised')), ('transition', ('auto', 'continue', 'cut'))]:
@@ -482,6 +486,7 @@ def settings_for(value):
         raise ValueError('Choose 1, 2 or 4 assistant predictions.')
     return {**copy.deepcopy(value), 'duration': duration, 'steps': steps, 'resolution': value.get('resolution', '0.3'),
             'review_before_render': value.get('review_before_render', False),
+            'generate_references': value.get('generate_references', False),
             'image_model': text(value.get('image_model') or 'z_image_turbo_bf16.safetensors', 160),
             'style': text(value.get('style', ''), 1000)}
 
@@ -811,6 +816,7 @@ class StoryManager(StoryStateMixin):
                     'status': 'planning', 'stage': 'Writing the response', 'error': None, 'created_at': time.time(),
                     'branch_id': story['active_branch_id'], 'parent_run_id': story.get('active_run_id'),
                     'duration': duration, 'render_request_id': ident(), 'asset_jobs': [], 'alternate_run_ids': []}
+            turn['plan_origin'] = 'authored' if isinstance(body.get('planned'), dict) else 'automatic'
             self._snapshot_turn(story, turn, body)
             turn['assistant_model'] = self.get_settings().get('model')
             if isinstance(body.get('planned'), dict):
@@ -861,6 +867,7 @@ class StoryManager(StoryStateMixin):
                  'person': next((p['name'] for p in project['subjects'] if a['id'] in p['asset_ids'] or a.get('simple_owner_id') == p['id']), a.get('person_name', ''))}
                 for a in project['assets'] if a.get('enabled', True) and not a.get('video_run_ending')]
         return {'mode': story['mode'], 'player_name': story['player_name'], 'premise': story['premise'],
+                'generate_references': story['mode'] != 'game' or story['settings'].get('generate_references', False),
                 'new_seconds': turn['duration'], 'message': turn['message'], 'style': story['settings']['style'],
                 'cast': [{k: p.get(k, '') for k in ('name', 'description')} for p in project['subjects']],
                 'references': refs, 'observed_current_state': story['observed_by_run'].get(parent, {}),
@@ -942,6 +949,7 @@ class StoryManager(StoryStateMixin):
                                  message=turn['message'], duration=turn['duration'], predict=predict,
                                  guides=story.get('guides', []), intent=turn.get('intent'), mode=story['mode'],
                                  premise=story.get('premise', ''),
+                                 generate_references=story['settings'].get('generate_references', False),
                                  initiative=story['settings'].get('initiative', 'balanced'),
                                  observed_state=story['observed_by_run'].get(turn.get('parent_run_id'), {}))
             if story['settings'].get('assistant_provider') == 'supervised':
@@ -956,7 +964,10 @@ class StoryManager(StoryStateMixin):
         for asset in images:
             content.append({'type': 'image_url', 'image_url': {'url': self.image_data(asset['id']), 'detail': 'low'}})
         def generate(model):
-            result = self.client().complete_json(model, PLAN_SYSTEM, content, PLAN_SCHEMA, max_tokens=2400, temperature=.65)
+            schema = copy.deepcopy(PLAN_SCHEMA)
+            if not context['generate_references']:
+                schema['properties']['asset_requests']['maxItems'] = 0
+            result = self.client().complete_json(model, PLAN_SYSTEM, content, schema, max_tokens=2400, temperature=.65)
             return validate_plan(result, story['player_name'], turn['message'], story['mode'], turn['duration'])
         return self.resources.run_ai(self.get_settings()['model'], generate)
 
@@ -1230,6 +1241,57 @@ class StoryManager(StoryStateMixin):
                 # Reusing this same request ID is safe; submit is idempotent.
         return known
 
+    def _automatic_plan_origin(self, story, turn):
+        """Legacy origin is established by its matching unedited writer receipt."""
+        if turn.get('plan_origin'):
+            return turn['plan_origin'] == 'automatic'
+        if any(receipt.get('turn_id') == turn['id'] and receipt.get('action') in ('approve', 'edit', 'reroll')
+               for receipt in story.get('action_requests', {}).values()):
+            return False
+        plan = turn.get('plan') or {}
+        for request in turn.get('assistant_requests', {}).values():
+            raw = request.get('result')
+            if (request.get('stage') == 'roleplay' and request.get('status') == 'completed'
+                    and isinstance(raw, dict) and raw.get('beats') == plan.get('beats')
+                    and raw.get('asset_requests') == plan.get('asset_requests')
+                    and isinstance(raw.get('beats'), list)):
+                turn['plan_origin'] = 'automatic'
+                return True
+        return False
+
+    def _apply_reference_policy(self, story, turn, *, recovery_jobs=None):
+        """Optional automatic Game images cannot become a render dependency.
+
+        Existing submitted work stays recoverable. Only an explicit recovery
+        may retire saved jobs proven to have failed before submission.
+        """
+        execution = self._execution(story, turn)
+        if (story['mode'] != 'game' or execution['settings'].get('generate_references', False)
+                or not self._automatic_plan_origin(story, turn)):
+            return
+        plan = turn.get('plan') or {}
+        if not plan.get('asset_requests') and not turn.get('asset_specs'):
+            return
+        # A saved render/accepted take already owns its actual conditioning.
+        if turn.get('run_id') or turn.get('project') or turn.get('accepted_state'):
+            return
+        saved_ids = set(turn.get('asset_jobs', [])) | {spec['request_id'] for spec in turn.get('asset_specs', [])}
+        if turn.get('created_assets') or (saved_ids and (recovery_jobs is None or any(
+                identity not in recovery_jobs or recovery_jobs[identity].get('status') != 'failed'
+                or recovery_jobs[identity].get('submission_intent') is not False
+                or recovery_jobs[identity].get('prompt_id') or recovery_jobs[identity].get('asset')
+                for identity in saved_ids))):
+            raise ValueError('This saved reference image may already have been submitted. Recover its original job before changing the response; no image or video was resubmitted.')
+        turn.setdefault('reference_policy_history', []).append({
+            'reason': 'Automatic Game reference generation is disabled; use text and existing references.',
+            'at': time.time(), 'asset_requests': copy.deepcopy(plan.get('asset_requests', [])),
+            'asset_specs': copy.deepcopy(turn.get('asset_specs', [])),
+            'asset_jobs': [copy.deepcopy(recovery_jobs[identity]) for identity in sorted(saved_ids)] if saved_ids else []})
+        turn['plan'] = {**copy.deepcopy(plan), 'asset_requests': []}
+        turn['asset_specs'] = []
+        turn['asset_jobs'] = []
+        self._save(story)
+
     def _edited_plan(self, story, turn, supplied):
         execution = self._execution(story, turn)
         edited = validate_plan(supplied, execution['player_name'], turn['message'], story['mode'], turn['duration'])
@@ -1304,7 +1366,8 @@ class StoryManager(StoryStateMixin):
                                 'automatic_repair_used', 'assistant_repair', 'resolved_intent', 'ending_observation_protocol'):
                         turn.pop(key, None)
                     turn.update(cancel_requested=False, asset_jobs=[], render_request_id=ident(), status='planning',
-                                duration=self._state(story)['settings']['duration'], stage='Writing your revised response', error=None)
+                                duration=self._state(story)['settings']['duration'], stage='Writing your revised response', error=None,
+                                plan_origin='automatic')
                     self.cancel_events.pop(turn['id'], None)
                     for key in ('snapshot', 'configuration_revision', 'logical_turn_id', 'intent', 'resolved_intent', 'receipt'):
                         if key in replacement:
@@ -1330,9 +1393,10 @@ class StoryManager(StoryStateMixin):
                 source['subjects'] = copy.deepcopy(story['base_project']['subjects'])
             ending = self.ending_asset(turn['parent_run_id']) if turn.get('parent_run_id') else None
             if not turn.get('plan'):
-                self._change(story, turn, status='planning', stage='Writing the response', error=None)
+                self._change(story, turn, status='planning', stage='Writing the response', error=None, plan_origin='automatic')
                 plan = self.plan(execution, turn, source, ending)
                 self._change(story, turn, plan=plan)
+            self._apply_reference_policy(story, turn)
             # Revalidate supplied/recovered edits too, including plans that
             # already contain direction. All effects must be legal before GPU
             # work; a syntactically valid plan can still contradict world state.
@@ -1714,6 +1778,8 @@ class StoryManager(StoryStateMixin):
                 turn.pop('run_id', None)
                 turn['assistant_requests'] = {k: v for k, v in turn.get('assistant_requests', {}).items() if v['stage'] != 'ending-inspection'}
                 if 'plan' in body:
+                    if edited_plan.get('asset_requests') != turn['plan'].get('asset_requests'):
+                        turn['plan_origin'] = 'authored'
                     turn['plan'] = edited_plan
                     for key in ('project', 'reroll_of', 'asset_specs', 'assets_inspected'):
                         turn.pop(key, None)
@@ -1759,9 +1825,13 @@ class StoryManager(StoryStateMixin):
                     if edited_plan != turn.get('plan'):
                         if any(job['status'] not in ('succeeded', 'failed', 'cancelled') for job in asset_jobs.values()):
                             raise ValueError('Recover or stop the original image job before rewriting this response. Its request is still saved; no replacement image was submitted.')
+                        if edited_plan.get('asset_requests') != turn['plan'].get('asset_requests'):
+                            turn['plan_origin'] = 'authored'
                         turn['plan'] = edited_plan
                         for key in ('project', 'asset_specs', 'assets_inspected'):
                             turn.pop(key, None)
+                if action in ('retry', 'resume') and 'plan' not in body:
+                    self._apply_reference_policy(story, turn, recovery_jobs=asset_jobs)
                 if turn.get('run_id'):
                     run = self.videos().refresh(turn['run_id'])
                     if run['status'] == 'uncertain':

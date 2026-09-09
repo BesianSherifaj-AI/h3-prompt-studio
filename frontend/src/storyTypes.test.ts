@@ -46,6 +46,7 @@ describe("Game defaults and turn safety", () => {
   it("starts with automatic rendering at three new seconds, 0.2 MP and eight steps", () => {
     expect(DEFAULT_STORY_SETTINGS).toMatchObject({
       review_before_render: false,
+      generate_references: false,
       duration: 3,
       resolution: "0.2",
       steps: 8,

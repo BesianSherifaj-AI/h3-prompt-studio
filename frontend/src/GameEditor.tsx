@@ -9,11 +9,12 @@ import type { GameCharacter, ImageGeneratorModel, StoryConfiguration } from "./s
 import "./GameEditor.css";
 import { setDirectorValue } from "./shotDirections";
 import { PIXEL_STYLE } from "./storyTypes";
+import { GameImageSettings } from "./GameImageSettings";
 
 type Props = { value: StoryConfiguration; onChange: (next: StoryConfiguration) => void; onSave: () => void; onClose: () => void; onStopApply?: () => void;
-  dirty: boolean; saving: boolean; busy: boolean; onUploadFiles?: (files: File[]) => Promise<Asset[]>; modelPicker?: ReactNode; generators: ImageGeneratorModel[]; initialTab?: string };
+  dirty: boolean; saving: boolean; busy: boolean; onUploadFiles?: (files: File[]) => Promise<Asset[]>; modelPicker?: ReactNode; generators: ImageGeneratorModel[]; generatorsLoading?: boolean; generatorsChecked?: boolean; generatorErrors?: string[]; onRefreshGenerators?: () => void; initialTab?: string };
 const tabs = [["cast", "Characters"], ["photos", "Photos & sound"], ["world", "World & behavior"], ["scene", "Next scene"], ["render", "Rendering"]];
-export default function GameEditor({ value, onChange, onSave, onClose, onStopApply, dirty, saving, busy, onUploadFiles, modelPicker, generators, initialTab }: Props) {
+export default function GameEditor({ value, onChange, onSave, onClose, onStopApply, dirty, saving, busy, onUploadFiles, modelPicker, generators, generatorsLoading, generatorsChecked, generatorErrors, onRefreshGenerators, initialTab }: Props) {
   const [tab, setTab] = useState(initialTab || "cast"), [error, setError] = useState(""), [uploading, setUploading] = useState(false);
   const [undo, setUndo] = useState<StoryConfiguration | null>(null), [catalog, setCatalog] = useState<any>(null);
   const [transcribing, setTranscribing] = useState("");
@@ -146,7 +147,7 @@ export default function GameEditor({ value, onChange, onSave, onClose, onStopApp
         <label className="game-checkbox"><input type="checkbox" checked={value.settings.fast_actions !== false} onChange={e => setSetting("fast_actions", e.target.checked)}/><span>Quick item and movement actions</span></label><p className="game-help">Apply known game rules directly for items and movement. Turn this off to let characters react to every action. Conversations, combat and waiting still let the characters respond.</p>
         <label>Assistant provider<select value={String(value.settings.assistant_provider || "lmstudio")} onChange={e => setSetting("assistant_provider", e.target.value)}><option value="lmstudio">LM Studio · normal play</option><option value="supervised">Supervised test · waits for agent responses</option></select></label>
         <label>Parallel assistant requests<select value={Number(value.settings.concurrency || 1)} onChange={e => setSetting("concurrency", Number(e.target.value))}>{[1,2,4].map(n => <option key={n} value={n}>{n}{n === 1 ? " · baseline" : " · benchmark first"}</option>)}</select></label>
-        <h3>Missing scene assets</h3><label>Image generator<select value={value.settings.image_model || ""} onChange={e => setSetting("image_model", e.target.value || undefined)}><option value="">Configured default</option>{generators.map(m => <option key={m.id} value={m.id} disabled={m.available === false || m.compatible === false}>{m.name}</option>)}</select></label>
+        <GameImageSettings settings={value.settings} generators={generators} loading={generatorsLoading} checked={generatorsChecked} errors={generatorErrors} onRefresh={onRefreshGenerators} onChange={setSetting}/>
       </section>}
     </div>
     <footer><span role="status">{saving ? "Saving…" : dirty ? "Unsaved edits · also saved before Play" : "All changes saved"}</span><button className="primary" disabled={saving || uploading} onClick={onSave}><Check size={16}/> Save changes</button>{busy && dirty && onStopApply && <button disabled={saving || uploading} onClick={onStopApply}>Stop current turn & apply changes</button>}</footer>

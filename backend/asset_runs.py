@@ -227,7 +227,7 @@ class AssetRunManager:
         return list(dict.fromkeys(_origin(value) for value in values))
 
     def options(self):
-        servers, errors = [], []
+        servers, errors, unavailable = [], [], []
         for origin in self._origins():
             try:
                 with self.client_factory() as client:
@@ -237,10 +237,20 @@ class AssetRunManager:
                     models, missing = _catalog(info)
                     h3_models, h3_missing = _h3_catalog(info)
                 available_models = ([] if missing else models) + h3_models
+                model_missing = {model: list(missing) +
+                                 ([] if model in models else [f'UNETLoader: {model}']) for model in MODELS}
+                model_missing[H3_FRAME_MODEL] = h3_missing
                 servers.append({'comfy_url': origin, 'models': available_models, 'missing': missing,
-                                'h3_missing': h3_missing, 'ready': bool(available_models)})
+                                'h3_missing': h3_missing, 'model_missing': model_missing,
+                                'ready': bool(available_models)})
+            except httpx.ConnectError:
+                message = f'Cannot connect to ComfyUI at {origin}. Start that ComfyUI server and refresh availability.'
+                errors.append(message)
+                unavailable.append({'comfy_url': origin, 'reason': 'connection_failed', 'message': message})
             except (httpx.HTTPError, ValueError):
-                errors.append(f'ComfyUI node inventory is unavailable at {origin}.')
+                message = f'Cannot read ComfyUI node inventory at {origin}. Check that server and refresh availability; installed models could not be verified.'
+                errors.append(message)
+                unavailable.append({'comfy_url': origin, 'reason': 'inventory_unavailable', 'message': message})
         available = [model for model in (*MODELS, H3_FRAME_MODEL) if any(s['ready'] and model in s['models'] for s in servers)]
         return {'ready': bool(available), 'models': available, 'default_model': available[0] if available else None,
                 'encoder': ENCODER, 'vae': VAE, 'width': 512, 'height': 512, 'max_dimension': 1024,
@@ -251,7 +261,26 @@ class AssetRunManager:
                                 'experimental': model == H3_FRAME_MODEL, 'kind': 'h3_frame' if model == H3_FRAME_MODEL else 'z_image_turbo',
                                 'steps': 4 if model == H3_FRAME_MODEL else 8,
                                 'note': 'Extracts one frame below the trained video duration. Speed and quality require local testing.' if model == H3_FRAME_MODEL else 'Native eight-step Z-Image-Turbo recipe.'}
-                               for model in available], 'servers': servers, 'errors': errors}
+                               for model in available], 'servers': servers, 'errors': errors,
+                'inventory_available': bool(servers), 'unavailable_servers': unavailable}
+
+    @staticmethod
+    def _unavailable_message(options, model):
+        servers = options['servers']
+        if not servers:
+            return ('ComfyUI is unavailable; installed image models could not be checked. '
+                    'Start your configured ComfyUI server and retry. ' + ' '.join(options.get('errors', [])))
+        details = []
+        for server in servers:
+            missing = server.get('model_missing', {}).get(model)
+            if missing is None:
+                missing = server.get('h3_missing' if model == H3_FRAME_MODEL else 'missing', [])
+            details.append(f"{server['comfy_url']}: " + (', '.join(missing) if missing else f'{model} is not available'))
+        alternative = (' Available alternatives: ' + ', '.join(options['models']) +
+                       '. Choose one explicitly in image settings.') if options['models'] else ''
+        return (f'The selected image generator ({model}) is unavailable on the checked ComfyUI servers. '
+                'Missing requirements on each server: ' + '; '.join(details) + '.' + alternative +
+                (' Other configured servers could not be checked. ' + ' '.join(options['errors']) if options.get('errors') else ''))
 
     def _record(self, ident):
         ident = _id(ident)
@@ -269,7 +298,7 @@ class AssetRunManager:
         with self.lock:
             result = {key: copy.deepcopy(record.get(key)) for key in
                       ('id', 'request_id', 'status', 'stage', 'error', 'warning', 'created_at', 'updated_at',
-                       'started_at', 'finished_at', 'asset', 'asset_id', 'cancel_requested', 'prompt_id')}
+                       'started_at', 'finished_at', 'asset', 'asset_id', 'cancel_requested', 'prompt_id', 'submission_intent')}
             result.update(copy.deepcopy(record['spec']))
             result['elapsed_seconds'] = round(max(0, (record.get('finished_at') or time.time()) -
                                                 (record.get('started_at') or record['created_at'])), 3)
@@ -355,7 +384,7 @@ class AssetRunManager:
                 options = self.options()
                 server = next((s for s in options['servers'] if s['ready'] and record['spec']['model'] in s['models']), None)
                 if not server:
-                    raise AssetRunError('The selected generator’s models, encoder, VAE and native nodes must be installed together in ComfyUI. Check Image generator availability.')
+                    raise AssetRunError(self._unavailable_message(options, record['spec']['model']))
                 origin = server['comfy_url']
                 if origin not in record['origins']:
                     raise AssetRunError('ComfyUI settings changed during image preparation. Submit a new request.')

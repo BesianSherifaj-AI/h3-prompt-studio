@@ -1927,6 +1927,7 @@ export default function GameStudio({
         onSave={() => void perform(saveConfiguration)} onClose={() => setSettingsOpen(false)}
         dirty={editorDirty || !story} saving={submitting} busy={!!activeTurn}
         onUploadFiles={onUploadFiles} modelPicker={modelPicker} generators={session.generators}
+        generatorsLoading={session.generatorsLoading} generatorsChecked={session.generatorsChecked} generatorErrors={session.generatorErrors} onRefreshGenerators={session.refreshGenerators}
         initialTab={editorTab}
         onStopApply={activeTurn ? () => void perform(async () => {
           await session.turnAction(activeTurn, "stop-and-apply", undefined, {
