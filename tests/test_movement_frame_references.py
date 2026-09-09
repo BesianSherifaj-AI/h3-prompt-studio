@@ -11,10 +11,13 @@ from test_visible_scene_grounding import binding_body, visible_scene
 
 
 @pytest.mark.parametrize('change_reference', [False, True])
-def test_forward_back_with_bound_design_keeps_identity_and_rejects_changed_design(rig, change_reference):
+@pytest.mark.parametrize('saved_ending', [False, True])
+def test_forward_back_with_bound_design_keeps_identity_and_rejects_changed_design(rig, change_reference, saved_ending):
     project, _ = setup_scene()
     project['subjects'] = project['subjects'][:1]
     design = reference('Player design', 'face', 'player-face')
+    if saved_ending:
+        design['video_run_ending'] = 'older-accepted-scene'
     project['assets'] = [design]
     project['subjects'][0].update(description='', asset_ids=[design['id']])
     project['comfy_render'] = {'seed': 42, 'resolution': '0.2', 'steps': 8}
@@ -43,7 +46,11 @@ def test_forward_back_with_bound_design_keeps_identity_and_rejects_changed_desig
         assert turn['status'] == 'succeeded', turn.get('error')
         assert compile_project(turn['project'])['valid']
         assert next(subject for subject in turn['project']['subjects'] if subject['id'] == 'player')['asset_ids'] == [design['id']]
-        assert next(asset for asset in turn['project']['assets'] if asset['id'] == design['id'])['role'] == 'context'
+        retained = next(asset for asset in turn['project']['assets'] if asset['id'] == design['id'])
+        assert retained['role'] == 'context'
+        if saved_ending:
+            assert retained['reference_from_video_ending'] == 'older-accepted-scene'
+            assert 'video_run_ending' not in retained
         turns.append(turn)
     assert turns[0]['project']['mode'] == 'i2va'
     assert turns[1]['project']['mode'] == ('i2va' if change_reference else 'fl2va'), turns[1]['navigation_move']

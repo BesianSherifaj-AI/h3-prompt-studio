@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1 — Remember the player from the start
+
+- Establish missing player appearance during the existing opening planning call, before the first render. Accepted openings save that same description for later movement. Authored descriptions and explicitly assigned character photos remain authoritative; imported scenes are not arbitrarily relabelled.
+- Replace the old identify/inspect/select instructions with a picture-based **Who are you playing?** recovery window. An unbound movement opens the choice directly, finds people automatically and continues after one selection. A short description also works without successful image recognition.
+- Recover blocked movement using the newly saved player configuration. Failed queue entries are replaced with a fresh request while later moves retain their order; uncertain submissions are not blindly retried.
+- Show **Continue my move** when an older failed turn already has a repaired player identity. Camera-only and first-person movement do not require selecting an on-screen person.
+- Preserve a saved ending image explicitly assigned as a character reference. It no longer disappears with temporary movement frames and leaves a broken image binding.
+- Changing the selected person clears the previous player match while preserving NPC matches, so two people cannot remain marked as you.
+- Validation targets opening identity persistence, picker interactions and queue recovery. The reported saved-game Right move was also rendered and visually reviewed at 0.2 MP, eight steps; no full-suite rerun or GPU benchmark was performed.
+
 ## 1.4.0 — Visible scenes and direct movement
 
 - Added an **In this frame** list of inspected people, doors and objects, distinguishing established identities from unidentified visual candidates. Selecting a target prepares inspect, talk or approach actions without automatically assigning possessions or inventing a name, lock state or hidden item.

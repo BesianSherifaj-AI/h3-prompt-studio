@@ -1,6 +1,14 @@
 # Scene selection and movement in Game
 
-Version 1.4.0 separates three things: the people and objects described in an inspected image, the identities and possessions accepted into the story, and the instructions for the next generated movement. A visible passerby is not automatically a named NPC, and a visible coin is not automatically in your inventory.
+The game separates the people and objects described in an inspected image, the identities and possessions accepted into the story, and the instructions for the next generated movement. A visible passerby is not automatically a named NPC, and a visible coin is not automatically in your inventory.
+
+## Your player starts with an identity
+
+From version 1.4.1, a new game's missing player appearance is established during its existing opening planning call, before H3 renders the first scene. The approved description belongs to the same player ID and is saved when that opening is accepted. Later moves reuse it. There is no extra identity-generation call. Your authored description or explicitly assigned character photos remain the basis for that appearance.
+
+For older games that never saved an appearance, pressing an arrow opens **Who are you playing?** with the current picture. The game finds people automatically; selecting a person saves your choice and continues the waiting move. **Describe my character instead** accepts a short description such as “the person in the orange jacket” even if recognition fails. Cancelling leaves the move unsent. **Change character** remains available as an explicit correction.
+
+An older movement that failed for missing identity is restarted against the repaired configuration with a fresh request. The old failed record stays in history; later queued moves keep their order. If the identity has already been repaired, **Continue my move** resumes directly. An uncertain submitted render is never treated as a missing-identity retry.
 
 ## Select something in the image
 
@@ -8,7 +16,7 @@ The **In this frame** panel lists inspected people, physical doors and useful ob
 
 For an older ending with only a prose description, choose **Inspect this ending**. This makes one vision request using the saved image. It does not render a video, accept a pending take or change inventory. People without identifying evidence keep descriptive labels such as “Person in green jacket.” The expected cast and a character's name alone are not enough to recognize a figure.
 
-To identify your player, select the correct person on the current accepted ending and choose **This is me**. The game saves that visible appearance with the selected frame. It will not bind your player to another established NPC. Stale selections and selections from an unaccepted ending must be refreshed or reviewed first. First-person camera movement does not require identifying an on-screen player body.
+You can also select a person on the current accepted ending and choose **This is me**. The game saves that appearance with the selected frame. It will not bind your player to another established NPC. Stale selections and selections from an unaccepted ending must be refreshed or reviewed first. First-person camera movement does not require identifying an on-screen player body.
 
 ## Use the arrows
 
@@ -28,7 +36,13 @@ A basic movement ends with **not inspected** status. Its earlier scene list is l
 
 For turns that use ending inspection, a reported continuity mismatch pauses progression for review. Pending-review candidates are visible in the panel but cannot become the next interaction until the ending is accepted. A still image cannot verify the complete movement, spoken words or continuous object conservation. H3 can still produce weak motion, identity drift or inconsistent scenery; review the actual clip before treating its appearance as established evidence.
 
-## Focused validation on 2026-09-09
+## Version 1.4.1 player recovery validation on 2026-09-09
+
+Focused checks cover opening appearance before rendering and persistence on acceptance, assigned portraits alongside background references, cancelled/failed openings, description fallback, stale selections, switching from person A to B, and recovery of a failed queued move without losing later actions. The built browser scenario exercises the real game components with isolated test responses; it does not claim live model accuracy.
+
+The reported saved game was separately repaired using its accepted opening description and visual comparison with the current ending. The user's assigned ending photo remained bound to the player. Resuming its one waiting Right move exposed a stopped ComfyUI service; after starting the installed runtime, retrying that saved move completed without a language-model call. Visual review showed the original player moving right while nearby figures stayed in place. The 608 × 320, eight-step, 73-frame clip took 29.986 seconds in ComfyUI and 31.30 seconds in the video job, excluding service startup and the browser queue. This is one recovery example, not a performance benchmark or a guarantee of every generated movement. Private game media is not published.
+
+## Version 1.4.0 movement validation on 2026-09-09
 
 The reported multi-person city ending was copied into private QA. An explicit scene scan and player selection preceded three actual 0.2-resolution, eight-step H3 renders, each about three seconds long. The live saved game and its pending take were not changed.
 

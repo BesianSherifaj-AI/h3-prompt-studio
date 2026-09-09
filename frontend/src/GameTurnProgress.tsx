@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { MoveQueue } from "./GameActionQueue";
 import { storyTurnLabel, type StoryTurn } from "./storyTypes";
+import { playerIdentityFailure } from "./gamePlayerRecovery";
 
 export function continuityReviewDetails(turn?: StoryTurn) {
   const observation = turn?.observation as { continuity_checks?: unknown } | undefined;
@@ -8,9 +9,15 @@ export function continuityReviewDetails(turn?: StoryTurn) {
     check && check.status === "mismatch" && typeof check.detail === "string" ? [check.detail] : []) : [];
 }
 
-export function GameTurnProgress({ turn, queue, now, onReview, children }: {
-  turn?: StoryTurn; queue: MoveQueue; now: number; onReview: () => void; children?: ReactNode;
+export function GameTurnProgress({ turn, queue, now, onReview, onChoosePlayer, playerIdentified, children }: {
+  turn?: StoryTurn; queue: MoveQueue; now: number; onReview: () => void; onChoosePlayer?: () => void; playerIdentified?: boolean; children?: ReactNode;
 }) {
+  const nextMove = queue.items[0] && ![turn?.id, turn?.request_id].includes(queue.items[0].id);
+  if (playerIdentityFailure(turn) && onChoosePlayer && !nextMove) return <section className="game-turn-feedback needs-review" aria-label="Current move progress" aria-live="polite">
+    <strong>{playerIdentified ? "Your character is ready" : "Choose your character to continue"}</strong>
+    <p>{playerIdentified ? "Your character has been saved. Continue the move that was waiting." : "Pick who you play in the picture. We’ll remember your choice and continue your move."}</p>
+    <button type="button" className="primary" onClick={onChoosePlayer}>{playerIdentified ? "Continue my move" : "Choose character & continue"}</button>
+  </section>;
   const review = !!turn && ["awaiting_review", "awaiting_acceptance", "inspection_failed"].includes(turn.status);
   const localMovement = turn?.planning_mode === "deterministic_movement";
   const navigation = turn?.navigation_move as { status?: string; return_run_id?: string } | undefined;

@@ -3,6 +3,8 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Compass, RefreshCw } from "l
 import { api } from "./api";
 import { storyTurnPending, type GameCharacter, type GameIntent, type Story, type StoryTurn } from "./storyTypes";
 import { GameScenePanel, type SceneCatalog, type SceneTarget } from "./GameScenePanel";
+import { GamePlayerPicker, playerPickerScope, type PlayerPickerRequest, type PlayerPickerScope } from "./GamePlayerPicker";
+export type { PlayerPickerRequest } from "./GamePlayerPicker";
 
 type AvailableAction = { kind: string; label?: string; message?: string; target_id?: string; enabled?: boolean; reason?: string };
 type ActionCatalog = { targets: { id: string; name: string; kind: string }[]; actions: AvailableAction[]; scene?: SceneCatalog };
@@ -42,10 +44,10 @@ export function gameActionMessage(action: AvailableAction, story: Story, recipie
   if (action.kind === "attack") return `I attempt to attack ${character?.name || "the selected target"}.`;
   return action.message || `I attempt to ${(action.label || action.kind).replace(/^./, letter => letter.toLowerCase())}.`;
 }
-export function needsPlayerIdentity(story: Story, scene?: SceneCatalog) {
-  const people = scene?.targets.filter(target => target.kind === "person") || [];
+export function needsPlayerIdentity(story: Story, _scene?: SceneCatalog) {
   const player = story.world?.characters.find(character => character.id === story.player_character_id);
-  return story.project?.game_viewpoint !== "pov" && people.length >= 2 && !player?.state?.visual_anchor && !people.some(person => person.known_id === story.player_character_id);
+  const appearance = player?.state?.visual_anchor || player?.description;
+  return story.project?.game_viewpoint !== "pov" && !(typeof appearance === "string" && appearance.trim());
 }
 
 export function GameWorldStatus({ story, catalog, target, disabled, onSelect, onAction }: {
@@ -69,12 +71,57 @@ export function GameWorldStatus({ story, catalog, target, disabled, onSelect, on
   </section>;
 }
 
-export function GameActions({ story, disabled, viewedRunId, onRefreshStory, onAction }: { story: Story; disabled: boolean; viewedRunId?: string; onRefreshStory?: () => Promise<unknown>; onAction: (message: string, intent: GameIntent) => void }) {
+type PickerState = { request: PlayerPickerRequest; external: boolean; scope: PlayerPickerScope | null; preparationError?: string; completed?: Story };
+export function GameActions({ story, disabled, viewedRunId, onRefreshStory, onBeforePlayerPicker, playerPickerRequest, onPlayerPickerHandled, onAction }: {
+  story: Story; disabled: boolean; viewedRunId?: string; onRefreshStory?: () => Promise<unknown>;
+  onBeforePlayerPicker?: () => Promise<unknown>; playerPickerRequest?: PlayerPickerRequest | null;
+  onPlayerPickerHandled?: (nonce: string, outcome: "chosen" | "cancelled", refreshedStory?: Story) => void;
+  onAction: (message: string, intent: GameIntent) => void;
+}) {
   const [target, setTarget] = useState(""), [savedCatalog, setCatalog] = useState<{ key: string; value: ActionCatalog } | null>(null), [error, setError] = useState("");
   const [recipient, setRecipient] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [sceneMutation, setSceneMutation] = useState<"bind" | "inspect" | "">("");
   const [sceneError, setSceneError] = useState("");
+  const [picker, setPicker] = useState<PickerState | null>(null);
+  const pickerRef = useRef<PickerState | null>(null), preparation = useRef(0), seenExternal = useRef("");
+  const preparePicker = async (request: PlayerPickerRequest, external: boolean, restart = false) => {
+    if (pickerRef.current && !restart) return;
+    const token = ++preparation.current;
+    const opening: PickerState = { request: structuredClone(request), external, scope: null };
+    pickerRef.current = opening; setPicker(opening);
+    try {
+      await onBeforePlayerPicker?.();
+      if (token !== preparation.current) return;
+      const refreshed = await onRefreshStory?.();
+      const fresh = refreshed && typeof refreshed === "object" && "id" in refreshed ? refreshed as Story : await api(`/stories/${encodeURIComponent(story.id)}`);
+      if (token !== preparation.current) return;
+      if (fresh.id !== story.id) throw new Error("The selected game changed. Close this window and try again in the current game.");
+      const next = { ...opening, scope: playerPickerScope(fresh) };
+      pickerRef.current = next; setPicker(next);
+    } catch (error) {
+      if (token === preparation.current) { const next = { ...opening, preparationError: (error as Error).message }; pickerRef.current = next; setPicker(next); }
+    }
+  };
+  const cancelPicker = () => {
+    const old = pickerRef.current; preparation.current++; pickerRef.current = null; setPicker(null);
+    if (old?.external) onPlayerPickerHandled?.(old.request.nonce, "cancelled");
+  };
+  useEffect(() => () => { preparation.current++; pickerRef.current = null; }, []);
+  useEffect(() => {
+    if (playerPickerRequest && seenExternal.current !== playerPickerRequest.nonce && !pickerRef.current) {
+      seenExternal.current = playerPickerRequest.nonce;
+      void preparePicker(playerPickerRequest, true);
+    }
+  }, [playerPickerRequest?.nonce, picker?.request.nonce]);
+  useEffect(() => {
+    const current = pickerRef.current;
+    if (!current?.scope || !current.completed || current.completed.id !== story.id || story.active_run_id !== current.scope.runId || story.active_branch_id !== current.scope.branchId || (story.configuration_revision || 0) < (current.completed.configuration_revision || 0) || needsPlayerIdentity(story)) return;
+    pickerRef.current = null; setPicker(null);
+    if (current.external) onPlayerPickerHandled?.(current.request.nonce, "chosen", story);
+    else if (current.request.message && current.request.intent) onAction(current.request.message, current.request.intent);
+    setRefreshVersion(value => value + 1);
+  }, [picker?.completed, story, onAction, onPlayerPickerHandled]);
   const sceneLock = useRef(false), sceneAttempt = useRef<{ key: string; body: Record<string, unknown> } | null>(null);
   const [extent, setExtent] = useState("step"), [speed, setSpeed] = useState("normal"), [presentation, setPresentation] = useState("continuous"), [mode, setMode] = useState("player");
   const latestTurn = story.turns.at(-1);
@@ -128,12 +175,6 @@ export function GameActions({ story, disabled, viewedRunId, onRefreshStory, onAc
     });
   };
   const go = (direction: string) => {
-    if (mode === "player" && needsPlayerIdentity(story, catalog?.scene)) {
-      setError(catalog?.scene?.status === "stale" ? "Inspect this ending, then select your character and choose This is me before moving." : "Select your character in the scene list and choose This is me before moving.");
-      const panel = document.getElementById(`game-visible-scene-${story.id}`);
-      panel?.focus({ preventScroll: true }); panel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      return;
-    }
     const destination = catalog?.targets.find(t => t.id === selectedTarget);
     if ((extent === "travel" || presentation === "teleport") && destination?.kind !== "location") {
       setError("Choose a connected location under Interact with before travelling or teleporting.");
@@ -146,14 +187,20 @@ export function GameActions({ story, disabled, viewedRunId, onRefreshStory, onAc
     }
     const motion = mode === "camera" ? `The camera moves ${direction}` : `I attempt to move ${direction}`;
     const amount = { step: "a small distance", nearby: "to a nearby point", travel: "toward the next location" }[extent];
+    const message = `${motion} ${amount}${destination ? ` toward ${destination.name}` : ""}, at ${speed} speed. ${presentation === "cut" ? "Show the travel using a cut." : presentation === "teleport" ? "Show a deliberate teleportation if the world's rules permit it." : "Show continuous movement."}`;
+    const intent: GameIntent = { kind: "move", target_id: selectedTarget || undefined, extent, speed, camera: mode, presentation, direction };
     setError("");
-    onAction(`${motion} ${amount}${destination ? ` toward ${destination.name}` : ""}, at ${speed} speed. ${presentation === "cut" ? "Show the travel using a cut." : presentation === "teleport" ? "Show a deliberate teleportation if the world's rules permit it." : "Show continuous movement."}`, { kind: "move", target_id: selectedTarget || undefined, extent, speed, camera: mode, presentation, direction });
+    if (mode === "player" && needsPlayerIdentity(story) && !selectedTarget && ["step", "nearby"].includes(extent) && presentation === "continuous") {
+      void preparePicker({ nonce: crypto.randomUUID(), message, intent }, false); return;
+    }
+    onAction(message, intent);
   };
   return <section className="game-context-actions" aria-label="Move and interact">
     <div className="game-navigation-core">
       <div className="game-direction-pad"><strong><Compass size={16}/> Move</strong>
         <div className="game-arrows" aria-label="Movement directions"><button type="button" disabled={disabled} aria-label="Move forward" onClick={() => go("forward")}><ArrowUp/></button><button type="button" disabled={disabled} aria-label="Move left" onClick={() => go("left")}><ArrowLeft/></button><button type="button" disabled={disabled} aria-label="Move backward" onClick={() => go("backward")}><ArrowDown/></button><button type="button" disabled={disabled} aria-label="Move right" onClick={() => go("right")}><ArrowRight/></button></div>
         <small>One click queues one scene · edit within 3s</small>
+        <button type="button" className="game-picker-launch" disabled={disabled || !!picker} onClick={() => void preparePicker({ nonce: crypto.randomUUID() }, false)}>{needsPlayerIdentity(story) ? "Choose character" : "Change character"}</button>
       </div>
       <div className="game-interaction-target">
         <label>Interact with<select value={selectedTarget} onChange={e => chooseTarget(e.target.value)}><option value="">Current scene</option>{(catalog?.targets || []).map(t => <option key={t.id} value={t.id}>{t.name} · {t.kind}</option>)}</select></label>
@@ -170,6 +217,7 @@ export function GameActions({ story, disabled, viewedRunId, onRefreshStory, onAc
       <div className="game-movement-settings"><label>Move<select value={mode} onChange={e => setMode(e.target.value)}><option value="player">My character</option><option value="camera">Camera only</option></select></label><label>Distance<select value={extent} onChange={e => setExtent(e.target.value)}><option value="step">A step</option><option value="nearby">Nearby</option><option value="travel">Travel</option></select></label><label>Motion speed<select value={speed} onChange={e => setSpeed(e.target.value)}><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select></label><label>Show movement<select value={presentation} onChange={e => setPresentation(e.target.value)}><option value="continuous">Continuous</option><option value="cut">Cut</option><option value="teleport">Teleportation</option></select></label></div>
       <p className="game-help">Movement guides the generated scene. It is not a measured 3D simulation.</p>
     </details>
+    {picker && <GamePlayerPicker key={`${picker.request.nonce}:${picker.scope?.revision ?? "preparing"}`} story={story} request={picker.request} scope={picker.scope} preparationError={picker.preparationError} onCancel={cancelPicker} onRestart={() => void preparePicker(picker.request, picker.external, true)} onRefreshStory={onRefreshStory} onChosen={updated => { const current = pickerRef.current; if (current?.request.nonce === picker.request.nonce) { const next = { ...current, completed: updated }; pickerRef.current = next; setPicker(next); } }}/>}
   </section>;
 }
 

@@ -7,14 +7,16 @@ import { createRequire } from 'node:module';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(root, 'frontend/package.json'));
 const { chromium, expect } = require('@playwright/test');
-const sceneRecovery = process.argv.includes('--scene-recovery');
+const playerPicker = process.argv.includes('--player-picker');
+const playerPickerRecovery = process.argv.includes('--player-picker-recovery');
+const sceneRecovery = process.argv.includes('--scene-recovery') || playerPicker || playerPickerRecovery;
 const project = { schema_version: 1, id: 'smoke-project', title: 'Pixel street', mode: 't2va', duration: 3,
   aspect_ratio: '16:9', profile: 'director', authoring_mode: 'assisted', story: { text: 'I am on a pixel art city street.', locked: false },
   style: {}, assets: [], subjects: [{ id: 'player', name: 'Alex', description: 'Pixel adventurer', asset_ids: [] }],
   shots: [{ id: 'shot', duration: 3, action: '', setting: '', camera: {}, performance: '', final_state: '', visible_subject_ids: [], offscreen_subject_ids: [], dialogue: [], sound: '', transition: '' }],
   soundscape: '', music: '', custom_instructions: '', comfy_render: { experimental_preview: true, resolution: '0.2', steps: 8 } };
 const person = (id, name, state = {}) => ({ id, name, state, control: id === 'player' ? 'player' : 'npc', location_id: 'street',
-  description: '', personality: '', goals: [], speaking_style: '', private_knowledge: [], relationships: {}, asset_ids: [], witnessed_events: [] });
+  description: id === 'player' ? 'Pixel adventurer' : '', personality: '', goals: [], speaking_style: '', private_knowledge: [], relationships: {}, asset_ids: [], witnessed_events: [] });
 const entity = (id, name, fields = {}) => ({ id, name, kind: 'object', asset_ids: [], affordances: [], state: {}, location_id: 'street', owner_id: null, holder_id: null, worn_by_id: null, ...fields });
 const story = { id: '11111111-1111-4111-8111-111111111111', title: 'Pixel street', project_id: project.id, project,
   mode: 'game', premise: project.story.text, player_name: 'Alex', player_character_id: 'player', active_branch_id: 'main',
@@ -24,19 +26,26 @@ const story = { id: '11111111-1111-4111-8111-111111111111', title: 'Pixel street
     locations: [{ id: 'street', name: 'Lantern Street', description: '', exits: [{ target_id: 'alley' }], asset_ids: [] }, { id: 'alley', name: 'Alley', description: '', exits: ['street'], asset_ids: [] }],
     characters: [person('player', 'Alex'), person('mara', 'Mara'), person('guard', 'Fallen guard', { defeated: true }), { ...person('remote', 'Remote NPC'), location_id: 'alley' }],
     entities: [entity('key', 'Brass key', { holder_id: 'player' }), entity('coat', 'Blue coat', { worn_by_id: 'player' }), entity('coin', 'Silver coin'), entity('door', 'Oak door', { kind: 'door' })] } };
-const requests = [], errors = [];
+const requests = [], errors = [], mutationPaths = [];
 let loseAcknowledgement = false;
 let generatorChecks = 0, generatorOffline = true;
 const sceneRequests = [];
 let sceneInspected = false, sceneInspectionStatus = '', sceneInspectionReads = 0;
+let failSceneScan = false;
 const sceneVideo = id => ({ id, project_id: project.id, status: 'succeeded', video_url: `/api/mock-video/${id}`, scene_video_url: `/api/mock-video/${id}/scene`, ending_image_url: `/api/mock-ending/${id}`, duration: 3, width: 608, height: 320 });
 if (sceneRecovery) {
   story.active_run_id = 'scene-old'; story.clips = [sceneVideo('scene-old')]; story.jobs = [...story.clips];
   story.turns = [{ id: 'opening', request_id: 'opening', status: 'succeeded', run_id: 'scene-old', message: 'Start on the street.', created_at: 1, video: story.clips[0], observation: { observed_state: 'People and shops line a pixel street.' } }];
-  story.world = { ...story.world, current_location_id: null, locations: [], characters: [{ ...person('player', 'Alex'), location_id: null }], entities: [] };
+  story.world = { ...story.world, current_location_id: null, locations: [], characters: [{ ...person('player', 'Alex'), description: '', location_id: null }], entities: [] };
 }
+const failedMove = { id: 'legacy-failed', request_id: 'legacy-request', status: 'failed', branch_id: 'main', parent_run_id: 'scene-old', created_at: 2,
+  message: 'I attempt to move forward a small distance, at slow speed. Show continuous movement.',
+  intent: { kind: 'move', direction: 'forward', extent: 'step', speed: 'slow', camera: 'player', presentation: 'continuous' },
+  error: 'Identify your character first before moving.' };
+const laterMove = { id: 'later-queued', message: 'Then I look left.', intent: { kind: 'look' }, readyAt: 0, submitted: false };
+if (playerPickerRecovery) story.turns.push(failedMove);
 function sceneCatalog() {
-  if (sceneInspectionStatus === 'running' && ++sceneInspectionReads > 1) { sceneInspectionStatus = 'succeeded'; sceneInspected = true; }
+  if (sceneInspectionStatus === 'running' && ++sceneInspectionReads > 1) { sceneInspectionStatus = failSceneScan ? 'failed' : 'succeeded'; sceneInspected = !failSceneScan; }
   const pending = story.turns.at(-1)?.status === 'awaiting_acceptance';
   const stale = story.turns.at(-1)?.observation?.inspection_status === 'not_run';
   const run = pending ? story.turns.at(-1).run_id : story.active_run_id;
@@ -84,8 +93,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1360, height: 980 } });
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(id => { localStorage.setItem('h3-game:selected-story', id); localStorage.setItem('h3-workspace-mode', 'game'); }, story.id);
+  if (playerPickerRecovery) await page.addInitScript(({ id, first, later }) => localStorage.setItem(`h3-game:move-queue:${id}`, JSON.stringify({ branch: 'main', paused: true, error: 'Old move failed.', items: [{ id: first.request_id, message: first.message, intent: first.intent, readyAt: 0, submitted: true }, later] })), { id: story.id, first: failedMove, later: laterMove });
   await page.route('**/api/**', async route => {
     const request = route.request(), pathname = new URL(request.url()).pathname.replace(/^\/api/, '');
+    if (!['GET', 'HEAD'].includes(request.method())) mutationPaths.push(pathname);
     const json = value => route.fulfill({ json: structuredClone(value) });
     if (pathname === '/bootstrap') return json({ token: 'a'.repeat(43), project, projects: [], settings: { model: 'test', persona: 'universal' }, personas: [] });
     if (pathname === '/stories') return json({ stories: [story] });
@@ -99,12 +110,14 @@ try {
     }
     if (pathname.endsWith('/actions')) return json(catalog());
     if (sceneRecovery && pathname.endsWith('/scene-inspection') && request.method() === 'POST') {
-      sceneRequests.push({ path: pathname, body: request.postDataJSON() }); sceneInspectionStatus = 'running';
+      sceneRequests.push({ path: pathname, body: request.postDataJSON() }); sceneInspectionStatus = 'running'; sceneInspectionReads = 0;
       return json({ status: 'pending', request_id: request.postDataJSON().request_id });
     }
     if (sceneRecovery && pathname.endsWith('/scene-player') && request.method() === 'POST') {
       sceneRequests.push({ path: pathname, body: request.postDataJSON() });
-      story.world.characters[0].description = 'Purple shirt and glasses'; story.configuration_revision++;
+      story.world.characters[0].description = request.postDataJSON().appearance || 'Purple shirt and glasses';
+      story.world.characters[0].state.visual_anchor = story.world.characters[0].description;
+      story.configuration_revision++;
       return json(story);
     }
     if (sceneRecovery && pathname.endsWith('/accept-visible') && request.method() === 'POST') {
@@ -140,7 +153,77 @@ try {
     return json({});
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/?game=${story.id}`);
-  if (sceneRecovery) {
+  if (playerPickerRecovery) {
+    const dialog = page.getByRole('dialog', { name: 'Who are you playing?' });
+    await page.getByRole('button', { name: 'Choose character & continue', exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /Person in purple/ })).toBeVisible();
+    expect(requests).toHaveLength(0);
+    // The actual modal must sit above sticky tabs and suggestion cards.
+    expect(await dialog.evaluate(element => { const box = element.getBoundingClientRect(); return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + 160)); })).toBe(true);
+    await mkdir(path.join(root, 'test-results'), { recursive: true });
+    await page.screenshot({ path: path.join(root, 'test-results/frontend-player-picker-recovery.png'), fullPage: false });
+    await dialog.getByRole('button', { name: /Person in purple/ }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]).toMatchObject({ message: failedMove.message, intent: failedMove.intent, configuration_revision: 2, expected_parent: 'scene-old' });
+    expect(requests[0].request_id).not.toBe(failedMove.request_id);
+    const queue = await page.evaluate(id => JSON.parse(localStorage.getItem(`h3-game:move-queue:${id}`)), story.id);
+    expect(queue.items.map(item => item.id)).toEqual([requests[0].request_id, laterMove.id]);
+    expect(queue.items[1]).toEqual(laterMove);
+    expect(queue.items[0].recoverySourceId).toBe(failedMove.request_id);
+    expect(mutationPaths.some(value => value.includes('/retry'))).toBe(false);
+    await expect(page.getByRole('button', { name: 'Change character', exact: true })).toBeVisible();
+    expect(sceneRequests.filter(item => item.path.endsWith('/scene-player'))).toHaveLength(1);
+    expect(errors).toEqual([]);
+    console.log(JSON.stringify({ passed: true, scenario: 'player-picker-legacy-recovery', freshRequest: true, freshRevision: 2, originalMovePreserved: true, laterQueueEntryPreserved: true, oldRetryEndpointCalled: false, modalAboveStickyControls: true, pageErrors: errors, screenshot: 'test-results/frontend-player-picker-recovery.png' }, null, 2));
+  } else if (playerPicker) {
+    const dialog = page.getByRole('dialog', { name: 'Who are you playing?' });
+    await page.getByRole('button', { name: 'Choose character', exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('img')).toHaveAttribute('src', '/api/mock-ending/scene-old');
+    await expect.poll(() => sceneRequests.filter(item => item.path.endsWith('/scene-inspection')).length).toBe(1);
+    await dialog.getByRole('button', { name: 'Cancel character selection', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.waitForTimeout(3200); expect(requests).toHaveLength(0);
+    await page.getByText('Movement options', { exact: false }).click();
+    await page.getByRole('combobox', { name: 'Distance', exact: true }).selectOption('nearby');
+    await page.getByRole('combobox', { name: 'Motion speed', exact: true }).selectOption('slow');
+    await page.getByRole('button', { name: 'Move forward', exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Choose once. Your move continues after you pick.');
+    await expect(dialog.getByRole('button', { name: /Person in purple/ })).toBeVisible();
+    expect(requests).toHaveLength(0);
+    await dialog.getByRole('button', { name: /Person in purple/ }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0].intent).toMatchObject({ direction: 'forward', extent: 'nearby', speed: 'slow', camera: 'player', presentation: 'continuous' });
+    expect(requests[0].configuration_revision).toBe(2);
+    expect(sceneRequests.filter(item => item.path.endsWith('/scene-player'))).toHaveLength(1);
+    expect(sceneRequests.filter(item => item.path.endsWith('/scene-inspection'))).toHaveLength(1);
+    // A separate unbound saved game exercises the always-available manual path.
+    story.turns = [story.turns[0]]; story.world.characters[0].description = ''; story.world.characters[0].state = {};
+    story.configuration_revision++; sceneInspected = false; sceneInspectionStatus = ''; failSceneScan = true;
+    await page.evaluate(id => { for (const key of Object.keys(localStorage)) if (key.startsWith('h3-game:move-queue:') || key.startsWith('h3-game:configuration:')) localStorage.removeItem(key); }, story.id);
+    await page.reload();
+    await page.getByRole('button', { name: 'Move left', exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Describe my character instead', exact: true }).click();
+    await dialog.getByRole('textbox', { name: 'What does your character look like?', exact: true }).fill('The person on the right in the orange hat.');
+    await mkdir(path.join(root, 'test-results'), { recursive: true });
+    await page.screenshot({ path: path.join(root, 'test-results/frontend-player-picker-smoke.png'), fullPage: false });
+    await dialog.getByRole('button', { name: 'Use this character and continue', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => requests.length).toBe(2);
+    const manualBody = sceneRequests.filter(item => item.path.endsWith('/scene-player')).at(-1).body;
+    expect(manualBody.appearance).toBe('The person on the right in the orange hat.');
+    expect(manualBody).not.toHaveProperty('candidate_id');
+    expect(requests[1].intent.direction).toBe('left');
+    expect(requests[1].configuration_revision).toBe(4);
+    expect(new Set(requests.map(body => body.request_id)).size).toBe(2);
+    expect(errors).toEqual([]);
+    console.log(JSON.stringify({ passed: true, scenario: 'player-picker', cancelledMoveSent: false, singleChoiceContinuesOnce: true, originalOptionsPreserved: true, manualAppearanceWithoutCandidate: true, sceneRequests: sceneRequests.map(item => item.path.split('/').at(-1)), movementRequests: requests.map(body => body.intent.direction), pageErrors: errors, screenshot: 'test-results/frontend-player-picker-smoke.png' }, null, 2));
+  } else if (sceneRecovery) {
     const scenePanel = page.getByRole('region', { name: 'Visible scene' });
     const progress = page.getByRole('region', { name: 'Current move progress' });
     await expect(scenePanel).toContainText('no saved selectable people or objects yet');
@@ -153,7 +236,8 @@ try {
     await expect(scenePanel.getByRole('button', { name: /Person in purple/ })).toBeVisible();
     expect(requests.length).toBe(0);
     await page.getByRole('button', { name: 'Move forward', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Move and interact' })).toContainText('Select your character in the scene list and choose This is me before moving.');
+    await expect(page.getByRole('dialog', { name: 'Who are you playing?' })).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel this move', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Scene queue' })).toContainText('Scene queue · 0');
     expect(requests.length).toBe(0);
     await scenePanel.getByRole('button', { name: /Person in purple/ }).click();

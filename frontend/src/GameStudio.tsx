@@ -57,6 +57,7 @@ import GameEditor from "./GameEditor";
 import MotionLab from "./MotionLab";
 import { GameSoundtrack, GameVoiceInput } from "./GameAudio";
 import { focusGameInventory, GameActions, GameReceipt, GameStages, isInventoryCommand } from "./GameControls";
+import { movementNeedsPlayerChoice, playerIdentityFailure } from "./gamePlayerRecovery";
 import { blankGameProject, configurationFromStory, emptyWorld, ensurePlayer, prepareGameConfiguration } from "./gameConfiguration";
 import { api } from "./api";
 import type { GameGuide, GameIntent, StoryConfiguration } from "./storyTypes";
@@ -554,6 +555,10 @@ export default function GameStudio({
     actionLock = useRef(false);
   const lastTurn = story?.turns?.at(-1),
     activeTurn = [...(story?.turns || [])].reverse().find(storyTurnPending);
+  const [playerPickerRequest, setPlayerPickerRequest] = useState<{
+    nonce: string; storyId: string; message: string; intent?: GameIntent; sourceId: string; failedTurnId?: string;
+  } | null>(null);
+  useEffect(() => setPlayerPickerRequest(null), [story?.id, story?.active_branch_id]);
   const busy =
     submitting ||
     !!pendingTicket ||
@@ -760,9 +765,14 @@ export default function GameStudio({
       }
     });
   };
-  const moveQueue = useGameActionQueue(story, busy, async move => {
+  const moveQueue = useGameActionQueue(story, busy || !!playerPickerRequest, async move => {
       try { await saveConfiguration(); }
       catch (error) { throw Object.assign(error as Error, { notSubmitted: true }); }
+      const current = editorDirty ? await session.refresh() : story;
+      if (current && movementNeedsPlayerChoice(current, move.intent)) {
+        setPlayerPickerRequest({ nonce: crypto.randomUUID(), storyId: current.id, message: move.message, intent: move.intent, sourceId: move.id });
+        throw Object.assign(new Error("Choose your character in the picture to continue this move."), { notSubmitted: true });
+      }
       const result = await session.sendTurn(move.message, config.settings.duration || 5, undefined, story?.id, move.intent, move.id);
       setPreview(null);
       setPlayingFilm(false);
@@ -778,9 +788,35 @@ export default function GameStudio({
       changeMessage("");
       return;
     }
-    if (moveQueue.enqueue(text, intent)) {
+    const blocked = playerIdentityFailure(lastTurn) && story?.active_run_id === lastTurn?.parent_run_id &&
+      (!moveQueue.queue.items.length || [lastTurn?.id, lastTurn?.request_id].includes(moveQueue.queue.items[0].id));
+    const queued = blocked && lastTurn ? moveQueue.retryCurrent({ sourceId: lastTurn.request_id || lastTurn.id,
+      failedTurnId: lastTurn.id, message: text, intent, blockedStage: "player-selection" }) : moveQueue.enqueue(text, intent);
+    if (queued) {
       changeMessage("");
       moveFeedback.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  };
+  const choosePlayerForTurn = (turn: StoryTurn) => {
+    if (!story || !playerIdentityFailure(turn)) return;
+    setPlayView("play");
+    if (!movementNeedsPlayerChoice(story, turn.intent as GameIntent | undefined)) {
+      moveQueue.retryCurrent({ sourceId: turn.request_id || turn.id, failedTurnId: turn.id,
+        message: turn.message, intent: turn.intent as GameIntent | undefined, blockedStage: "player-selection" });
+      return;
+    }
+    setPlayerPickerRequest({ nonce: crypto.randomUUID(), storyId: story.id, message: turn.message,
+      intent: turn.intent as GameIntent | undefined, sourceId: turn.request_id || turn.id, failedTurnId: turn.id });
+  };
+  const finishPlayerPicker = (nonce: string, outcome: "chosen" | "cancelled") => {
+    const request = playerPickerRequest;
+    if (!request || request.nonce !== nonce) return;
+    setPlayerPickerRequest(null);
+    if (outcome === "chosen" && request.storyId === story?.id) {
+      if (moveQueue.retryCurrent({ ...request, blockedStage: "player-selection" })) {
+        setLocalError(""); setPreview(null); setPlayingFilm(false);
+        moveFeedback.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     }
   };
   const takeAction = (
@@ -1448,7 +1484,7 @@ export default function GameStudio({
                 </span>
               </div>
               <div ref={moveFeedback} className="game-feedback-anchor" hidden={playView !== "play"}>
-                <GameTurnProgress turn={activeTurn || lastTurn} queue={moveQueue.queue} now={moveQueue.now} onReview={() => setPlayView("history")}>
+                <GameTurnProgress turn={activeTurn || lastTurn} queue={moveQueue.queue} now={moveQueue.now} onReview={() => setPlayView("history")} onChoosePlayer={lastTurn && playerIdentityFailure(lastTurn) ? () => choosePlayerForTurn(lastTurn) : undefined} playerIdentified={!movementNeedsPlayerChoice(story, lastTurn?.intent as GameIntent | undefined)}>
                   {activeTurn && ["awaiting_acceptance", "inspection_failed"].includes(activeTurn.status) && <>
                     <button type="button" disabled={submitting || !!pendingTicket} onClick={() => takeAction(activeTurn, "retry-inspection")}>Retry ending inspection</button>
                     <button type="button" disabled={submitting || !!pendingTicket} onClick={() => takeAction(activeTurn, "accept-intended")}>Use intended story</button>
@@ -1493,7 +1529,8 @@ export default function GameStudio({
                   </div>
                 )}
               </div>
-              <GameActions key={story.id} story={story} viewedRunId={selectedVideo?.id} disabled={false} onRefreshStory={() => session.refresh()} onAction={send}/>
+              <GameActions key={story.id} story={story} viewedRunId={selectedVideo?.id} disabled={false} onRefreshStory={() => session.refresh()} onAction={send}
+                playerPickerRequest={playerPickerRequest || undefined} onPlayerPickerHandled={finishPlayerPicker} onBeforePlayerPicker={saveConfiguration}/>
               </div>
               {selectedVideo?.video_url && <div className="game-current-video-actions"><span>{activeTurn?.run_id === selectedVideo.id ? "New result" : preview || playingFilm ? "Selected take" : "Accepted ending"} · replay to watch the movement</span><button type="button" onClick={() => { const video = playerVideo.current; if (video) { video.currentTime = 0; void video.play().catch(error => setLocalError(`Playback could not start: ${error.message}`)); } }}><Play size={15}/> Replay this scene</button></div>}
             <form
@@ -1545,7 +1582,7 @@ export default function GameStudio({
               </p>
             </form>
               <GameActionQueue controls={moveQueue} busy={busy} story={story} onCheck={() => void perform(() => session.resumePending())}/>
-              {lastTurn && ["failed", "uncertain", "awaiting_assistant"].includes(lastTurn.status) && <div className="game-attention-link" role="status"><span>{lastTurn.error || storyTurnLabel(lastTurn)}</span><div className="game-attention-actions">{lastTurn.status === "failed" && !lastTurn.plan && !lastTurn.run_id && <button className="primary" disabled={submitting || !!pendingTicket} onClick={() => takeAction(lastTurn, "retry")}><RefreshCw size={15}/> Retry AI response</button>}<button className="quiet" onClick={() => setPlayView("history")}>Review details</button></div></div>}
+              {lastTurn && !playerIdentityFailure(lastTurn) && ["failed", "uncertain", "awaiting_assistant"].includes(lastTurn.status) && <div className="game-attention-link" role="status"><span>{lastTurn.error || storyTurnLabel(lastTurn)}</span><div className="game-attention-actions">{lastTurn.status === "failed" && !lastTurn.plan && !lastTurn.run_id && <button className="primary" disabled={submitting || !!pendingTicket} onClick={() => takeAction(lastTurn, "retry")}><RefreshCw size={15}/> Retry AI response</button>}<button className="quiet" onClick={() => setPlayView("history")}>Review details</button></div></div>}
               {selectedVideo && (
                 <div className="game-player-meta">
                   <span>
@@ -1863,9 +1900,9 @@ export default function GameStudio({
                           <>
                             <button
                               disabled={submitting || !!pendingTicket}
-                              onClick={() => takeAction(turn, "retry")}
+                              onClick={() => playerIdentityFailure(turn) ? choosePlayerForTurn(turn) : takeAction(turn, "retry")}
                             >
-                              <RefreshCw size={13} /> {turn.run_id ? "Check saved render" : turn.plan ? "Resume saved turn" : "Retry AI response"}
+                              <RefreshCw size={13} /> {playerIdentityFailure(turn) ? "Choose character & continue" : turn.run_id ? "Check saved render" : turn.plan ? "Resume saved turn" : "Retry AI response"}
                             </button>
                             <button
                               className="quiet"

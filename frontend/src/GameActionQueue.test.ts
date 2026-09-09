@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { queueAfterFailure, queueDecision, restoreMoveQueue, type MoveQueue } from "./GameActionQueue";
+import { queueAfterFailure, queueAfterRecovery, queueDecision, restoreMoveQueue, type MoveQueue, type QueueRecovery } from "./GameActionQueue";
 import type { Story } from "./storyTypes";
 const story = { active_branch_id: "branch", turns: [] } as unknown as Story;
 const queue = (): MoveQueue => ({ branch: "branch", paused: false, error: "", items: [
@@ -60,5 +60,89 @@ describe("separate scene queue", () => {
     expect(queueDecision({ ...recovered, paused: false }, story, false, 9000)).toBe("send");
     const cleared = { ...q, items: [] };
     expect(queueAfterFailure(cleared, "first", { message: "Late failure" })).toBe(cleared);
+  });
+});
+
+describe("explicit player-selection recovery", () => {
+  const recovery: QueueRecovery = { sourceId: "first", failedTurnId: "failed-turn", blockedStage: "player-selection",
+    message: "Move forward as the selected person.", intent: { kind: "move", direction: "forward" } };
+  const failedStory = (extra: Record<string, unknown> = {}) => ({ ...story,
+    turns: [{ id: "failed-turn", request_id: "first", status: "failed", ...extra }] }) as Story;
+
+  it("replaces the failed head with a fresh request and preserves every later move in order", () => {
+    const q = queue(); q.items[0].submitted = true; q.paused = true; q.error = "Identify your player.";
+    const before = structuredClone(q);
+    const next = queueAfterRecovery(q, failedStory(), recovery, 1000, "replacement")!;
+    expect(next.items).toHaveLength(2);
+    expect(next.items[0]).toEqual({ id: "replacement", message: recovery.message, intent: recovery.intent,
+      readyAt: 4000, submitted: false, recoverySourceId: "first" });
+    expect(next.items[1]).toEqual(q.items[1]);
+    expect(next.paused).toBe(false);
+    expect(next.error).toBe("");
+    expect(q).toEqual(before);
+    expect(queueDecision(next, failedStory(), false, 3999)).toBe("idle");
+    expect(queueDecision(next, failedStory(), false, 4000)).toBe("send");
+    expect(queueDecision(next, failedStory(), true, 9000)).toBe("idle");
+  });
+
+  it("prepends a missing failed move ahead of later queued entries without duplicating recovery", () => {
+    const q = queue(); q.items.shift();
+    const next = queueAfterRecovery(q, failedStory(), recovery, 10, "replacement")!;
+    expect(next.items.map(item => item.id)).toEqual(["replacement", "second"]);
+    expect(queueAfterRecovery(next, failedStory(), recovery, 20, "duplicate")).toBeNull();
+    const restored = restoreMoveQueue(JSON.stringify(next));
+    expect(restored.items[0].recoverySourceId).toBe("first");
+    expect(restored.paused).toBe(true);
+    expect(queueAfterRecovery(restored, failedStory(), recovery, 30, "after-refresh")).toBeNull();
+  });
+
+  it("recovers an unsent preflight head without requiring a fabricated server turn", () => {
+    const q = queueAfterFailure(queue(), "first", { notSubmitted: true, message: "Pick the player." });
+    const next = queueAfterRecovery(q, story, { ...recovery, failedTurnId: undefined }, 500, "new-preflight")!;
+    expect(next.items.map(item => item.id)).toEqual(["new-preflight", "second"]);
+    expect(next.items[0].submitted).toBe(false);
+    expect(next.paused).toBe(false);
+    expect(queueAfterRecovery(next, story, { ...recovery, failedTurnId: undefined }, 600, "duplicate")).toBeNull();
+  });
+
+  it.each(["planning", "rendering", "uncertain", "inspection_failed", "awaiting_acceptance", "succeeded", "cancelled"])(
+    "does not replace a submitted %s turn", status => {
+      const q = queue(); q.items[0].submitted = true;
+      expect(queueAfterRecovery(q, failedStory({ status }), recovery, 0, "replacement")).toBeNull();
+    });
+
+  it("never treats an unacknowledged submitted request as an unsent preflight", () => {
+    const q = queue(); q.items[0].submitted = true;
+    expect(queueAfterRecovery(q, story, { ...recovery, failedTurnId: undefined }, 0, "replacement")).toBeNull();
+    expect(queueAfterRecovery(q, story, recovery, 0, "replacement")).toBeNull();
+    q.items[0].submitted = false;
+    expect(queueAfterRecovery(q, failedStory(), { ...recovery, failedTurnId: undefined }, 0, "replacement")).toBeNull();
+  });
+
+  it.each([{ run_id: "video" }, { video: { id: "video" } }, { project_id: "render-project" },
+    { asset_jobs: ["image-job"] }, { created_assets: [{ id: "image" }] }])("does not replace a failed turn with saved child work: %j", extra => {
+      expect(queueAfterRecovery(queue(), failedStory(extra), recovery, 0, "replacement")).toBeNull();
+    });
+
+  it("requires the exact failed request and current branch, and never skips an unresolved head", () => {
+    expect(queueAfterRecovery(queue(), failedStory({ request_id: "other" }), recovery, 0, "replacement")).toBeNull();
+    expect(queueAfterRecovery({ ...queue(), branch: "other" }, failedStory(), recovery, 0, "replacement")).toBeNull();
+    expect(queueAfterRecovery(queue(), failedStory({ branch_id: "other" }), recovery, 0, "replacement")).toBeNull();
+    const q = queue(); q.items.shift(); q.items[0].submitted = true;
+    expect(queueAfterRecovery(q, failedStory(), recovery, 0, "replacement")).toBeNull();
+  });
+
+  it("keeps the 12-move limit while allowing replacement of an existing head", () => {
+    const q = queue();
+    for (let i = 2; i < 12; i++) q.items.push({ id: `later-${i}`, message: "Wait", readyAt: 3000, submitted: false });
+    expect(queueAfterRecovery(q, failedStory(), recovery, 0, "replacement")?.items).toHaveLength(12);
+    q.items[0].id = "different-queued-move";
+    expect(queueAfterRecovery(q, failedStory(), recovery, 0, "replacement")).toBeNull();
+  });
+
+  it("does not reuse old request IDs, duplicate another move, or dispatch empty edited text", () => {
+    expect(queueAfterRecovery(queue(), failedStory(), recovery, 0, "first")).toBeNull();
+    expect(queueAfterRecovery(queue(), failedStory(), recovery, 0, "second")).toBeNull();
+    expect(queueAfterRecovery(queue(), failedStory(), { ...recovery, message: " " }, 0, "replacement")).toBeNull();
   });
 });

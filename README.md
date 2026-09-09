@@ -2,7 +2,7 @@
 
 A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
 
-Version **1.4.0** adds selectable people and objects from the ending image, explicit **This is me** player identification, and basic movement arrows that prepare a video without loading or calling the language model. Movement starts from the current frame; compatible saved destinations can supply a return frame. Game preserves accepted world state, while Studio retains direct scene controls. LM Studio handles requested vision and creative writing; ComfyUI still generates the video.
+Version **1.4.1** establishes your player's appearance before the first scene and remembers it during play. Older games with an unidentified player get a simple picture-based choice when you press Move; picking a person continues that move. Basic arrows prepare movement without language-model inference, starting from the current saved frame and using compatible saved destinations for returns. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
 
 **[Game scene and movement guide](docs/GAME_SCENE_MOVEMENT.md)** · **[Scene continuity](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
 
@@ -29,7 +29,7 @@ The showreel combines clearly labeled captures of the working app with real gene
 - Generate a fresh video or **Try another take** from an existing take's exact prompt and settings.
 - **Continue from this ending** uses the active story endpoint, its saved motion, actual final frame and completed history. Browsing an older take does not move that endpoint; choose **Branch from this preview** to start another path.
 - In Game, write a move or choose one of three suggested player actions. The assistant writes the other characters' actions and speaker-bound dialogue. Responses render automatically by default; optional review lets you edit them first.
-- Select an inspected person, door or object beside the video. Identify your player with **This is me**, inspect a target, approach it or talk to a visible person. Basic arrows use direct movement instructions; old scene positions are labelled until you request a fresh inspection.
+- Select an inspected person, door or object beside the video, then approach it or talk. New games remember the player from their opening; **Change character** offers an explicit correction. Basic arrows use direct movement instructions; old scene positions are labelled until you request a fresh inspection.
 - Generate needed character, outfit, prop or location references with an installed Z-Image-Turbo model. Existing identities and reference tags are reused; new visual elements use an explicit scene cut.
 - Switch between the latest scene and the whole accepted story. Sequential playback needs no ComfyUI join job. Save the active branch as one film; compatible legacy continuation chains can still use **Combine clips**.
 - Use named takes, favorites, side-by-side comparison, saved setups, and portable project ZIPs with references.
@@ -72,7 +72,7 @@ The 0.3 MP preset is 736 × 416 in landscape. Quick drafts use a compatible four
 1. Open **Game**, enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. **Create extra reference images** is off by default; enable it when you want the assistant to request separate reference images. That option requires an available image generator and adds a generation step. Existing references remain usable with it off.
 2. New games default to **2D pixel art / 0.2 MP / three seconds / eight steps**. Landscape is 608 × 320; a fresh clip has 73 frames (3.04 seconds). Change style, quality, duration and viewpoint freely in the editor. Existing games retain their saved settings. Turn on **Review before rendering** to inspect the response before rendering.
 3. Write a move such as `I look at the note and ask what it means.` Put exact spoken words in double quotes, for example `I say "Who sent this?"`. A response that changes quoted player speech is rejected before rendering.
-4. Use **In this frame** to select inspected people and objects. On older endings, **Inspect this ending** scans the saved image without rendering another clip. An unidentified person stays unidentified until enough evidence or your explicit **This is me** selection establishes the player. Visible objects are separate from saved inventory.
+4. Your player is established during the opening and remembered. If an older game has no saved player appearance, pressing Move opens **Who are you playing?** with the current picture and automatically finds people. Pick one to continue, or describe your character instead. **In this frame** provides other visible targets; visible objects are separate from saved inventory.
 5. Basic directional arrows prepare movement directly from an accepted ending without a language-model call. Other item actions, dialogue, combat and situations governed by custom rules retain their appropriate planning path. Creative endings are inspected; basic movement endings are marked **not inspected**, with earlier positions shown as stale. Review the footage and refresh the scene inventory when needed.
 6. Watch **Latest scene** or **Whole story**, and save the active branch as a film. A reroll replaces the current take within that turn; it does not append the same event twice. Compatible saved views can guide a return to an earlier position without restoring old inventory or character state.
 
@@ -159,7 +159,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.4.0 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.4.1 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.

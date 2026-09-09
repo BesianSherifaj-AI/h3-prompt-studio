@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { gameActionMessage, gameCharacterStatus, gameWorldSummary, GameWorldStatus, isInventoryCommand, needsPlayerIdentity } from "./GameControls";
+import { gameActionMessage, gameCharacterStatus, gameWorldSummary, GameActions, GameWorldStatus, isInventoryCommand, needsPlayerIdentity } from "./GameControls";
 import type { SceneCatalog } from "./GameScenePanel";
 import type { GameCharacter, Story } from "./storyTypes";
 
@@ -25,16 +25,30 @@ const scene = (): Story => ({
 } as unknown as Story);
 
 describe("playable world controls", () => {
-  it("asks which visible person is the player before ambiguous movement, while preserving bound and first-person play", () => {
+  it("makes an established character visibly changeable instead of asking the user to choose again", () => {
+    const story = { ...scene(), turns: [] };
+    const render = () => renderToStaticMarkup(<GameActions story={story} disabled={false} onAction={() => {}}/>);
+    expect(render()).toContain("Choose character</button>");
+    story.world!.characters[0].description = "Purple shirt and glasses";
+    expect(render()).toContain("Change character</button>");
+  });
+  it("requires an appearance even with no scene targets or a claimed known ID, while preserving described and first-person play", () => {
     const story = scene();
     const visible = { status: "ready", targets: [{ kind: "person", known_id: null }, { kind: "person", known_id: null }] } as SceneCatalog;
     expect(needsPlayerIdentity(story, visible)).toBe(true);
     visible.targets[0].known_id = "player";
-    expect(needsPlayerIdentity(story, visible)).toBe(false);
+    expect(needsPlayerIdentity(story, visible)).toBe(true);
+    expect(needsPlayerIdentity(story, { status: "unavailable", targets: [] })).toBe(true);
+    expect(needsPlayerIdentity(story)).toBe(true);
     visible.targets[0].known_id = null;
     story.world!.characters[0].state = { visual_anchor: "Purple shirt" };
     expect(needsPlayerIdentity(story, visible)).toBe(false);
     story.world!.characters[0].state = {};
+    story.world!.characters[0].description = "  ";
+    expect(needsPlayerIdentity(story)).toBe(true);
+    story.world!.characters[0].description = "Purple shirt and glasses";
+    expect(needsPlayerIdentity(story)).toBe(false);
+    story.world!.characters[0].description = "";
     story.project = { game_viewpoint: "pov" } as unknown as Story["project"];
     expect(needsPlayerIdentity(story, visible)).toBe(false);
   });

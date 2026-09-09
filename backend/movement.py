@@ -53,7 +53,7 @@ def deterministic_movement(project, world, player_id, intent, duration, *, guide
     camera_only = intent.get('camera', 'player') == 'camera'
     appearance = player.get('state', {}).get('visual_anchor') or player.get('description', '')
     if not camera_only and not pov and not appearance.strip():
-        raise ValueError('Identify your character first: inspect this ending and select “This is me” in the scene list. No movement was rendered.')
+        raise ValueError('Choose your character to start moving.')
     observed = observed_state or {}
     remembered = observed.get('visible_scene') or observed.get('last_inspected_scene') or {}
     setting = remembered.get('setting') or next((scene.get('setting') for scene in reversed(project.get('shots', [])) if scene.get('setting')), '')
@@ -123,11 +123,26 @@ def movement_observation(previous, plan, source_run_id):
     return result
 
 
+def preserve_assigned_ending_references(project):
+    """A user-bound photo remains a design asset even if it came from a video.
+
+    Automatic continuity images have no subject binding. Keep provenance under
+    a separate key so replacing those automatic frames cannot delete a photo
+    the user has explicitly assigned to their character.
+    """
+    assigned = {aid for subject in project.get('subjects', []) for aid in subject.get('asset_ids', [])}
+    for asset in project.get('assets', []):
+        if asset.get('media_type') == 'image' and asset.get('video_run_ending') and asset.get('id') in assigned:
+            origin = asset.pop('video_run_ending')
+            asset['reference_from_video_ending'] = origin
+
+
 def apply_movement_frames(story, turn, project, ending, get_ending, *, current_frame=False):
     """Use saved images as actual native keyframes, never restore an old world."""
     from .navigation import navigation_return
     if not ending or not turn.get('parent_run_id'):
         return
+    preserve_assigned_ending_references(project)
     trial = {**turn, 'project': project}
     return_run = navigation_return(story, trial)
     if not current_frame and not return_run:

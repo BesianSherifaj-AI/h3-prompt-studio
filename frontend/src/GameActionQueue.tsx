@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { storyTurnLabel, type GameIntent, type Story } from "./storyTypes";
 
-export type QueuedMove = { id: string; message: string; intent?: GameIntent; readyAt: number; submitted: boolean };
+export type QueuedMove = { id: string; message: string; intent?: GameIntent; readyAt: number; submitted: boolean; recoverySourceId?: string };
 export type MoveQueue = { branch: string; paused: boolean; items: QueuedMove[]; error: string };
+export type QueueRecovery = { sourceId: string; message: string; intent?: GameIntent; blockedStage: "player-selection"; failedTurnId?: string };
 const empty = (): MoveQueue => ({ branch: "", paused: false, items: [], error: "" });
 export function restoreMoveQueue(raw: string | null): MoveQueue {
   try {
@@ -12,6 +13,7 @@ export function restoreMoveQueue(raw: string | null): MoveQueue {
     if (new Set(q.items.map((i: QueuedMove) => i.id)).size !== q.items.length) return empty();
     return { branch: q.branch, items: q.items.map((i: QueuedMove) => ({
       id: i.id, message: i.message, readyAt: i.readyAt, submitted: i.submitted,
+      ...(typeof i.recoverySourceId === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(i.recoverySourceId) ? { recoverySourceId: i.recoverySourceId } : {}),
       ...(i.intent && typeof i.intent.kind === "string" && Object.values(i.intent).every(v => v === undefined || typeof v === "string") ? { intent: i.intent } : {}),
     })), paused: true, error: q.items.length ? "Queue restored and paused. Review it before continuing." : "" };
   } catch { return empty(); }
@@ -31,6 +33,36 @@ export function queueAfterFailure(queue: MoveQueue, moveId: string, error: { mes
   if (!queue.items.some(item => item.id === moveId)) return queue;
   return { ...queue, paused: true, error: String(error?.message || error),
     items: error?.notSubmitted ? queue.items.map(item => item.id === moveId ? { ...item, submitted: false } : item) : queue.items };
+}
+
+/** The caller has completed an explicit player selection, not a generic retry. */
+export function queueAfterRecovery(queue: MoveQueue, story: Story, move: QueueRecovery, now: number, newId: string): MoveQueue | null {
+  if (move.blockedStage !== "player-selection" || !move.sourceId || !move.message.trim() || move.message.trim().length > 4000
+      || !Number.isFinite(now) || !newId || newId === move.sourceId) return null;
+  if (queue.items.length && queue.branch !== story.active_branch_id) return null;
+  const failed = move.failedTurnId ? story.turns.find(turn => turn.id === move.failedTurnId) : undefined;
+  if (move.failedTurnId && (!failed || failed.status !== "failed"
+      || ![failed.id, failed.request_id].includes(move.sourceId)
+      || (failed.branch_id && failed.branch_id !== story.active_branch_id)
+      || failed.run_id || failed.video || failed.project_id
+      || (Array.isArray(failed.asset_jobs) && failed.asset_jobs.length)
+      || (Array.isArray(failed.created_assets) && failed.created_assets.length))) return null;
+  const sourceId = failed?.request_id || move.sourceId;
+  const matches = (item: QueuedMove) => item.id === sourceId || item.id === move.sourceId || item.id === failed?.id;
+  const index = queue.items.findIndex(matches);
+  if (index > 0 || queue.items.some(item => item.recoverySourceId === sourceId)) return null;
+  if (!failed && (index !== 0 || queue.items[0].submitted
+      || story.turns.some(turn => turn.id === move.sourceId || turn.request_id === move.sourceId))) return null;
+  // Never skip over an unresolved request, even when recovering a different failed turn.
+  if (queue.items.some(item => !matches(item) && (item.submitted
+      || story.turns.some(turn => turn.id === item.id || turn.request_id === item.id)))) return null;
+  if (queue.items.some(item => item.id === newId)
+      || story.turns.some(turn => turn.id === newId || turn.request_id === newId)
+      || (index < 0 && queue.items.length >= 12)) return null;
+  const recovered: QueuedMove = { id: newId, message: move.message.trim(), intent: move.intent,
+    readyAt: now + 3000, submitted: false, recoverySourceId: sourceId };
+  return { branch: story.active_branch_id, paused: false, error: "",
+    items: index === 0 ? [recovered, ...queue.items.slice(1)] : [recovered, ...queue.items] };
 }
 
 export function useGameActionQueue(story: Story | null, blocked: boolean, send: (move: QueuedMove) => Promise<unknown>) {
@@ -93,7 +125,12 @@ export function useGameActionQueue(story: Story | null, blocked: boolean, send: 
       items: [...q.items, { id: crypto.randomUUID(), message: message.trim(), intent, readyAt: Date.now() + 3000, submitted: false }] }));
     return true;
   };
-  return { queue: loaded === key ? queue : empty(), now, enqueue,
+  const retryCurrent = (move: QueueRecovery) => {
+    if (!story || loaded !== key) return false;
+    const next = queueAfterRecovery(state.current, story, move, Date.now(), crypto.randomUUID());
+    return next ? commit(() => next) : false;
+  };
+  return { queue: loaded === key ? queue : empty(), now, enqueue, retryCurrent,
     edit: (id: string, message: string) => commit(q => ({ ...q, items: q.items.map(i => i.id === id && !i.submitted ? { ...i, message, intent: undefined, readyAt: Date.now() + 3000 } : i) })),
     remove: (id: string) => commit(q => ({ ...q, items: q.items.filter(i => i.id !== id), error: "" })),
     pause: () => commit(q => ({ ...q, paused: true })),

@@ -6,6 +6,18 @@ import type { StoryTurn } from "./storyTypes";
 const queue = (): MoveQueue => ({ branch: "b", paused: false, error: "", items: [{ id: "move", message: "I move forward.", readyAt: 3000, submitted: false }] });
 const turn = (status: StoryTurn["status"]): StoryTurn => ({ id: "move", request_id: "move", message: "I move forward.", status, created_at: 1 });
 describe("movement feedback", () => {
+  it("replaces legacy identity failures with a direct character choice, then shows the recovered move countdown", () => {
+    const failed = { ...turn("failed"), error: "Identify your character first: inspect this ending and select This is me." };
+    const empty = { ...queue(), items: [] };
+    const html = renderToStaticMarkup(<GameTurnProgress turn={failed} queue={empty} now={0} onReview={vi.fn()} onChoosePlayer={vi.fn()}/>);
+    expect(html).toContain("Choose character &amp; continue");
+    expect(html).not.toContain("Review failed move");
+    expect(html).not.toContain("inspect this ending");
+    const resumed = queue(); resumed.items[0].id = "new-request";
+    const next = renderToStaticMarkup(<GameTurnProgress turn={failed} queue={resumed} now={0} onReview={vi.fn()} onChoosePlayer={vi.fn()}/>);
+    expect(next).toContain("Move queued · starts in 3s");
+    expect(next).not.toContain("Choose character &amp; continue");
+  });
   it("acknowledges a click immediately throughout the edit countdown", () => {
     const html = renderToStaticMarkup(<GameTurnProgress queue={queue()} now={0} onReview={vi.fn()}/>);
     expect(html).toContain("Move queued · starts in 3s");

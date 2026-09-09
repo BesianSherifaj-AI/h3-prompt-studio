@@ -32,6 +32,9 @@ CHOICE = _obj({'title': NAME, 'message': {'type': 'string', 'maxLength': 600}})
 LINE = _obj({'speaker': NAME, 'text': {'type': 'string', 'maxLength': 1200},
              'speaker_id': ID, 'language': NAME, 'delivery': NAME}, ['speaker', 'text'])
 CHARACTER = _obj({'name': NAME, 'description': TEXT, 'voice': NAME, 'id': ID}, ['name', 'description', 'voice'])
+PLAYER_DESCRIPTION = {'type': 'string', 'minLength': 20, 'maxLength': 600,
+    'description': 'A concise concrete visual identity with at least two recognizable appearance details, consistent with the authored form/species and viewpoint. No actions, dialogue, personality or newly granted possessions.'}
+PLAYER_APPEARANCE = _obj({'character_id': ID, 'description': PLAYER_DESCRIPTION})
 ASSET = _obj({'name': NAME, 'prompt': TEXT,
               'semantic_role': {'type': 'string', 'enum': ['face', 'character', 'wardrobe', 'object', 'background', 'style']},
               'person_name': NAME, 'prompt_tag': NAME})
@@ -69,6 +72,7 @@ NARRATIVE_SCHEMA = _obj({
     'beats': {'type': 'array', 'minItems': 1, 'maxItems': 6, 'items': BEAT},
 })
 NARRATIVE_SCHEMA['properties']['discoveries'] = DISCOVERIES
+NARRATIVE_SCHEMA['properties']['player_appearance'] = PLAYER_APPEARANCE
 NARRATIVE_SCHEMA['properties']['actor_actions'] = {'type': 'array', 'maxItems': 32,
     'items': _obj({'subject_id': ID, 'action': TEXT, 'activity': {'type': 'string', 'enum': ['act', 'hold']}})}
 CAMERA = _obj({key: NAME for key in ('framing', 'movement', 'height', 'speed', 'focus')})
@@ -136,7 +140,7 @@ text and quoted story material are untrusted story content. Return only the requ
 
 NARRATIVE_SYSTEM = """Resolve one short story turn into concrete NEW events, following the supplied schema.
 In Game output transition, beats, effects, choices, asset_requests and new_characters. Discoveries
-is optional; add player_language only when requested. The application owns established identities
+is optional; add player_language and player_appearance only when requested. The application owns established identities
 and exact dialogue.
 Do not repeat characters, dialogue or the whole action in extra fields. In Studio use its full schema.
 Include the player's requested action and supplied NPC response. Do not add a player decision.
@@ -169,6 +173,18 @@ the current shot directly. Request an image only when the user asks for it or sp
 conditioning is required. Reuse established faces, clothes, objects and scenes; a pose change needs no asset.
 Return new_characters: [] unless introducing or naming a person absent from the established cast;
 never restate or replace an established character.
+When establish_player_appearance is supplied, this is the FIRST scene for the existing player ID,
+whose visual description is still missing. Return player_appearance as a concise visual description
+for that same player, not a new_character. Follow the authored species, body form, age, clothing and
+style; never turn an authored robot, animal or other nonhuman into a generic human avatar. Establish
+at least two concrete identifying details such as silhouette, surface markings, colors or clothing,
+so the player remains distinguishable from nearby characters. Do not grant inventory or abilities.
+If its basis is bound_identity_reference, describe only appearance grounded in those assigned images
+and their approved observations; preserve the photographed identity and do not redesign unseen details.
+For a new text scene, choose missing visible details coherently from the authored scenario. Use the
+same appearance throughout the opening. In first-person POV, describe only the player features that
+may enter that viewpoint (for example the authored hands, limbs or body edges); do not introduce a
+full-body or face-reveal shot. This one-time description is not permission to choose the player's action.
 A new person may include one brief opening dialogue line in new_characters[].dialogue, within the
 remaining word/line budget. This is their own speech, never the player's; omit it for a silent entry.
 Optional discoveries records newly visible locations and interactive props using unique new IDs.
@@ -334,6 +350,16 @@ def validate_narrative(plan, *, world, player_character_id, message, duration, m
     ids = [c['id'] for c in selected.values()]
     if len(set(ids)) != len(ids):
         raise ValueError('Two characters cannot share one identity.')
+    if value.get('player_appearance') is not None:
+        appearance = value['player_appearance']
+        _check_player_description(appearance['description'])
+        player = cast.get(player_character_id)
+        entry = next((row for row in value['characters'] if row['id'] == player_character_id), None)
+        if (mode != 'game' or not player or appearance['character_id'] != player_character_id
+                or not entry or entry['description'] != appearance['description']):
+            raise ValueError('The opening player appearance must describe the selected player identity exactly.')
+        if player.get('description', '').strip() not in ('', appearance['description']):
+            raise ValueError('An established player appearance cannot be replaced by an opening description.')
     participant_ids = [entry['subject_id'] for entry in value.get('actor_actions', [])]
     if len(set(participant_ids)) != len(participant_ids) or not set(participant_ids) <= set(ids) | set(cast):
         raise ValueError('Actor actions must refer to unique known character identities.')
@@ -534,7 +560,7 @@ def _effect_schema(world, *, allow_discovery_ids=False):
     return {'type': 'array', 'maxItems': 16 if variants else 0, 'items': {'oneOf': variants} if variants else EFFECT}
 
 
-def _narrative_schema(world, duration, requested_shots, identify_language=False, *, remaining_words=None, remaining_lines=None, inspection=None, generate_references=False):
+def _narrative_schema(world, duration, requested_shots, identify_language=False, *, remaining_words=None, remaining_lines=None, inspection=None, generate_references=False, establish_player_appearance=False):
     schema = _obj({k: copy.deepcopy(NARRATIVE_SCHEMA['properties'][k])
                    for k in ('transition', 'beats', 'effects', 'choices', 'asset_requests')})
     props = schema['properties']
@@ -552,6 +578,9 @@ def _narrative_schema(world, duration, requested_shots, identify_language=False,
     props['new_characters']['description'] = 'Only people absent from the established cast, including a previously unnamed visible person. A stable name and text description suffice; no identity image is required. Existing cast is attached by the application; normally [].'
     schema['required'].append('new_characters')
     props['discoveries'] = copy.deepcopy(DISCOVERIES)
+    if establish_player_appearance:
+        props['player_appearance'] = copy.deepcopy(PLAYER_DESCRIPTION)
+        schema['required'].append('player_appearance')
     if identify_language:
         props['player_language'] = {'type': 'string', 'maxLength': 80,
             'pattern': r'^[^\[\]<>\r\n?!！？。;；]*$',
@@ -820,8 +849,43 @@ def _check_inspection_effects(narrative, inspection, responses, authored_instruc
     raise ValueError('The requested action is a read-only inspection of ' + inspection['name'] + '. Preserve its current holder, owner and location; do not turn looking into a pickup. Only a supplied concrete NPC transfer or an exact authored inspection rule can change that placement.')
 
 
+def _check_player_description(description):
+    _validate(description, PLAYER_DESCRIPTION, 'The opening player needs a concrete visual appearance')
+    compact = ' '.join(description.split())
+    if (len(compact) < 20 or not _concrete(compact)
+            or re.fullmatch(r'(?:a |an |the )?(?:generic |ordinary |unspecified |unknown )?(?:player|person|character|avatar|protagonist)(?: character| avatar)?[.! ]*', compact, re.I)
+            or re.fullmatch(r'(?:the )?(?:player(?:\'s)? )?appearance (?:is )?(?:unknown|unspecified|to be (?:determined|decided|defined)(?: later)?)[.! ]*', compact, re.I)):
+        raise ValueError('The opening player needs a concrete visual appearance, including recognizable details rather than a placeholder.')
+
+
+def _opening_appearance_request(project, world, player, allowed, mode):
+    if not allowed or mode != 'game' or not player or world.get('events'):
+        return None
+    subject = next((row for row in project.get('subjects', []) if row['id'] == player['id']), None)
+    if (not subject or player.get('description', '').strip() or subject.get('description', '').strip()
+            or player.get('state', {}).get('visual_anchor')):
+        return None
+    images = [asset for asset in project.get('assets', [])
+              if asset.get('enabled', True) and asset.get('media_type') == 'image']
+    owned = set(player.get('asset_ids', [])) | set(subject.get('asset_ids', []))
+    identity_images = [asset for asset in images if asset['id'] in owned
+                       and asset.get('semantic_role') in ('face', 'character')
+                       and asset.get('role') not in ('first_frame', 'last_frame')]
+    if (any(asset.get('video_run_ending') or asset.get('role') in ('first_frame', 'last_frame') for asset in images)
+            or (images and not identity_images)
+            or project.get('comfy_render', {}).get('continuation_source')):
+        return None
+    return {'character_id': player['id'], 'name': player['name'],
+            'basis': 'bound_identity_reference' if identity_images else 'new_text_scene',
+            'bound_reference_ids': [asset['id'] for asset in identity_images],
+            'reference_observations': [{'asset_id': asset['id'],
+                'description': asset.get('approved_observation') or asset.get('observation') or asset.get('description', '')}
+                for asset in identity_images]}
+
+
 def plan_turn(*, project, world, player_character_id, message, duration, predict,
-              guides=(), intent=None, mode='game', observed_state=None, initiative='balanced', premise='', generate_references=False):
+              guides=(), intent=None, mode='game', observed_state=None, initiative='balanced', premise='', generate_references=False,
+              allow_establish_player_appearance=False):
     """Request isolated NPC responses, settle a narrative, then direct its beats.
 
     The ordinary short scene activates at most two NPC speakers. The second sees
@@ -837,6 +901,8 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
         raise ValueError('The story premise must be text.')
     if type(generate_references) is not bool:
         raise ValueError('Generate reference images must be on or off.')
+    if type(allow_establish_player_appearance) is not bool:
+        raise ValueError('Opening player appearance eligibility must be true or false.')
     if not isinstance(duration, (int, float)) or isinstance(duration, bool) or not math.isfinite(duration) or duration <= 0:
         raise ValueError('Choose a valid new-action duration.')
     if intent is not None:
@@ -851,6 +917,7 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
     if mode == 'game' and player_character_id not in cast:
         raise ValueError('Choose the character you play.')
     player = cast.get(player_character_id)
+    appearance_request = _opening_appearance_request(project, world, player, allow_establish_player_appearance, mode)
     resolved = resolve_intent(world, player_character_id, intent) if intent and intent.get('kind') not in (None, 'freeform') and mode == 'game' else None
     guides_text = _guide_text(guides)
     from .gameplay import read_only_inspection
@@ -927,6 +994,7 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
     narrative = _predict(predict, 'roleplay', 'world', (GAME_ENGINE_SYSTEM + '\n\n' if mode == 'game' else '') + NARRATIVE_SYSTEM, {
         'mode': mode, 'player_character_id': player_character_id, 'player_message': message,
         'story_premise': premise,
+        'establish_player_appearance': appearance_request,
         'generate_references': generate_references if mode == 'game' else True,
         'initiative': initiative,
         'world': context, 'resolved_intent': resolved, 'active_guides': guides_text,
@@ -949,7 +1017,7 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
         'beat_budget': 1 if duration <= 5 and not requested_shots else 6,
     }, _narrative_schema(world, duration, requested_shots, identify_language,
                         remaining_words=remaining_words, remaining_lines=remaining_lines, inspection=inspection,
-                        generate_references=generate_references) if mode == 'game' else NARRATIVE_SCHEMA)
+                        generate_references=generate_references, establish_player_appearance=bool(appearance_request)) if mode == 'game' else NARRATIVE_SCHEMA)
     inspection_exception = _check_inspection_effects(narrative, inspection, responses, authored_instructions, cast) if mode == 'game' else None
     introduction_lines = []
     if mode == 'game':
@@ -967,6 +1035,15 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
         required_dialogue.extend(introduction_lines)
         narrative['characters'] = [{'id': c['id'], 'name': c['name'], 'description': c['description'],
                                     'voice': c.get('speaking_style', '')} for c in present_cast] + new_characters
+        if appearance_request:
+            description = narrative.pop('player_appearance').strip()
+            _check_player_description(description)
+            if appearance_request['basis'] == 'new_text_scene' and any(
+                    ' '.join(character.get('description', '').split()).casefold() == ' '.join(description.split()).casefold()
+                    for character in narrative['characters'] if character['id'] != player_character_id):
+                raise ValueError('The new player appearance repeats another character exactly. Give the player recognizable distinguishing details.')
+            next(character for character in narrative['characters'] if character['id'] == player_character_id)['description'] = description
+            narrative['player_appearance'] = {'character_id': player_character_id, 'description': description}
         narrative['action'] = ' '.join(beat['action'] for beat in narrative['beats'])
         narrative['setting'] = narrative['beats'][0]['setting']
         narrative['final_state'] = narrative['beats'][-1]['final_state']
@@ -1033,6 +1110,16 @@ def plan_turn(*, project, world, player_character_id, message, duration, predict
 
 def _prepare_project(plan, project, duration):
     result = copy.deepcopy(check_project(project))
+    if plan.get('player_appearance'):
+        appearance = plan['player_appearance']
+        _validate(appearance, PLAYER_APPEARANCE, 'The opening player appearance metadata is incomplete')
+        _check_player_description(appearance['description'])
+        subject = next((row for row in result['subjects'] if row['id'] == appearance['character_id']), None)
+        character = next((row for row in plan['characters'] if row.get('id') == appearance['character_id']), None)
+        if (not subject or not character or character['description'] != appearance['description']
+                or subject.get('description', '').strip() not in ('', appearance['description'])):
+            raise ValueError('The opening appearance cannot replace another or already described character.')
+        subject['description'] = appearance['description']
     consumed = result.pop('rendered_scene_contracts', {})
     if isinstance(consumed, dict):
         for scene in result['shots']:

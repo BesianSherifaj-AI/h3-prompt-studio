@@ -984,6 +984,7 @@ class StoryManager(StoryStateMixin):
 
     def plan(self, story, turn, project, ending=None):
         if turn.get('snapshot') and story.get('narrative_version') == 2:
+            establish_player_appearance = not ending and self._can_establish_player_appearance(story, turn, project)
             if story['mode'] == 'game' and ending and story['settings'].get('fast_actions', True):
                 from .movement import deterministic_movement
                 movement = deterministic_movement(project, story['world'], story.get('player_character_id'),
@@ -997,7 +998,7 @@ class StoryManager(StoryStateMixin):
                 def predict(stage, actor_id, system, content, schema):
                     return self._predict(story, turn, stage, actor_id, system, content, schema,
                         self._plan_images(story, turn, project, ending, stage, actor_id), prepared_model=prepared_model)
-                if story['mode'] == 'game' and story['settings'].get('fast_actions', True):
+                if story['mode'] == 'game' and story['settings'].get('fast_actions', True) and not establish_player_appearance:
                     from .gameplay import infer_simple_intent, mechanical_plan
                     from .game_director import _author_instructions, _current_scene_facts, _known_scene_objects, direct_plan, quoted_speech
                     from .world import actor_context
@@ -1027,6 +1028,7 @@ class StoryManager(StoryStateMixin):
                                  message=turn['message'], duration=turn['duration'], predict=predict,
                                  guides=story.get('guides', []), intent=turn.get('intent'), mode=story['mode'],
                                  premise=story.get('premise', ''),
+                                 allow_establish_player_appearance=establish_player_appearance,
                                  generate_references=story['settings'].get('generate_references', False),
                                  initiative=story['settings'].get('initiative', 'balanced'),
                                  observed_state=story['observed_by_run'].get(turn.get('parent_run_id'), {}))
@@ -1179,6 +1181,7 @@ class StoryManager(StoryStateMixin):
 
     def _project(self, story, turn, source, ending):
         plan = turn['plan']
+        story = self._with_opening_player_appearance(story, turn, source)
         frame_movement = bool(turn.get('planning_mode') == 'deterministic_movement' and ending
                               and story['settings'].get('transition', 'auto') != 'continue')
         if frame_movement:
@@ -1210,6 +1213,8 @@ class StoryManager(StoryStateMixin):
                         asset[field] = _appearance_without_placement(asset[field])
         project['game_player_id'] = story.get('player_character_id') or project.get('game_player_id')
         project['simple'] = {'directed': True, 'person_actions': {}}
+        from .movement import preserve_assigned_ending_references
+        preserve_assigned_ending_references(project)
         project['assets'] = [a for a in project['assets'] if not a.get('video_run_ending')]
         for entry in plan['characters']:
             old = next((p for p in project['subjects'] if p['name'].casefold() == entry['name'].casefold()), None)
@@ -1408,6 +1413,11 @@ class StoryManager(StoryStateMixin):
             if physical_change or any(edited.get(k) != previous.get(k) for k in staging_fields):
                 edited.pop('direction', None)
                 edited.pop('assistant_stages', None)
+            appearance = previous.get('player_appearance')
+            if appearance and self._can_establish_player_appearance(execution, turn, execution['project']):
+                player = next((c for c in edited['characters'] if c.get('id', known_ids.get(c['name'].casefold())) == appearance['character_id']), None)
+                if player:
+                    edited['player_appearance'] = {**appearance, 'description': player['description']}
         return edited
 
     def _resume_replacement(self, story, turn):
@@ -1495,6 +1505,7 @@ class StoryManager(StoryStateMixin):
                 from .world import apply_discoveries, validate_effects
                 proposed = apply_discoveries(execution['world'], turn['plan'].get('discoveries'), execution.get('player_character_id'))
                 validate_effects(proposed, turn['plan'].get('effects', []), execution.get('player_character_id'))
+            execution = self._with_opening_player_appearance(execution, turn, source)
             preference = execution['settings'].get('transition', 'auto')
             if preference in ('continue', 'cut'):
                 turn['plan']['transition'] = preference

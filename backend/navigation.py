@@ -43,7 +43,9 @@ def _visual_hash(state):
 
 
 def _presentation_hash(state):
-    project = state.get('project', state.get('base_project', {}))
+    from .movement import preserve_assigned_ending_references
+    project = copy.deepcopy(state.get('project', state.get('base_project', {})))
+    preserve_assigned_ending_references(project)
     settings = state.get('settings', {})
     # Assembly materializes these settings into the project. Compare the
     # effective controls, not whether that deterministic copy happened yet.

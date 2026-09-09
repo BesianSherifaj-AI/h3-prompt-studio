@@ -89,6 +89,63 @@ class StoryStateMixin:
         state = turn.get('snapshot') or self._state(story)
         return {**story, **copy.deepcopy(state), 'base_project': copy.deepcopy(state['project'])}
 
+    @staticmethod
+    def _can_establish_player_appearance(story, turn, project):
+        """Establish a new player from text or their explicitly assigned photo."""
+        if story.get('mode') != 'game' or turn.get('parent_run_id'):
+            return False
+        chain = story.get('branches', {}).get(turn.get('branch_id', story.get('active_branch_id')), [])
+        if chain and not turn.get('accepted_state'):
+            return False
+        state = turn.get('snapshot') or story
+        player_id = state.get('player_character_id')
+        player = next((row for row in state.get('world', {}).get('characters', []) if row['id'] == player_id), None)
+        subject = next((row for row in project.get('subjects', []) if row['id'] == player_id), None)
+        if (not player or player.get('description', '').strip()
+                or player.get('state', {}).get('visual_anchor') or state.get('player_visual_anchor')
+                or (subject and subject.get('description', '').strip())):
+            return False
+        assigned = set(player.get('asset_ids', [])) | set((subject or {}).get('asset_ids', []))
+        images = [asset for asset in project.get('assets', [])
+                  if asset.get('enabled', True) and asset.get('media_type') == 'image']
+        if not images:
+            return not assigned
+        if any(asset.get('video_run_ending') or asset.get('role') in ('first_frame', 'last_frame') for asset in images):
+            return False
+        return any(asset['id'] in assigned and asset.get('semantic_role') in ('face', 'character') for asset in images)
+
+    def _opening_player_description(self, story, turn, project):
+        appearance = (turn.get('plan') or {}).get('player_appearance')
+        if not appearance:
+            return None
+        state = turn.get('snapshot') or story
+        player_id = state.get('player_character_id')
+        if (not isinstance(appearance, dict) or appearance.get('character_id') != player_id
+                or not isinstance(appearance.get('description'), str) or not appearance['description'].strip()):
+            raise ValueError('The opening appearance must describe the selected player.')
+        description = appearance['description']
+        person = next((row for row in turn['plan'].get('characters', []) if row.get('id') == player_id), None)
+        if not person or person.get('description') != description:
+            raise ValueError('The player appearance must match the approved character description.')
+        if not self._can_establish_player_appearance(story, turn, project):
+            raise ValueError('An existing character or imported scene needs an explicit appearance selection.')
+        accepted = turn.get('accepted_state')
+        if accepted:
+            previous = next((row for row in accepted['world']['characters'] if row['id'] == player_id), None)
+            if not previous or previous['description'] != description:
+                raise ValueError('A new take must keep the already accepted player appearance.')
+        return description
+
+    def _with_opening_player_appearance(self, story, turn, project):
+        """Stage appearance for rendering/inspection without editing the branch."""
+        description = self._opening_player_description(story, turn, project)
+        if description is None:
+            return story
+        result = copy.deepcopy(story)
+        player = next(row for row in result['world']['characters'] if row['id'] == result['player_character_id'])
+        player['description'] = description
+        return result
+
     def _snapshot_turn(self, story, turn, body):
         from .world import resolve_intent
         state = self._state(story)
@@ -105,6 +162,7 @@ class StoryStateMixin:
             people = [row for row in scene.get('targets', []) if row['kind'] == 'person']
             player = next((row for row in snapshot['world']['characters'] if row['id'] == snapshot.get('player_character_id')), {})
             if (len(people) >= 2 and not player.get('state', {}).get('visual_anchor')
+                    and not player.get('description', '').strip()
                     and not any(row.get('known_id') == player.get('id') for row in people)):
                 raise ValueError('Choose This is me in the scene list before moving your character.')
         turn.update(snapshot=snapshot, configuration_revision=state['configuration_revision'], logical_turn_id=turn['id'])
@@ -292,21 +350,48 @@ class StoryStateMixin:
             if any(turn['status'] in ('planning', 'assets', 'rendering', 'observing', 'awaiting_review', 'awaiting_assistant', 'awaiting_acceptance', 'inspection_failed', 'uncertain', 'stopping') for turn in story['turns']):
                 raise ValueError('Finish or review the current turn before binding your character.')
             state = self._state(story)
-            if any(key not in body for key in ('run_id', 'branch_id', 'configuration_revision')):
+            if (not story.get('active_run_id') or body.get('run_id') != story['active_run_id']
+                    or body.get('branch_id') != story['active_branch_id']
+                    or type(body.get('configuration_revision')) is not int
+                    or body['configuration_revision'] != state['configuration_revision']):
                 raise ValueError('Select your character from the current scene and revision.')
-            scene, candidate = self._scene_selection(story, body)
-            if candidate['kind'] != 'person' or candidate.get('known_id') not in (None, state['player_character_id']):
-                raise ValueError('Choose an unidentified person or your existing character, not another established character.')
-            world = self._observed_location(state['world'], scene, state['player_character_id'])
-            player = next(row for row in world['characters'] if row['id'] == state['player_character_id'])
-            player['description'] = candidate['description']
-            player['state'].update(visual_anchor=candidate['description'], visual_anchor_run_id=scene['run_id'])
-            anchor = {'run_id': scene['run_id'], 'candidate_id': candidate['id'], 'description': candidate['description'], 'position': candidate['position']}
-            state.update(world=validate_world(world), player_visual_anchor=anchor, configuration_revision=state['configuration_revision'] + 1)
-            state['project'] = project_from_world(state['project'], world)
+            updated = copy.deepcopy(state)
+            world = updated['world']
+            candidate = None
+            if 'appearance' in body:
+                if 'candidate_id' in body:
+                    raise ValueError('Choose a visible person or describe your character, not both.')
+                appearance = body['appearance']
+                if not isinstance(appearance, str) or not 1 <= len(appearance.strip()) <= 500:
+                    raise ValueError('Describe your character in 1–500 characters.')
+                anchor = {'run_id': story['active_run_id'], 'candidate_id': None,
+                          'description': appearance.strip(), 'position': '', 'source': 'user_description'}
+                # An explicit description identifies the player only. It does not
+                # assert a match to any scanned person or certify their position.
+                updated['scene_target_bindings'] = {key: value for key, value in updated.get('scene_target_bindings', {}).items()
+                                                    if value != updated['player_character_id']}
+            else:
+                scene, candidate = self._scene_selection(story, body)
+                if candidate['kind'] != 'person' or candidate.get('known_id') not in (None, updated['player_character_id']):
+                    raise ValueError('Choose an unidentified person or your existing character, not another established character.')
+                world = self._observed_location(world, scene, updated['player_character_id'])
+                anchor = {'run_id': scene['run_id'], 'candidate_id': candidate['id'],
+                          'description': candidate['description'], 'position': candidate['position']}
+            player = next((row for row in world['characters'] if row['id'] == updated['player_character_id']), None)
+            if player is None:
+                raise ValueError('Choose a player character in this game before setting their appearance.')
+            player['description'] = anchor['description']
+            player['state'].update(visual_anchor=anchor['description'], visual_anchor_run_id=anchor['run_id'])
+            updated.update(world=validate_world(world), player_visual_anchor=anchor,
+                           configuration_revision=state['configuration_revision'] + 1)
+            updated['project'] = project_from_world(updated['project'], updated['world'])
             from .navigation import remember_bound_scene
-            remember_bound_scene(state, scene['run_id'], accepted_state=story.get('state_by_run', {}).get(scene['run_id']))
-            state.setdefault('scene_target_bindings', {})[candidate['id']] = player['id']
+            remember_bound_scene(updated, anchor['run_id'], accepted_state=story.get('state_by_run', {}).get(anchor['run_id']))
+            if candidate:
+                updated['scene_target_bindings'] = {key: value for key, value in updated.get('scene_target_bindings', {}).items()
+                                                    if value != player['id']}
+                updated['scene_target_bindings'][candidate['id']] = player['id']
+            state.update(updated)
             story.setdefault('scene_binding_requests', {})[request_id] = {'digest': fingerprint, 'anchor': anchor}
             self._save(story)
             return self.public(story)
@@ -334,6 +419,14 @@ class StoryStateMixin:
                                   actor_id=before.get('player_character_id'), summary=summary, witness_ids=witnesses,
                                   dialogue=dialogue)
             accepted = {**copy.deepcopy(before), 'world': world, 'project': project_from_world(turn['project'], world)}
+            description = self._opening_player_description(story, turn, before['project'])
+            if description is not None:
+                player = next(row for row in world['characters'] if row['id'] == before['player_character_id'])
+                if player['description'] != description:
+                    raise ValueError('The rendered player appearance differs from the approved opening.')
+                player['state'].update(visual_anchor=description, visual_anchor_run_id=run_id)
+                accepted['player_visual_anchor'] = {'run_id': run_id, 'candidate_id': None,
+                    'description': description, 'position': '', 'source': 'initial_render_description'}
         from .navigation import commit_navigation
         commit_navigation(turn.get('snapshot') or state, turn, run_id, accepted)
         turn['accepted_state'] = copy.deepcopy(accepted)
@@ -346,8 +439,17 @@ class StoryStateMixin:
                     state[key] = copy.deepcopy(accepted[key])
         else:
             before = turn.get('snapshot') or accepted
+            edited_player = next((row for row in state['world']['characters'] if row['id'] == before.get('player_character_id')), None)
             state['project'] = preserve_edits(before['project'], state['project'], accepted['project'])
             state['world'] = validate_world(preserve_edits(before['world'], state['world'], accepted['world']))
+            opening = accepted.get('player_visual_anchor', {})
+            if opening.get('source') == 'initial_render_description' and edited_player and edited_player['description'] != opening['description']:
+                # The accepted take keeps its own identity. A concurrently
+                # edited appearance is not proof of what that image shows.
+                merged_player = next(row for row in state['world']['characters'] if row['id'] == edited_player['id'])
+                for key in ('visual_anchor', 'visual_anchor_run_id'):
+                    if key not in edited_player['state']:
+                        merged_player['state'].pop(key, None)
         if 'navigation' in accepted:
             state['navigation'] = copy.deepcopy(accepted['navigation'])
         consumed = {(g['id'], g['revision']) for g in (turn.get('snapshot') or {}).get('guides', [])

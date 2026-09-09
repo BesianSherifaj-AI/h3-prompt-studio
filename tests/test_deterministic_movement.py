@@ -39,7 +39,7 @@ def test_unmapped_street_moves_are_fully_directed_without_a_model(direction, axi
 def test_unbound_player_is_not_guessed_from_a_multi_person_frame():
     project, world = scene()
     world['characters'][0]['description'] = ''
-    with pytest.raises(ValueError, match='This is me'):
+    with pytest.raises(ValueError, match='Choose your character'):
         deterministic_movement(project, world, 'player', {'kind': 'move', 'direction': 'forward'}, 3)
 
 
