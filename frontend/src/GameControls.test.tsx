@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { gameActionMessage, gameCharacterStatus, gameWorldSummary, GameWorldStatus, isInventoryCommand } from "./GameControls";
+import { gameActionMessage, gameCharacterStatus, gameWorldSummary, GameWorldStatus, isInventoryCommand, needsPlayerIdentity } from "./GameControls";
+import type { SceneCatalog } from "./GameScenePanel";
 import type { GameCharacter, Story } from "./storyTypes";
 
 const character = (id: string, location_id = "street", state = {}): GameCharacter => ({
@@ -24,6 +25,19 @@ const scene = (): Story => ({
 } as unknown as Story);
 
 describe("playable world controls", () => {
+  it("asks which visible person is the player before ambiguous movement, while preserving bound and first-person play", () => {
+    const story = scene();
+    const visible = { status: "ready", targets: [{ kind: "person", known_id: null }, { kind: "person", known_id: null }] } as SceneCatalog;
+    expect(needsPlayerIdentity(story, visible)).toBe(true);
+    visible.targets[0].known_id = "player";
+    expect(needsPlayerIdentity(story, visible)).toBe(false);
+    visible.targets[0].known_id = null;
+    story.world!.characters[0].state = { visual_anchor: "Purple shirt" };
+    expect(needsPlayerIdentity(story, visible)).toBe(false);
+    story.world!.characters[0].state = {};
+    story.project = { game_viewpoint: "pov" } as unknown as Story["project"];
+    expect(needsPlayerIdentity(story, visible)).toBe(false);
+  });
   it("opens inventory locally for exact commands without swallowing narrative actions", () => {
     for (const message of ["inventory", "Show inventory", "open inventory.", " check inventory ", "my inventory", "I check my inventory", "I open my inventory!"]) expect(isInventoryCommand(message)).toBe(true);
     for (const message of ["I check my inventory and show Mara the key.", "Show inventory to the guard", "Take inventory of the city", '"I check my inventory"', "I say, “my inventory.”"]) expect(isInventoryCommand(message)).toBe(false);
@@ -83,5 +97,12 @@ describe("playable world controls", () => {
     expect(gameCharacterStatus(character("Mara", "street", { health: 2 }))).toBe("Health 2");
     expect(gameCharacterStatus(character("Mara", "street", { alive: false }))).toBe("Dead");
     expect(gameCharacterStatus(character("Mara", "street", { status: "Unconscious" }))).toBe("Unconscious");
+  });
+  it("distinguishes accepted local movement coordinates from a physical map", () => {
+    const story = scene(); story.navigation = { version: 1, frame_id: "f", position: [0, 1], current_run_id: "run", views: [{ run_id: "run", frame_id: "f", position: [0, 1] }] };
+    const html = renderToStaticMarkup(<GameWorldStatus story={story} target="" disabled={false} onSelect={() => {}} onAction={() => {}}/>);
+    expect(html).toContain("Local steps · 0, 1");
+    expect(html).toContain("1 saved view(s)");
+    expect(html).toContain("These are steps within the scene");
   });
 });

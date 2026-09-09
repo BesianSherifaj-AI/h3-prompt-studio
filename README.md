@@ -2,15 +2,15 @@
 
 A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
 
-Version **1.3.1** fixes text-only Game startup: ordinary actions no longer require an extra image generator by default, and unavailable ComfyUI servers are reported separately from missing model components. Scene continuity controls describe who acts, who stays seated, which objects exist, their appearance and count, and where each starts and ends. Game keeps accepted world state between turns; Studio lets you edit the same controls directly. A reported visual mismatch pauses automatic progression for review. LM Studio handles vision and writing; ComfyUI renders video.
+Version **1.4.0** adds selectable people and objects from the ending image, explicit **This is me** player identification, and basic movement arrows that prepare a video without loading or calling the language model. Movement starts from the current frame; compatible saved destinations can supply a return frame. Game preserves accepted world state, while Studio retains direct scene controls. LM Studio handles requested vision and creative writing; ComfyUI still generates the video.
 
-**[Scene continuity guide](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
+**[Game scene and movement guide](docs/GAME_SCENE_MOVEMENT.md)** · **[Scene continuity](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
 
-The new [Coin Safety Inspector demonstration](demo/scene-continuity/README.md) exercises a seated bystander and a single prop across a continuous sequence. The demo record separates authored direction, generated video and visual review. The model can still make mistakes; prompt instructions are not a guarantee of physical consistency.
+The v1.3.0 [Coin Safety Inspector demonstration](demo/scene-continuity/README.md) exercises a seated bystander and a single prop across a continuous sequence. The demo record separates authored direction, generated video and visual review. The model can still make mistakes; prompt instructions are not a guarantee of physical consistency.
 
 [![The Coin Safety Inspector — actual H3 frame](demo/scene-continuity/coin-poster.png)](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)
 
-**[Watch the 30-second demo](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)** · **[Chase, one-minute parody and Studio images](demo/scene-continuity/README.md)** · **[Download v1.3.1](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/tag/v1.3.1)**
+**[Watch the 30-second demo](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)** · **[Chase, one-minute parody and Studio images](demo/scene-continuity/README.md)** · **[App releases](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases)**
 
 The earlier **v1.0** [The Message demo](demo/README.md) remains available: three actual 0.3 MP scenes, ten shared reference images, exact dialogue, measured render times, and portable projects. Its showreel and measurements describe that release. The visual review includes observed model mistakes.
 
@@ -29,6 +29,7 @@ The showreel combines clearly labeled captures of the working app with real gene
 - Generate a fresh video or **Try another take** from an existing take's exact prompt and settings.
 - **Continue from this ending** uses the active story endpoint, its saved motion, actual final frame and completed history. Browsing an older take does not move that endpoint; choose **Branch from this preview** to start another path.
 - In Game, write a move or choose one of three suggested player actions. The assistant writes the other characters' actions and speaker-bound dialogue. Responses render automatically by default; optional review lets you edit them first.
+- Select an inspected person, door or object beside the video. Identify your player with **This is me**, inspect a target, approach it or talk to a visible person. Basic arrows use direct movement instructions; old scene positions are labelled until you request a fresh inspection.
 - Generate needed character, outfit, prop or location references with an installed Z-Image-Turbo model. Existing identities and reference tags are reused; new visual elements use an explicit scene cut.
 - Switch between the latest scene and the whole accepted story. Sequential playback needs no ComfyUI join job. Save the active branch as one film; compatible legacy continuation chains can still use **Combine clips**.
 - Use named takes, favorites, side-by-side comparison, saved setups, and portable project ZIPs with references.
@@ -69,14 +70,15 @@ The 0.3 MP preset is 736 × 416 in landscape. Quick drafts use a compatible four
 ## Play a story in Game
 
 1. Open **Game**, enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. **Create extra reference images** is off by default; enable it when you want the assistant to request separate reference images. That option requires an available image generator and adds a generation step. Existing references remain usable with it off.
-2. New games default to **2D pixel art / 0.2 MP / three seconds / eight steps**. Landscape is608×320; a fresh clip has73frames (3.04 seconds). Change style, quality, duration and viewpoint freely in the editor. Existing games retain their saved settings. Turn on **Review before rendering** to inspect the response before rendering.
+2. New games default to **2D pixel art / 0.2 MP / three seconds / eight steps**. Landscape is 608 × 320; a fresh clip has 73 frames (3.04 seconds). Change style, quality, duration and viewpoint freely in the editor. Existing games retain their saved settings. Turn on **Review before rendering** to inspect the response before rendering.
 3. Write a move such as `I look at the note and ask what it means.` Put exact spoken words in double quotes, for example `I say "Who sent this?"`. A response that changes quoted player speech is rejected before rendering.
-4. The game resolves known item and movement actions, while the assistant directs their presentation. Dialogue, combat and new situations use the creative planner. The scene renders, its ending is inspected, and accepted actions update the saved world. You can edit the response, try another take, branch from an older clip, or type your own next action.
-5. Watch **Latest scene** or **Whole story**, and save the active branch as a film. A reroll replaces the current take within that turn; it does not append the same event twice.
+4. Use **In this frame** to select inspected people and objects. On older endings, **Inspect this ending** scans the saved image without rendering another clip. An unidentified person stays unidentified until enough evidence or your explicit **This is me** selection establishes the player. Visible objects are separate from saved inventory.
+5. Basic directional arrows prepare movement directly from an accepted ending without a language-model call. Other item actions, dialogue, combat and situations governed by custom rules retain their appropriate planning path. Creative endings are inspected; basic movement endings are marked **not inspected**, with earlier positions shown as stale. Review the footage and refresh the scene inventory when needed.
+6. Watch **Latest scene** or **Whole story**, and save the active branch as a film. A reroll replaces the current take within that turn; it does not append the same event twice. Compatible saved views can guide a return to an earlier position without restoring old inventory or character state.
 
 The vision assistant distinguishes intended actions from what it sees in the final frame and records uncertainties. It cannot verify speech or lip sync from an image. Object ownership, handoffs and character consistency can still drift; review the video before building a long story on a mistaken result.
 
-Open **Inventory** or type `open inventory` to see held and worn items immediately. Pick up, drop, give, open, close, inspect and move controls use the saved location and ownership rules. A locked door stays locked, unavailable characters cannot respond, and inspecting an item does not silently pick it up. **Quick item and movement actions** is enabled by default; turn it off when you want the creative planner to include reactions to every interaction. Authored rules, guides and unusual conditions already defer to creative resolution so shortcuts cannot bypass them. Waiting, conversation and combat remain creative turns.
+Open **Inventory** or type `open inventory` to see held and worn items immediately. Pick up, drop, give, open, close, inspect and move controls use the saved location and ownership rules. A locked door stays locked, unavailable characters cannot respond, and inspecting an item does not silently pick it up. **Quick item and movement actions** is enabled by default; turn it off when you want creative planning. Authored rules, guides, unusual conditions and incompatible scene controls can defer to that path so shortcuts cannot bypass them. See [scene selection, movement and return limits](docs/GAME_SCENE_MOVEMENT.md).
 
 The assistant uses bounded corrections for eligible malformed responses, retains exact request receipts after a lost connection, and validates edited plans before rendering. Failed or cancelled turns do not advance accepted inventory or history. See the [local assistant comparison](docs/ASSISTANT_EVALUATION.md) for the tested model choice, measured latency and evaluation limits.
 
@@ -157,7 +159,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.3.1 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.4.0 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.

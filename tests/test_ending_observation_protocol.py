@@ -95,7 +95,7 @@ def test_fresh_incomplete_inspection_preserves_previous_branch_and_requires_reco
     assert turn['status'] == 'inspection_failed'
     assert record['active_run_id'] == first['run_id'] and rig.manager._state(record) == before
     request = next(request for request in internal['assistant_requests'].values() if request['stage'] == 'ending-inspection')
-    assert internal['ending_observation_protocol'] == request['observation_protocol_version'] == 2
+    assert internal['ending_observation_protocol'] == request['observation_protocol_version'] == 3
     assert len(calls) == 1 and calls[0][1]['max_tokens'] == ending_output_budget(calls[0][0])
     assert len(rig.videos.queues) == 2, 'The incomplete check must not trigger another render.'
     # Retrying the inspection creates a new explicit strict request only.
@@ -137,9 +137,9 @@ def test_saved_legacy_inspection_keeps_original_request_hash_schema_and_cached_a
         assert not rig.client.calls, 'Recovery must reuse the saved supervised response.'
         restored.action(session['id'], turn['id'], 'reroll', {'request_id': uid()})
         restored.process(session['id'], turn['id'])
-        assert saved['status'] == 'awaiting_assistant' and saved['ending_observation_protocol'] == 2
+        assert saved['status'] == 'awaiting_assistant' and saved['ending_observation_protocol'] == 3
         fresh = next(request for request in saved['assistant_requests'].values() if request['stage'] == 'ending-inspection')
-        assert fresh['observation_protocol_version'] == 2 and 'continuity_checks' in fresh['schema']['required']
+        assert fresh['observation_protocol_version'] == 3 and 'continuity_checks' in fresh['schema']['required']
         assert fresh['context_hash'] != old_hash
     finally:
         restored.close()

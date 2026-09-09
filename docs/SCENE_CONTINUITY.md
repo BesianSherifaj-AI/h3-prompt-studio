@@ -20,7 +20,7 @@ Object placement is projected on a copy of the world before rendering. The start
 
 Generated scene controls are refreshed for each turn. Completed actions are not permanent directing instructions. The prior accepted ending and known appearance provide continuity context; a cancelled candidate does not become the next starting point.
 
-The ending inspector compares the actual final frame with the final shot's intended cast and props. A definite reported continuity mismatch pauses for review before advancing the story, including when routine automatic rendering is enabled. Missing or obscured objects are uncertain evidence, not permission to create or delete an item. A single frame cannot verify an entire movement, speech, or continuous stillness.
+When ending inspection runs, it compares the actual final frame with the final shot's intended cast and props. A definite reported continuity mismatch pauses for review before advancing the story, including when routine automatic rendering is enabled. Missing or obscured objects are uncertain evidence, not permission to create or delete an item. A single frame cannot verify an entire movement, speech, or continuous stillness. Basic deterministic movement in v1.4.0 skips this model call and labels the new ending uninspected; see [scene selection and movement](GAME_SCENE_MOVEMENT.md).
 
 Fresh inspections require one assessment for every character and prop in a nonempty final contract. **Uncertain** is a valid assessment; omitting identities is not. Incomplete responses leave the video available at the inspection-recovery step and preserve the previous accepted ending. Saved older inspection requests keep their original protocol for recovery, and existing observations remain readable. Explicitly requesting another inspection or another take uses the current protocol.
 
@@ -41,7 +41,7 @@ Older projects and saved assistant responses remain readable. Without an explici
 
 ## Performance and verification
 
-Scene control adds no separate model stage. Existing mechanical game actions still use deterministic rules and a single director request; opening inventory uses no model. Exact duplicate action/ending prose is removed where safe. More useful detail can still increase output tokens, so compare recorded stage latency rather than assuming a longer prompt is faster.
+Scene control adds no separate model stage. Eligible basic directional movement uses deterministic rules and direction with no assistant call; other mechanical game actions can use a director request. Opening inventory uses no model. Exact duplicate action/ending prose is removed where safe. More useful detail can still increase output tokens, so compare recorded stage latency rather than assuming a longer prompt is faster.
 
 The director output allowance scales with the requested shot and cast counts, from a normal 1,400-token baseline up to the transport's 4,096-token limit. A three-shot, three-actor plan receives 2,900 tokens: the previous flat allowance cut off a real response. This raises the available ceiling without requiring longer output or another model call. Very large plans and model mistakes can still need review.
 

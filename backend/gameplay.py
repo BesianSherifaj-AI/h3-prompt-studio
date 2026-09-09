@@ -52,7 +52,7 @@ def mechanics_need_narrative(world, player_id, intent, *, guides=(), user_instru
     actor = next((character for character in world['characters'] if character['id'] == player_id), {})
     # The core mechanic understands terminal actor status and ordinary doors;
     # it does not understand additional conditions such as curse/weight/health.
-    known_actor = {'dead', 'defeated', 'unconscious', 'alive', 'status'}
+    known_actor = {'dead', 'defeated', 'unconscious', 'alive', 'status', 'visual_anchor', 'visual_anchor_run_id'}
     if set(actor.get('state', {})) - known_actor:
         return True
     if str(actor.get('state', {}).get('status', '')).casefold() not in ('', 'active', 'alive', 'healthy', 'normal', 'dead', 'defeated', 'unconscious'):
@@ -100,14 +100,15 @@ def infer_simple_intent(world, player_id, message):
     return None
 
 
-def mechanical_plan(world, player_id, intent, duration, *, guides=(), user_instructions=''):
+def mechanical_plan(world, player_id, intent, duration, *, guides=(), user_instructions='', current_setting=''):
     """Return exact mechanical consequences without inventing an NPC response."""
     if not intent or intent.get('kind') not in MECHANICAL:
         return None
     if mechanics_need_narrative(world, player_id, intent, guides=guides, user_instructions=user_instructions):
         return None
     context = actor_context(world, player_id)
-    if not context.get('location'):
+    directional = intent.get('kind') == 'move' and not intent.get('target_id')
+    if not context.get('location') and not directional:
         return None  # The creative planner first establishes a text-only world.
     resolved = resolve_intent(world, player_id, intent)
     kind = resolved['intent']['kind']
@@ -138,10 +139,18 @@ def mechanical_plan(world, player_id, intent, duration, *, guides=(), user_instr
         preview_id += '-x'
     proposed = apply_effects(world, resolved['effects'], event_id=preview_id, actor_id=player_id)
     changed_actor = next(c for c in proposed['characters'] if c['id'] == player_id)
-    place = next(p for p in proposed['locations'] if p['id'] == changed_actor['location_id'])
+    place = next((p for p in proposed['locations'] if p['id'] == changed_actor['location_id']),
+                 {'name': 'Current scene', 'description': str(current_setting or '')[:2400]})
     cast = [c for c in proposed['characters'] if c['location_id'] == changed_actor['location_id'] or c['id'] == player_id]
     names = {c['id']: c['name'] for c in proposed['characters']}
     ending = f'{name} is in {place["name"]}.'
+    if directional:
+        axis = {'forward': 'farther into the current view, away from the viewer',
+                'backward': 'closer to the viewer', 'left': 'farther to screen-left', 'right': 'farther to screen-right'}
+        if intent.get('camera', 'player') == 'camera':
+            ending += ' The viewpoint has shifted; every person retains their world position and appearance.'
+        else:
+            ending += f' {name} finishes the step {axis[intent.get("direction", "forward")]}, visibly displaced relative to the nearby fixed ground and architecture, with the same appearance.'
     changed_item = next((e for e in proposed['entities'] if e['id'] == target.get('id')), None)
     if changed_item:
         holder = changed_item['holder_id'] or changed_item['worn_by_id']

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Compass, RefreshCw } from "lucide-react";
 import { api } from "./api";
-import type { GameCharacter, GameIntent, Story, StoryTurn } from "./storyTypes";
+import { storyTurnPending, type GameCharacter, type GameIntent, type Story, type StoryTurn } from "./storyTypes";
+import { GameScenePanel, type SceneCatalog, type SceneTarget } from "./GameScenePanel";
 
 type AvailableAction = { kind: string; label?: string; message?: string; target_id?: string; enabled?: boolean; reason?: string };
-type ActionCatalog = { targets: { id: string; name: string; kind: string }[]; actions: AvailableAction[] };
+type ActionCatalog = { targets: { id: string; name: string; kind: string }[]; actions: AvailableAction[]; scene?: SceneCatalog };
 export function isInventoryCommand(message: string) {
   return /^(?:(?:i\s+)?(?:open|show|check)\s+)?(?:my\s+)?inventory[.!?]?$/i.test(message.trim());
 }
@@ -41,6 +42,11 @@ export function gameActionMessage(action: AvailableAction, story: Story, recipie
   if (action.kind === "attack") return `I attempt to attack ${character?.name || "the selected target"}.`;
   return action.message || `I attempt to ${(action.label || action.kind).replace(/^./, letter => letter.toLowerCase())}.`;
 }
+export function needsPlayerIdentity(story: Story, scene?: SceneCatalog) {
+  const people = scene?.targets.filter(target => target.kind === "person") || [];
+  const player = story.world?.characters.find(character => character.id === story.player_character_id);
+  return story.project?.game_viewpoint !== "pov" && people.length >= 2 && !player?.state?.visual_anchor && !people.some(person => person.known_id === story.player_character_id);
+}
 
 export function GameWorldStatus({ story, catalog, target, disabled, onSelect, onAction }: {
   story: Story; catalog?: ActionCatalog | null; target: string; disabled: boolean;
@@ -50,7 +56,11 @@ export function GameWorldStatus({ story, catalog, target, disabled, onSelect, on
   if (!story.world) return null;
   const itemActions = (id: string, kinds: string[]) => (catalog?.actions || []).filter(a => a.target_id === id && kinds.includes(a.kind));
   return <section className="game-world-status" aria-label="World and inventory">
+    <h3>Established world &amp; inventory</h3>
     <div className="game-world-location"><strong>{location?.name || "Current scene"}</strong>{player && <span>{player.name}{gameCharacterStatus(player) ? ` · ${gameCharacterStatus(player)}` : ""}</span>}</div>
+    {story.navigation?.version === 1 && <div className="game-navigation-memory"><strong>Local steps · {story.navigation.position.join(", ")}</strong><p>{story.navigation.views.length} saved view(s). Left/right changes the first coordinate; forward/back changes the second. These are steps within the scene.</p></div>}
+    {!location && <p className="game-help">No named place is established yet.</p>}
+    {!nearby.length && <p className="game-help">No other characters are established here yet. People seen in the frame appear above when identified by its inspection.</p>}
     {!!nearby.length && <div className="game-world-people" aria-label="Characters here">{nearby.map(character => <button type="button" key={character.id} aria-pressed={target === character.id} onClick={() => onSelect(character.id)}>{character.name}{gameCharacterStatus(character) && <small> · {gameCharacterStatus(character)}</small>}</button>)}</div>}
     <div className="game-inventory" id={`game-inventory-${story.id}`} tabIndex={-1} aria-label="Your inventory"><strong>Inventory · {inventory.length}</strong>{!inventory.length && <p>Your hands are empty. Pick up an item in this scene to carry it.</p>}
       {inventory.map(item => <div className="game-world-item" key={item.id}><button type="button" aria-pressed={target === item.id} onClick={() => onSelect(item.id)}>{item.name}<small> · {item.worn_by_id === player?.id ? "Worn" : "Carrying"}</small></button><div>{itemActions(item.id, ["drop", "give", "use", "remove"]).map(action => <button type="button" key={action.kind} disabled={disabled || action.enabled === false || (action.kind === "give" && !recipients.length)} title={action.kind === "give" && !recipients.length ? "No character here can receive an item." : action.reason || ""} onClick={() => action.kind === "give" ? onSelect(item.id) : onAction(action)}>{action.kind === "give" ? "Give…" : action.kind[0].toUpperCase() + action.kind.slice(1)}</button>)}</div></div>)}
@@ -59,12 +69,16 @@ export function GameWorldStatus({ story, catalog, target, disabled, onSelect, on
   </section>;
 }
 
-export function GameActions({ story, disabled, onAction }: { story: Story; disabled: boolean; onAction: (message: string, intent: GameIntent) => void }) {
+export function GameActions({ story, disabled, viewedRunId, onRefreshStory, onAction }: { story: Story; disabled: boolean; viewedRunId?: string; onRefreshStory?: () => Promise<unknown>; onAction: (message: string, intent: GameIntent) => void }) {
   const [target, setTarget] = useState(""), [savedCatalog, setCatalog] = useState<{ key: string; value: ActionCatalog } | null>(null), [error, setError] = useState("");
   const [recipient, setRecipient] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [sceneMutation, setSceneMutation] = useState<"bind" | "inspect" | "">("");
+  const [sceneError, setSceneError] = useState("");
+  const sceneLock = useRef(false), sceneAttempt = useRef<{ key: string; body: Record<string, unknown> } | null>(null);
   const [extent, setExtent] = useState("step"), [speed, setSpeed] = useState("normal"), [presentation, setPresentation] = useState("continuous"), [mode, setMode] = useState("player");
-  const catalogKey = `${story.id}:${story.active_branch_id}:${story.active_run_id || ""}:${story.configuration_revision || 0}`;
+  const latestTurn = story.turns.at(-1);
+  const catalogKey = `${story.id}:${story.active_branch_id}:${story.active_run_id || ""}:${story.configuration_revision || 0}:${latestTurn?.id || ""}:${latestTurn?.status || ""}:${latestTurn?.run_id || ""}`;
   const catalog = savedCatalog?.key === catalogKey ? savedCatalog.value : null;
   const selectedTarget = catalog?.targets.some(t => t.id === target) ? target : "";
   const { recipients } = gameWorldSummary(story);
@@ -82,6 +96,29 @@ export function GameActions({ story, disabled, onAction }: { story: Story; disab
     }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, [catalogKey, refreshVersion]);
+  useEffect(() => {
+    if (!["pending", "running"].includes(catalog?.scene?.inspection?.status || "")) return;
+    const timer = setTimeout(() => setRefreshVersion(value => value + 1), 1700);
+    return () => clearTimeout(timer);
+  }, [catalog, refreshVersion]);
+  const changeScene = async (kind: "bind" | "inspect", scene: SceneCatalog, target?: SceneTarget) => {
+    if (sceneLock.current || story.turns.some(storyTurnPending)) return;
+    sceneLock.current = true; setSceneMutation(kind); setSceneError("");
+    const scope = `${story.id}:${kind}:${scene.run_id}:${scene.branch_id}:${scene.configuration_revision}:${target?.id || ""}`;
+    if (sceneAttempt.current?.key !== scope) sceneAttempt.current = { key: scope, body: {
+      run_id: scene.run_id, branch_id: scene.branch_id, configuration_revision: scene.configuration_revision,
+      ...(target ? { candidate_id: target.id } : {}), request_id: crypto.randomUUID(),
+    } };
+    try {
+      await api(`/stories/${encodeURIComponent(story.id)}/${kind === "bind" ? "scene-player" : "scene-inspection"}`, sceneAttempt.current.body);
+      await onRefreshStory?.();
+      sceneAttempt.current = null;
+    } catch (error) {
+      setSceneError(`${(error as Error).message} Your saved video is unchanged. Refresh scene details to check the result before retrying.`);
+    } finally {
+      setRefreshVersion(value => value + 1); sceneLock.current = false; setSceneMutation("");
+    }
+  };
   const chooseTarget = (id: string) => { setTarget(id); setRecipient(""); };
   const interact = (action: AvailableAction) => {
     if (action.kind === "inventory") { focusGameInventory(story.id); return; }
@@ -91,6 +128,12 @@ export function GameActions({ story, disabled, onAction }: { story: Story; disab
     });
   };
   const go = (direction: string) => {
+    if (mode === "player" && needsPlayerIdentity(story, catalog?.scene)) {
+      setError(catalog?.scene?.status === "stale" ? "Inspect this ending, then select your character and choose This is me before moving." : "Select your character in the scene list and choose This is me before moving.");
+      const panel = document.getElementById(`game-visible-scene-${story.id}`);
+      panel?.focus({ preventScroll: true }); panel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return;
+    }
     const destination = catalog?.targets.find(t => t.id === selectedTarget);
     if ((extent === "travel" || presentation === "teleport") && destination?.kind !== "location") {
       setError("Choose a connected location under Interact with before travelling or teleporting.");
@@ -118,7 +161,10 @@ export function GameActions({ story, disabled, onAction }: { story: Story; disab
         <div className="game-action-buttons" aria-label="Available interactions">{actions.map((action, i) => <button type="button" key={`${action.kind}:${action.target_id || ""}:${i}`} disabled={disabled || action.enabled === false || (action.kind === "give" && !selectedRecipient)} title={action.reason || ""} onClick={() => interact(action)}>{action.label || action.kind}</button>)}</div>
       </div>
     </div>
-    {error && <p role="status" className="game-help">{error} You can still write a move. <button type="button" onClick={() => setRefreshVersion(value => value + 1)}>Refresh interactions</button></p>}
+    <GameScenePanel story={story} viewedRunId={viewedRunId} scene={catalog?.scene} loading={!catalog && !error} disabled={disabled || story.turns.some(storyTurnPending)} binding={sceneMutation === "bind"} inspecting={sceneMutation === "inspect"} onAction={onAction} onBind={(scene, target) => void changeScene("bind", scene, target)} onInspect={scene => void changeScene("inspect", scene)}/>
+    {error && <p role="status" className="game-help">{error} You can still write a move.</p>}
+    {sceneError && <p role="status" className="game-help">{sceneError}</p>}
+    <button type="button" className="quiet" onClick={() => setRefreshVersion(value => value + 1)}>Refresh scene details</button>
     <GameWorldStatus story={story} catalog={catalog} target={selectedTarget} disabled={disabled} onSelect={chooseTarget} onAction={interact}/>
     <details className="game-motion-options"><summary>Movement options <span>{extent === "step" ? "A step" : extent === "nearby" ? "Nearby" : "Travel"} · {speed}</span></summary>
       <div className="game-movement-settings"><label>Move<select value={mode} onChange={e => setMode(e.target.value)}><option value="player">My character</option><option value="camera">Camera only</option></select></label><label>Distance<select value={extent} onChange={e => setExtent(e.target.value)}><option value="step">A step</option><option value="nearby">Nearby</option><option value="travel">Travel</option></select></label><label>Motion speed<select value={speed} onChange={e => setSpeed(e.target.value)}><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select></label><label>Show movement<select value={presentation} onChange={e => setPresentation(e.target.value)}><option value="continuous">Continuous</option><option value="cut">Cut</option><option value="teleport">Teleportation</option></select></label></div>
@@ -129,7 +175,8 @@ export function GameActions({ story, disabled, onAction }: { story: Story; disab
 
 export function GameStages({ turn }: { turn: StoryTurn }) {
   const stage = ["rendering", "observing", "succeeded", "inspection_failed", "awaiting_acceptance"].includes(turn.status) ? 3 : turn.status === "assets" ? 2 : 1;
-  return <ol className="game-three-stages" aria-label="Scene progress">{["Write the response", "Prepare references", "Render & inspect"].map((name, i) => <li key={name} aria-current={stage === i + 1 ? "step" : undefined} className={stage === i + 1 ? "active" : stage > i + 1 ? "complete" : ""}><b>{i + 1}</b><span>{name}</span></li>)}</ol>;
+  const names = turn.planning_mode === "deterministic_movement" ? ["Prepare movement", "Reuse saved frame", "Render movement"] : ["Write the response", "Prepare references", "Render & inspect"];
+  return <ol className="game-three-stages" aria-label="Scene progress">{names.map((name, i) => <li key={name} aria-current={stage === i + 1 ? "step" : undefined} className={stage === i + 1 ? "active" : stage > i + 1 ? "complete" : ""}><b>{i + 1}</b><span>{name}</span></li>)}</ol>;
 }
 
 export function GameReceipt({ turn }: { turn: StoryTurn }) {

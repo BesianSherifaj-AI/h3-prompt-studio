@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 — Visible scenes and direct movement
+
+- Added an **In this frame** list of inspected people, doors and objects, distinguishing established identities from unidentified visual candidates. Selecting a target prepares inspect, talk or approach actions without automatically assigning possessions or inventing a name, lock state or hidden item.
+- Added explicit **This is me** player binding with saved appearance and frame provenance. Ambiguous player movement asks for identification. **Inspect this ending** scans an existing accepted image without rendering video or advancing the world; stale and pending-review targets remain clearly labelled.
+- Basic eligible directional arrows now use deterministic movement preparation before any assistant load. H3 starts from the current accepted image in I2VA mode. Custom rules, guides and incompatible authored controls preserve their planning requirements.
+- Added branch-local saved viewpoints. A compatible earlier destination can supply an FL2VA end frame for a return; current world state, references and presentation must still agree. Retries and rerolls do not apply a movement twice or restore old inventory.
+- Basic movement skips automatic ending inference and marks the result uninspected. Earlier scene positions stay stale until explicitly refreshed. Creative-turn inspections still support continuity review, and newly requested Game inspections also return a bounded visible-scene inventory; legacy observations remain readable.
+- Improved movement progress and visible review controls. The result remains generated video, not a physical simulation or verified motion trace. Earlier release demos and test counts describe their original versions.
+
 ## 1.3.1 — Text-only Game startup
 
 - Fixed an automatic background-image request blocking an ordinary text-only opening. Game defaults to using the description and existing references directly. Optional extra reference generation is an explicit setting, enforced in both the assistant schema and plan admission; authored image requests retain their explicit behavior.

@@ -97,10 +97,22 @@ class StoryStateMixin:
         if body.get('configuration_revision', state['configuration_revision']) != state['configuration_revision']:
             raise ValueError('Your story settings changed. Reload the saved editor before sending this move.')
         snapshot = copy.deepcopy(state)
+        selected_intent = copy.deepcopy(body.get('intent') or {'kind': 'freeform'})
+        if selected_intent.get('kind') == 'scene_target':
+            selected_intent = self._ground_scene_target(story, snapshot, selected_intent)
+        if selected_intent.get('kind') == 'move' and selected_intent.get('camera', 'player') != 'camera' and snapshot['project'].get('game_viewpoint') != 'pov':
+            scene = self.scene_inventory(story)
+            people = [row for row in scene.get('targets', []) if row['kind'] == 'person']
+            player = next((row for row in snapshot['world']['characters'] if row['id'] == snapshot.get('player_character_id')), {})
+            if (len(people) >= 2 and not player.get('state', {}).get('visual_anchor')
+                    and not any(row.get('known_id') == player.get('id') for row in people)):
+                raise ValueError('Choose This is me in the scene list before moving your character.')
         turn.update(snapshot=snapshot, configuration_revision=state['configuration_revision'], logical_turn_id=turn['id'])
-        turn['intent'] = copy.deepcopy(body.get('intent') or {'kind': 'freeform'})
+        turn['intent'] = selected_intent
         if turn['intent'].get('kind') != 'freeform':
             turn['resolved_intent'] = resolve_intent(snapshot['world'], snapshot['player_character_id'], turn['intent'])
+        from .navigation import prepare_navigation
+        prepare_navigation(story, turn, snapshot)
         turn['receipt'] = {'request_id': turn['request_id'], 'intent': turn['intent'], 'message': turn['message'],
                            'parent_run_id': turn.get('parent_run_id'), 'configuration_revision': state['configuration_revision'],
                            'compiler_version': '1.2.0', 'created_at': time.time()}
@@ -145,8 +157,159 @@ class StoryStateMixin:
     def available_actions(self, story_id, target_id=None):
         from .world import available_actions
         with self.lock:
-            state = self._state(self._story(story_id))
-            return available_actions(state['world'], state['player_character_id'], target_id)
+            story = self._story(story_id)
+            state = self._state(story)
+            return {**available_actions(state['world'], state['player_character_id'], target_id),
+                    'scene': self.scene_inventory(story)}
+
+    def scene_inventory(self, story):
+        from .ending_observation import _provisional_world, scene_candidates
+        state = self._state(story)
+        pending = next((turn for turn in reversed(story['turns']) if turn.get('run_id') and
+                        turn.get('branch_id', story['active_branch_id']) == story['active_branch_id'] and
+                        turn['status'] in ('awaiting_acceptance', 'inspection_failed')), None)
+        run_id = pending['run_id'] if pending else story.get('active_run_id')
+        base = {'run_id': run_id, 'branch_id': story['active_branch_id'],
+                'configuration_revision': state['configuration_revision'], 'setting': '', 'targets': [], 'status': 'unavailable'}
+        if not run_id:
+            return base
+        inspection = next((job for job in reversed(list(story.get('scene_inspections', {}).values()))
+                           if job['run_id'] == run_id), None)
+        if inspection:
+            base['inspection'] = {key: inspection.get(key) for key in ('status', 'request_id', 'error')}
+        observation = pending.get('observation', {}) if pending else self.latest_scene_observation(story, run_id)
+        stale = observation.get('inspection_status') == 'not_run'
+        inventory_observation = observation
+        inspected_run_id = run_id
+        if stale:
+            inspected_run_id = observation.get('cached_scene_run_id') or run_id
+            old_scene = observation.get('last_inspected_scene')
+            inventory_observation = {'visible_scene': old_scene} if isinstance(old_scene, dict) else {}
+            base.update(inspected_run_id=inspected_run_id, inspection_status='not_run')
+        world = _provisional_world((pending.get('snapshot') or state)['world'], pending['plan'], state['player_character_id']) if pending else state['world']
+        try:
+            scene = scene_candidates(inventory_observation, world, inspected_run_id)
+        except ValueError:
+            base['description'] = 'The saved scene inventory needs refreshing after changes to known identities.'
+            return base
+        if not scene:
+            base['status'] = 'pending_review' if pending else ('stale' if stale else 'unavailable')
+            base['description'] = observation.get('observed_state', '')
+            return base
+        base.update(scene, status='pending_review' if pending else ('stale' if stale else 'ready'))
+        bindings = state.get('scene_target_bindings', {})
+        for target in base['targets']:
+            if bindings.get(target['id']):
+                target['known_id'] = bindings[target['id']]
+                target['identity_status'] = 'known'
+            kinds = ['examine', 'talk', 'move'] if target['kind'] == 'person' else ['examine', 'move']
+            target['actions'] = [{'kind': kind, 'label': {'examine': 'Inspect', 'talk': 'Talk to', 'move': 'Approach'}[kind] + ' ' + target['label'],
+                'enabled': not bool(pending or stale) and target.get('known_id') != state['player_character_id'],
+                'reason': 'Review and accept this ending first.' if pending else ('Inspect this ending to refresh visible positions.' if stale else ('This is your character.' if target.get('known_id') == state['player_character_id'] else '')),
+                'intent': {'kind': 'scene_target', 'scene_run_id': run_id, 'candidate_id': target['id'], 'action': kind}}
+                for kind in kinds]
+        return base
+
+    @staticmethod
+    def latest_scene_observation(story, run_id):
+        completed = next((job for job in reversed(list(story.get('scene_inspections', {}).values()))
+                          if job['run_id'] == run_id and job['status'] == 'succeeded'), None)
+        original = story['observed_by_run'].get(run_id, {})
+        if completed:
+            return {**original, **completed['observation'], 'inspection_status': 'inspected'}
+        return original
+
+    def _scene_selection(self, story, body):
+        scene = self.scene_inventory(story)
+        if (scene['status'] != 'ready' or body.get('run_id', body.get('scene_run_id')) != scene['run_id']
+                or body.get('branch_id', scene['branch_id']) != scene['branch_id']
+                or body.get('configuration_revision', scene['configuration_revision']) != scene['configuration_revision']):
+            raise ValueError('The visible scene changed or needs review. Select a target from the current accepted ending.')
+        candidate = next((row for row in scene['targets'] if row['id'] == body.get('candidate_id')), None)
+        if not candidate:
+            raise ValueError('That visible target is no longer available in the current ending.')
+        return scene, candidate
+
+    @staticmethod
+    def _observed_location(world, scene, player_id):
+        from .world import apply_discoveries, validate_world
+        if world['current_location_id'] is not None or not scene.get('setting', '').strip():
+            return world
+        identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'h3-observed-place:' + scene['run_id']))
+        result = apply_discoveries(world, {'locations': [{'id': identity, 'name': 'Observed scene',
+            'description': scene['setting']} ]})
+        visible = {row.get('known_id') for row in scene['targets'] if row['kind'] == 'person'} | {player_id}
+        for row in result['characters']:
+            if row['id'] not in visible and next(old for old in world['characters'] if old['id'] == row['id'])['location_id'] is None:
+                row['location_id'] = None
+        return validate_world(result)
+
+    def _ground_scene_target(self, story, snapshot, intent):
+        from .world import validate_world, project_from_world
+        scene, candidate = self._scene_selection(story, intent)
+        selected = next((row for row in candidate['actions'] if row['kind'] == intent.get('action') and row['enabled']), None)
+        if selected is None:
+            raise ValueError('Choose an available inspect, talk or approach action for this visible target.')
+        world = self._observed_location(snapshot['world'], scene, snapshot['player_character_id'])
+        known = candidate.get('known_id')
+        if not known:
+            known = str(uuid.uuid5(uuid.NAMESPACE_URL, 'h3-selected-target:' + candidate['id']))
+            group = 'characters' if candidate['kind'] == 'person' else 'entities'
+            if any(row['id'] == known for rows in (world[key] for key in ('characters', 'entities', 'locations', 'events', 'objectives')) for row in rows):
+                raise ValueError('This visible target identity is already registered. Refresh the scene list.')
+            names = {row['name'].casefold() for row in world[group]}
+            name = candidate['label']
+            if name.casefold() in names:
+                name = name[:90] + ' (' + candidate['position'][:25] + ')'
+            row = {'id': known, 'name': name, 'description': candidate['description'], 'asset_ids': [],
+                   'location_id': world['current_location_id'], 'state': {'basis': 'selected visible candidate', 'position': candidate['position']}}
+            if group == 'characters':
+                row.update(control='npc', speaking_style='', private_knowledge=[])
+            else:
+                row.update(kind='door' if candidate['kind'] == 'door' else 'prop', affordances=['examine'])
+                if candidate['kind'] == 'object':
+                    row['state']['placement_unverified'] = True
+            world[group].append(row)
+            world = validate_world(world)
+        snapshot['world'] = world
+        snapshot['project'] = project_from_world(snapshot['project'], world)
+        snapshot.setdefault('scene_target_bindings', {})[candidate['id']] = known
+        snapshot['selected_visible_target'] = {'run_id': scene['run_id'], 'candidate_id': candidate['id'], 'target_id': known,
+                                              'description': candidate['description'], 'position': candidate['position']}
+        return {'kind': intent['action'], 'target_id': known}
+
+    def bind_scene_player(self, story_id, body):
+        from .world import validate_world, project_from_world
+        request_id = str(uuid.UUID(body.get('request_id', '')))
+        fingerprint = digest(body)
+        with self.lock:
+            story = self._story(story_id)
+            old = story.get('scene_binding_requests', {}).get(request_id)
+            if old:
+                if old['digest'] != fingerprint:
+                    raise ValueError('This scene binding request ID belongs to another selection.')
+                return self.public(story)
+            if any(turn['status'] in ('planning', 'assets', 'rendering', 'observing', 'awaiting_review', 'awaiting_assistant', 'awaiting_acceptance', 'inspection_failed', 'uncertain', 'stopping') for turn in story['turns']):
+                raise ValueError('Finish or review the current turn before binding your character.')
+            state = self._state(story)
+            if any(key not in body for key in ('run_id', 'branch_id', 'configuration_revision')):
+                raise ValueError('Select your character from the current scene and revision.')
+            scene, candidate = self._scene_selection(story, body)
+            if candidate['kind'] != 'person' or candidate.get('known_id') not in (None, state['player_character_id']):
+                raise ValueError('Choose an unidentified person or your existing character, not another established character.')
+            world = self._observed_location(state['world'], scene, state['player_character_id'])
+            player = next(row for row in world['characters'] if row['id'] == state['player_character_id'])
+            player['description'] = candidate['description']
+            player['state'].update(visual_anchor=candidate['description'], visual_anchor_run_id=scene['run_id'])
+            anchor = {'run_id': scene['run_id'], 'candidate_id': candidate['id'], 'description': candidate['description'], 'position': candidate['position']}
+            state.update(world=validate_world(world), player_visual_anchor=anchor, configuration_revision=state['configuration_revision'] + 1)
+            state['project'] = project_from_world(state['project'], world)
+            from .navigation import remember_bound_scene
+            remember_bound_scene(state, scene['run_id'], accepted_state=story.get('state_by_run', {}).get(scene['run_id']))
+            state.setdefault('scene_target_bindings', {})[candidate['id']] = player['id']
+            story.setdefault('scene_binding_requests', {})[request_id] = {'digest': fingerprint, 'anchor': anchor}
+            self._save(story)
+            return self.public(story)
 
     def _commit_state(self, story, turn, run_id):
         from .world import apply_effects, apply_discoveries, world_from_project, project_from_world, validate_world
@@ -171,15 +334,22 @@ class StoryStateMixin:
                                   actor_id=before.get('player_character_id'), summary=summary, witness_ids=witnesses,
                                   dialogue=dialogue)
             accepted = {**copy.deepcopy(before), 'world': world, 'project': project_from_world(turn['project'], world)}
-            turn['accepted_state'] = copy.deepcopy(accepted)
+        from .navigation import commit_navigation
+        commit_navigation(turn.get('snapshot') or state, turn, run_id, accepted)
+        turn['accepted_state'] = copy.deepcopy(accepted)
         # Preserve edits made while rendering. Only merge newly established assets/people.
         edited = state['configuration_revision'] != turn.get('configuration_revision', state['configuration_revision'])
         if not edited:
             state['project'], state['world'] = copy.deepcopy(accepted['project']), copy.deepcopy(accepted['world'])
+            for key in ('scene_target_bindings', 'selected_visible_target', 'player_visual_anchor'):
+                if key in accepted:
+                    state[key] = copy.deepcopy(accepted[key])
         else:
             before = turn.get('snapshot') or accepted
             state['project'] = preserve_edits(before['project'], state['project'], accepted['project'])
             state['world'] = validate_world(preserve_edits(before['world'], state['world'], accepted['world']))
+        if 'navigation' in accepted:
+            state['navigation'] = copy.deepcopy(accepted['navigation'])
         consumed = {(g['id'], g['revision']) for g in (turn.get('snapshot') or {}).get('guides', [])
                     if g['scope'] == 'next' and g['enabled']}
         state['guides'] = [g for g in state['guides'] if (g['id'], g['revision']) not in consumed]

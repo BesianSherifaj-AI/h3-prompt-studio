@@ -164,6 +164,8 @@ def observed_for_schema(observation, schema):
     still exercise production rejection rather than being repaired by a fake.
     """
     result = copy.deepcopy(observation)
+    if 'visible_scene' in schema.get('required', []) and 'visible_scene' not in result:
+        result['visible_scene'] = {'setting': '', 'candidates': []}
     if 'continuity_checks' in schema.get('required', []) and 'continuity_checks' not in result:
         variants = schema['properties']['continuity_checks']['items'].get('anyOf', [])
         result['continuity_checks'] = [{'kind': variant['properties']['kind']['const'], 'id': identity,

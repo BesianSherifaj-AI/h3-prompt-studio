@@ -52,6 +52,7 @@ import {
 } from "./storyTypes";
 import { useStorySession } from "./useStorySession";
 import { GameActionQueue, useGameActionQueue } from "./GameActionQueue";
+import { GameTurnProgress } from "./GameTurnProgress";
 import GameEditor from "./GameEditor";
 import MotionLab from "./MotionLab";
 import { GameSoundtrack, GameVoiceInput } from "./GameAudio";
@@ -545,6 +546,8 @@ export default function GameStudio({
   const [playingFilm, setPlayingFilm] = useState(false),
     [filmIndex, setFilmIndex] = useState(0);
   const composer = useRef<HTMLTextAreaElement>(null),
+    playerVideo = useRef<HTMLVideoElement>(null),
+    moveFeedback = useRef<HTMLDivElement>(null),
     fileInput = useRef<HTMLInputElement>(null),
     conversationEnd = useRef<HTMLDivElement>(null);
   const settingsClose = useRef<HTMLButtonElement>(null),
@@ -765,6 +768,10 @@ export default function GameStudio({
       setPlayingFilm(false);
       return result;
   });
+  useEffect(() => {
+    if (playView === "play" && activeTurn && ["awaiting_review", "awaiting_acceptance", "inspection_failed"].includes(activeTurn.status))
+      moveFeedback.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [activeTurn?.id, activeTurn?.status, playView]);
   const send = (text: string, intent?: GameIntent) => {
     if (story && !intent && isInventoryCommand(text)) {
       focusGameInventory(story.id);
@@ -773,6 +780,7 @@ export default function GameStudio({
     }
     if (moveQueue.enqueue(text, intent)) {
       changeMessage("");
+      moveFeedback.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   };
   const takeAction = (
@@ -1431,7 +1439,7 @@ export default function GameStudio({
                   className={`game-status ${activeTurn ? "is-working" : ""}`}
                   role="status"
                 >
-                  {activeTurn && activeTurn.status !== "awaiting_review" ? (
+                  {activeTurn && RUNNING_STORY_STATUSES.has(activeTurn.status) ? (
                     <LoaderCircle className="game-spin" size={13} />
                   ) : (
                     <Check size={13} />
@@ -1439,14 +1447,26 @@ export default function GameStudio({
                   {playerStatus}
                 </span>
               </div>
+              <div ref={moveFeedback} className="game-feedback-anchor" hidden={playView !== "play"}>
+                <GameTurnProgress turn={activeTurn || lastTurn} queue={moveQueue.queue} now={moveQueue.now} onReview={() => setPlayView("history")}>
+                  {activeTurn && ["awaiting_acceptance", "inspection_failed"].includes(activeTurn.status) && <>
+                    <button type="button" disabled={submitting || !!pendingTicket} onClick={() => takeAction(activeTurn, "retry-inspection")}>Retry ending inspection</button>
+                    <button type="button" disabled={submitting || !!pendingTicket} onClick={() => takeAction(activeTurn, "accept-intended")}>Use intended story</button>
+                    <button type="button" className="primary" disabled={submitting || !!pendingTicket || !hasVisibleObservation(activeTurn)} title="Keep the visible outcome and only changes supported by the inspected ending." onClick={() => takeAction(activeTurn, "accept-visible")}>Use visible result</button>
+                  </>}
+                  {activeTurn?.status === "awaiting_review" && <button type="button" className="primary" disabled={submitting || !!pendingTicket} onClick={() => takeAction(activeTurn, "approve")}>Render this scene</button>}
+                </GameTurnProgress>
+              </div>
               <div className="game-video-control-row">
               <div className="game-player" style={{ aspectRatio: selectedVideo?.width && selectedVideo.height ? `${selectedVideo.width} / ${selectedVideo.height}` : String(config.settings.aspect_ratio || config.project.aspect_ratio).replace(":", "/") }}>
                 {selectedVideo?.video_url ? (
                   <video
+                    ref={playerVideo}
                     key={`${playingFilm ? "film" : "take"}:${selectedVideo.id}`}
                     controls
                     playsInline
                     preload="metadata"
+                    poster={selectedVideo.ending_image_url || undefined}
                     src={
                       selectedVideo.scene_video_url || selectedVideo.video_url
                     }
@@ -1473,8 +1493,9 @@ export default function GameStudio({
                   </div>
                 )}
               </div>
-              <GameActions story={story} disabled={false} onAction={send}/>
+              <GameActions key={story.id} story={story} viewedRunId={selectedVideo?.id} disabled={false} onRefreshStory={() => session.refresh()} onAction={send}/>
               </div>
+              {selectedVideo?.video_url && <div className="game-current-video-actions"><span>{activeTurn?.run_id === selectedVideo.id ? "New result" : preview || playingFilm ? "Selected take" : "Accepted ending"} · replay to watch the movement</span><button type="button" onClick={() => { const video = playerVideo.current; if (video) { video.currentTime = 0; void video.play().catch(error => setLocalError(`Playback could not start: ${error.message}`)); } }}><Play size={15}/> Replay this scene</button></div>}
             <form
               className="game-composer"
               onSubmit={(event) => {
@@ -1523,8 +1544,8 @@ export default function GameStudio({
                     : "A choice joins the queue. Edit or remove it during the 3-second window before it starts."}
               </p>
             </form>
-              <GameActionQueue controls={moveQueue} busy={busy} onCheck={() => void perform(() => session.resumePending())}/>
-              {lastTurn && ["awaiting_review", "inspection_failed", "awaiting_acceptance", "failed", "uncertain", "awaiting_assistant"].includes(lastTurn.status) && <div className="game-attention-link" role="status"><span>{lastTurn.error || storyTurnLabel(lastTurn)}</span><div className="game-attention-actions">{lastTurn.status === "failed" && !lastTurn.plan && !lastTurn.run_id && <button className="primary" disabled={submitting || !!pendingTicket} onClick={() => takeAction(lastTurn, "retry")}><RefreshCw size={15}/> Retry AI response</button>}<button className="quiet" onClick={() => setPlayView("history")}>Review details</button></div></div>}
+              <GameActionQueue controls={moveQueue} busy={busy} story={story} onCheck={() => void perform(() => session.resumePending())}/>
+              {lastTurn && ["failed", "uncertain", "awaiting_assistant"].includes(lastTurn.status) && <div className="game-attention-link" role="status"><span>{lastTurn.error || storyTurnLabel(lastTurn)}</span><div className="game-attention-actions">{lastTurn.status === "failed" && !lastTurn.plan && !lastTurn.run_id && <button className="primary" disabled={submitting || !!pendingTicket} onClick={() => takeAction(lastTurn, "retry")}><RefreshCw size={15}/> Retry AI response</button>}<button className="quiet" onClick={() => setPlayView("history")}>Review details</button></div></div>}
               {selectedVideo && (
                 <div className="game-player-meta">
                   <span>

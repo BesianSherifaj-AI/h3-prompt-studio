@@ -444,11 +444,22 @@ def resolve_intent(world, actor_id, intent):
         if clean.get('presentation', 'continuous') not in ('continuous', 'cut'):
             raise WorldError('Teleportation needs a known destination.')
         who = 'The camera' if camera == 'camera' else cast[actor_id]['name']
-        amount = 'one short step' if extent == 'step' else 'a short distance'
+        amount = 'one clear walking pace' if extent == 'step' else 'several walking paces'
         pace = {'slow': 'slowly', 'normal': 'at a natural pace', 'fast': 'quickly'}[speed]
-        action = f'{who} moves {direction} {amount} {pace}, within the current location.'
+        axis = {'forward': 'deeper into the current view, away from the viewer along the ground plane',
+                'backward': 'back toward the viewer along the ground plane',
+                'left': 'toward the left side of the current view',
+                'right': 'toward the right side of the current view'}[direction]
+        action = f'{who} moves {direction}, {axis}, {amount} {pace}, within the current location.'
         if camera == 'camera':
-            action += ' The characters stay in their current positions.'
+            action += ' Only the viewpoint moves; the characters stay in their current world positions.'
+        else:
+            appearance = cast[actor_id].get('state', {}).get('visual_anchor') or cast[actor_id].get('description')
+            if appearance:
+                action += f' The moving person is {who}: {str(appearance)[:1000]}.'
+            action += (' Show planted footfalls and a visible change of position relative to stationary nearby landmarks; '
+                       'do not replace walking with sliding or walking in place. Other people keep their places. '
+                       'Keep the viewing direction consistent throughout this move.')
         clean['kind'] = kind
         return {'intent': clean, 'action': action, 'effects': []}
     choices = available_actions(world, actor_id, target)

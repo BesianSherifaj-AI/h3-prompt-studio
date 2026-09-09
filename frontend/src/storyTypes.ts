@@ -15,7 +15,7 @@ export type GameWorld = {
   entities: Array<{id:string;name:string;kind:string;location_id?:string|null;owner_id?:string|null;holder_id?:string|null;worn_by_id?:string|null;asset_ids:string[];affordances:string[];state:Record<string,unknown>}>;
   objectives: any[]; rules: string; events: any[];
 };
-export type GameIntent = { kind: string; target_id?: string; recipient_id?: string; extent?: string; speed?: string; camera?: string; presentation?: string; direction?: string };
+export type GameIntent = { kind: string; target_id?: string; recipient_id?: string; extent?: string; speed?: string; camera?: string; presentation?: string; direction?: string; scene_run_id?: string; candidate_id?: string; action?: string };
 export type StoryConfiguration = {
   project: Project; world: GameWorld; guides: GameGuide[]; settings: StorySettings;
   premise: string; player_name: string; player_character_id: string;
@@ -90,6 +90,7 @@ export type Story = {
   guides?: GameGuide[];
   configuration_revision?: number;
   player_character_id?: string;
+  navigation?: { version: number; frame_id: string; position: [number, number]; current_run_id?: string; location_id?: string | null; views: { run_id: string; position: [number, number]; frame_id: string; location_id?: string | null }[] };
   [key: string]: unknown;
 };
 export type ImageGeneratorModel = {
@@ -140,6 +141,7 @@ export function storyTurnPending(turn?: StoryTurn | null) {
 }
 export function storyTurnLabel(turn?: StoryTurn | null) {
   if (!turn) return "Ready for your first move";
+  if (turn.status === "planning" && turn.planning_mode === "deterministic_movement") return "Preparing movement";
   return (
     {
       planning: "Planning the next moment",

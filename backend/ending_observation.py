@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import uuid
 
 from jsonschema import Draft202012Validator
 
@@ -90,7 +92,52 @@ def ending_output_budget(schema, baseline=1400):
     """Give a requested identity checklist bounded room in the same inspection."""
     count = schema.get('properties', {}).get('continuity_checks', {}).get('minItems', 0)
     count = count if type(count) is int and count > 0 else 0
-    return min(4096, max(baseline, 400 + 100 * min(count, 56)))
+    inventory_budget = 1000 if 'visible_scene' in schema.get('required', []) else 0
+    return min(4096, max(baseline + inventory_budget, 400 + 100 * min(count, 56) + inventory_budget))
+
+
+def visible_scene_schema(world):
+    ids = [row['id'] for group in ('characters', 'entities') for row in world.get(group, [])]
+    return {'type': 'object', 'additionalProperties': False, 'required': ['setting', 'candidates'], 'properties': {
+        'setting': {'type': 'string', 'maxLength': 400},
+        'candidates': {'type': 'array', 'maxItems': 12, 'items': {'type': 'object', 'additionalProperties': False,
+            'required': ['kind', 'known_id', 'label', 'description', 'position'], 'properties': {
+                'kind': {'type': 'string', 'enum': ['person', 'door', 'object']},
+                'known_id': {'type': ['string', 'null'], 'enum': ids + [None]},
+                'label': {'type': 'string', 'minLength': 1, 'maxLength': 100},
+                'description': {'type': 'string', 'minLength': 1, 'maxLength': 240},
+                'position': {'type': 'string', 'minLength': 1, 'maxLength': 120}}}}}}
+
+
+def scene_candidates(observation, world, run_id):
+    """Expose frame-local candidates without turning them into world records."""
+    scene = (observation or {}).get('visible_scene')
+    if scene is None:
+        return None
+    error = next(Draft202012Validator(visible_scene_schema(world)).iter_errors(scene), None)
+    if error:
+        raise WorldError('Visible scene candidates need known IDs or null and brief descriptions of distinct visible things.')
+    cast = {row['id']: row for row in world['characters']}
+    items = {row['id']: row for row in world['entities']}
+    seen, targets = set(), []
+    for row in scene['candidates']:
+        if any(not row[key].strip() for key in ('label', 'description', 'position')):
+            raise WorldError('Each visible scene candidate needs a label, appearance and position.')
+        known = row['known_id']
+        if known and ((row['kind'] == 'person') != (known in cast)):
+            raise WorldError('A visible person cannot be bound to an object identity or vice versa.')
+        # An empty identity description is no evidence for recognizing the
+        # player merely because the intended cast contains just one person.
+        if known in cast and not str(cast[known].get('description', '')).strip() and not cast[known].get('asset_ids') and not cast[known].get('state', {}).get('visual_anchor'):
+            known = None
+        signature = ('known', known) if known else (row['kind'], row['label'].strip().casefold(), row['position'].strip().casefold())
+        if signature in seen:
+            raise WorldError('List each distinct visible scene candidate once; do not duplicate an identity.')
+        seen.add(signature)
+        key = str(uuid.uuid5(uuid.NAMESPACE_URL, 'h3-visible:' + run_id + ':' + json.dumps(row, sort_keys=True, ensure_ascii=False)))
+        targets.append({**copy.deepcopy(row), 'known_id': known, 'id': key,
+                        'identity_status': 'known' if known else 'unidentified'})
+    return {'setting': scene['setting'], 'targets': targets}
 
 
 def _continuity_schema(contract, require_coverage=False):
@@ -111,7 +158,7 @@ def _continuity_schema(contract, require_coverage=False):
     return result
 
 
-def observation_request(world, plan, player_id, base_schema, scene_contract=None, *, require_coverage=False):
+def observation_request(world, plan, player_id, base_schema, scene_contract=None, *, require_coverage=False, include_scene=False):
     """Return extra public context and a copy of an existing observation schema.
 
     Passing the base schema avoids an import cycle with the story manager. The
@@ -123,6 +170,9 @@ def observation_request(world, plan, player_id, base_schema, scene_contract=None
         raise ValueError('The ending observation needs an object response schema.')
     schema['properties']['visible_effects'] = _visual_schema(provisional)
     schema['properties']['continuity_checks'] = _continuity_schema(scene_contract, require_coverage)
+    if include_scene:
+        schema['properties']['visible_scene'] = visible_scene_schema(provisional)
+        schema['required'] = list(dict.fromkeys([*schema.get('required', []), 'visible_scene']))
     if require_coverage:
         schema['required'] = list(dict.fromkeys([*schema.get('required', []), 'continuity_checks']))
     public = lambda rows, keys: [{key: copy.deepcopy(row[key]) for key in keys if key in row} for row in rows]
@@ -139,6 +189,17 @@ def observation_request(world, plan, player_id, base_schema, scene_contract=None
             'entities': public(provisional['entities'], ('id', 'name', 'kind', 'description')),
         },
     }
+    if include_scene:
+        context['visible_scene_rules'] = (
+            'Inventory up to twelve clearly distinct visible people, physical doors and useful objects in visible_scene. '
+            'Describe appearance/colors and image position; use a short descriptive label for an unidentified person, never invent a name. '
+            'known_id is null unless appearance or an assigned reference identifies that exact established person/object. '
+            'The expected cast, empty player description, central placement or being the only intended actor does not identify the player. '
+            'Do not identify anyone merely from the intended action. A person with no identifying appearance/reference stays unknown. '
+            'Do not register hidden items or infer ownership, inventory, an unlocked door, names, dialogue or relationships. '
+            'A visible background passerby is a candidate, not automatically a new principal character or a count violation. '
+            'Unclear principal identity means uncertain continuity, not a guessed match. These candidates are not accepted world facts; '
+            'the user may select a visible thing or explicitly bind their own character later. Use [] only if no distinct thing can be described.')
     if require_coverage:
         context['continuity_check_rules'] = (
             'Report exactly one continuity_checks row for EVERY actor and object identity in the final scene contract. '
@@ -151,11 +212,22 @@ def observation_request(world, plan, player_id, base_schema, scene_contract=None
     return context, schema
 
 
-def validate_observation(observation, world, plan, player_id, scene_contract=None, *, require_coverage=False):
+def validate_observation(observation, world, plan, player_id, scene_contract=None, *, require_coverage=False, include_scene=False):
     """Validate optional visible effects on a copy; never advance game state."""
     if not isinstance(observation, dict):
         raise WorldError('Ending inspection must return a structured observation.')
     result = copy.deepcopy(observation)
+    if include_scene and 'visible_scene' not in result:
+        raise WorldError('Ending inspection must include the visible scene inventory; use unidentified candidates when identity is unclear.')
+    if 'visible_scene' in result:
+        provisional = _provisional_world(world, plan, player_id)
+        checked = scene_candidates(result, provisional, 'validation')
+        result['visible_scene']['candidates'] = [{key: row[key] for key in ('kind', 'known_id', 'label', 'description', 'position')} for row in checked['targets']]
+        unanchored = {row['id'] for row in provisional['characters'] if not str(row.get('description', '')).strip()
+                      and not row.get('asset_ids') and not row.get('state', {}).get('visual_anchor')}
+        for check in result.get('continuity_checks', []) if isinstance(result.get('continuity_checks'), list) else []:
+            if isinstance(check, dict) and check.get('kind') == 'actor' and check.get('id') in unanchored and check.get('status') == 'match':
+                check.update(status='uncertain', detail='No identifying appearance or reference binds this expected character to a visible person.')
     if require_coverage and 'continuity_checks' not in result:
         raise WorldError('Ending inspection must assess every final scene identity; use uncertain when evidence is unclear.')
     if 'continuity_checks' in result:

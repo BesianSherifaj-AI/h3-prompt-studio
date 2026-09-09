@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(root, 'frontend/package.json'));
 const { chromium, expect } = require('@playwright/test');
+const sceneRecovery = process.argv.includes('--scene-recovery');
 const project = { schema_version: 1, id: 'smoke-project', title: 'Pixel street', mode: 't2va', duration: 3,
   aspect_ratio: '16:9', profile: 'director', authoring_mode: 'assisted', story: { text: 'I am on a pixel art city street.', locked: false },
   style: {}, assets: [], subjects: [{ id: 'player', name: 'Alex', description: 'Pixel adventurer', asset_ids: [] }],
@@ -26,7 +27,32 @@ const story = { id: '11111111-1111-4111-8111-111111111111', title: 'Pixel street
 const requests = [], errors = [];
 let loseAcknowledgement = false;
 let generatorChecks = 0, generatorOffline = true;
+const sceneRequests = [];
+let sceneInspected = false, sceneInspectionStatus = '', sceneInspectionReads = 0;
+const sceneVideo = id => ({ id, project_id: project.id, status: 'succeeded', video_url: `/api/mock-video/${id}`, scene_video_url: `/api/mock-video/${id}/scene`, ending_image_url: `/api/mock-ending/${id}`, duration: 3, width: 608, height: 320 });
+if (sceneRecovery) {
+  story.active_run_id = 'scene-old'; story.clips = [sceneVideo('scene-old')]; story.jobs = [...story.clips];
+  story.turns = [{ id: 'opening', request_id: 'opening', status: 'succeeded', run_id: 'scene-old', message: 'Start on the street.', created_at: 1, video: story.clips[0], observation: { observed_state: 'People and shops line a pixel street.' } }];
+  story.world = { ...story.world, current_location_id: null, locations: [], characters: [{ ...person('player', 'Alex'), location_id: null }], entities: [] };
+}
+function sceneCatalog() {
+  if (sceneInspectionStatus === 'running' && ++sceneInspectionReads > 1) { sceneInspectionStatus = 'succeeded'; sceneInspected = true; }
+  const pending = story.turns.at(-1)?.status === 'awaiting_acceptance';
+  const stale = story.turns.at(-1)?.observation?.inspection_status === 'not_run';
+  const run = pending ? story.turns.at(-1).run_id : story.active_run_id;
+  const candidate = { id: 'person-left', kind: 'person', known_id: story.world.characters[0].description ? 'player' : null,
+    label: 'Person in purple', description: 'Purple shirt and glasses', position: 'Left side of the street',
+    identity_status: story.world.characters[0].description ? 'known' : 'unidentified',
+    actions: [{ kind: 'examine', label: 'Examine', enabled: !pending && !stale, intent: { kind: 'scene_target', scene_run_id: run, candidate_id: 'person-left', action: 'examine' } }] };
+  const otherPerson = { ...candidate, id: 'person-right', known_id: null, identity_status: 'unidentified', label: 'Person in orange', description: 'Orange hat and jacket', position: 'Right storefront',
+    actions: [{ kind: 'talk', label: 'Talk to person in orange', enabled: !pending && !stale, intent: { kind: 'scene_target', scene_run_id: run, candidate_id: 'person-right', action: 'talk' } }] };
+  return { targets: [], actions: [], scene: { run_id: run, branch_id: story.active_branch_id, configuration_revision: story.configuration_revision,
+    status: pending ? 'pending_review' : stale ? 'stale' : sceneInspected ? 'ready' : 'unavailable', setting: 'Pixel street', targets: sceneInspected ? [candidate, otherPerson] : [],
+    ...(stale ? { inspected_run_id: 'scene-old', inspection_status: 'not_run' } : {}),
+    ...(sceneInspectionStatus ? { inspection: { status: sceneInspectionStatus, request_id: 'inspection' } } : {}) } };
+}
 function catalog() {
+  if (sceneRecovery) return sceneCatalog();
   const targets = [{ id: 'mara', name: 'Mara', kind: 'character' }, { id: 'guard', name: 'Fallen guard', kind: 'character' },
     ...story.world.entities.map(item => ({ id: item.id, name: item.name, kind: item.kind })), { id: 'alley', name: 'Alley', kind: 'location' }];
   const mara = story.world.characters.find(person => person.id === 'mara');
@@ -72,10 +98,25 @@ try {
       return json(story);
     }
     if (pathname.endsWith('/actions')) return json(catalog());
+    if (sceneRecovery && pathname.endsWith('/scene-inspection') && request.method() === 'POST') {
+      sceneRequests.push({ path: pathname, body: request.postDataJSON() }); sceneInspectionStatus = 'running';
+      return json({ status: 'pending', request_id: request.postDataJSON().request_id });
+    }
+    if (sceneRecovery && pathname.endsWith('/scene-player') && request.method() === 'POST') {
+      sceneRequests.push({ path: pathname, body: request.postDataJSON() });
+      story.world.characters[0].description = 'Purple shirt and glasses'; story.configuration_revision++;
+      return json(story);
+    }
+    if (sceneRecovery && pathname.endsWith('/accept-visible') && request.method() === 'POST') {
+      sceneRequests.push({ path: pathname, body: request.postDataJSON() });
+      story.turns.at(-1).status = 'succeeded'; story.active_run_id = story.turns.at(-1).run_id;
+      story.clips.push(story.turns.at(-1).video); return json(story);
+    }
     if (pathname.endsWith('/turns') && request.method() === 'POST') {
       const body = request.postDataJSON(); requests.push(body);
       const turn = { id: body.request_id, request_id: body.request_id, message: body.message, status: 'succeeded', created_at: Date.now() / 1000,
         plan: { action: body.message, dialogue: [], characters: [], asset_requests: [], transition: 'continue', setting: 'Street', final_state: '', choices: [] } };
+      if (sceneRecovery) { story.turns.push({ ...turn, status: 'planning', intent: body.intent, ...(requests.length === 2 ? { planning_mode: 'deterministic_movement' } : {}) }); return json(story.turns.at(-1)); }
       story.turns.push(turn); story.active_run_id = `smoke-run-${requests.length}`;
       const item = story.world.entities.find(item => item.id === body.intent?.target_id);
       if (body.intent?.kind === 'give' && item) item.holder_id = body.intent.recipient_id;
@@ -95,9 +136,77 @@ try {
     if (pathname === '/compile') return json({ valid: true, prompt: 'Mock preview', issues: [], references: [], timeline: [] });
     if (pathname === '/projects') return json(request.method() === 'POST' ? request.postDataJSON() : []);
     if (pathname === '/video/runs') return json({ runs: [] });
+    if (pathname.startsWith('/mock-ending/')) return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="608" height="320"><rect width="608" height="320" fill="#263c35"/><text x="28" y="55" fill="#fff" font-size="22">Synthetic saved ending fixture</text><rect x="100" y="130" width="75" height="130" fill="#9971d5"/><circle cx="138" cy="108" r="25" fill="#edc394"/></svg>' });
     return json({});
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/?game=${story.id}`);
+  if (sceneRecovery) {
+    const scenePanel = page.getByRole('region', { name: 'Visible scene' });
+    const progress = page.getByRole('region', { name: 'Current move progress' });
+    await expect(scenePanel).toContainText('no saved selectable people or objects yet');
+    await expect(scenePanel).toContainText('Your appearance is not identified yet');
+    await expect(page.getByRole('region', { name: 'World and inventory' })).toContainText('No other characters are established here yet');
+    expect(requests.length).toBe(0); expect(sceneRequests.length).toBe(0);
+    await scenePanel.getByRole('button', { name: 'Inspect this ending', exact: true }).click();
+    await expect.poll(() => sceneRequests.length).toBe(1);
+    expect(sceneRequests[0].body).toMatchObject({ run_id: 'scene-old', branch_id: 'main', configuration_revision: 1 });
+    await expect(scenePanel.getByRole('button', { name: /Person in purple/ })).toBeVisible();
+    expect(requests.length).toBe(0);
+    await page.getByRole('button', { name: 'Move forward', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Move and interact' })).toContainText('Select your character in the scene list and choose This is me before moving.');
+    await expect(page.getByRole('region', { name: 'Scene queue' })).toContainText('Scene queue · 0');
+    expect(requests.length).toBe(0);
+    await scenePanel.getByRole('button', { name: /Person in purple/ }).click();
+    await scenePanel.getByRole('button', { name: 'This is me', exact: true }).click();
+    await expect.poll(() => sceneRequests.length).toBe(2);
+    expect(sceneRequests[1].body).toMatchObject({ run_id: 'scene-old', candidate_id: 'person-left', branch_id: 'main', configuration_revision: 1 });
+    await expect(scenePanel).toContainText('Purple shirt and glasses');
+    await expect(scenePanel.getByRole('button', { name: /Person in purple · You/ })).toBeVisible();
+    expect(story.world.entities).toHaveLength(0); expect(requests.length).toBe(0);
+    await page.getByRole('button', { name: 'Move forward', exact: true }).click();
+    await expect(progress).toContainText('Move queued');
+    await expect(progress).toContainText('move forward');
+    await page.getByRole('button', { name: 'Move left', exact: true }).click();
+    await expect.poll(() => requests.length).toBe(1);
+    await expect(progress).toContainText('Planning the next moment');
+    story.turns.at(-1).status = 'rendering'; story.turns.at(-1).stage = 'Rendering movement';
+    await expect(progress).toContainText('Creating your video');
+    const result = sceneVideo('scene-new'); story.jobs.push(result);
+    Object.assign(story.turns.at(-1), { status: 'awaiting_acceptance', run_id: result.id, video: result,
+      observation: { observed_state: 'The player and two other people stand beside the shops.', continuity_checks: [{ status: 'mismatch', kind: 'actor', id: 'player', detail: 'Two other people are visible beside the player.' }] } });
+    await expect(progress).toContainText('New video ready · your review is needed');
+    await expect(progress).toContainText('Two other people are visible beside the player.');
+    await expect(progress).toContainText('waiting for your review');
+    await expect(page.getByLabel('Game video')).toHaveAttribute('src', result.scene_video_url);
+    await expect(page.getByLabel('Game video')).toHaveAttribute('poster', result.ending_image_url);
+    await expect(page.getByRole('button', { name: 'Replay this scene', exact: true })).toBeVisible();
+    await expect(scenePanel).toContainText('New ending · waiting for review');
+    await scenePanel.getByRole('button', { name: /Person in purple/ }).click();
+    await expect(scenePanel.getByRole('button', { name: 'This is me', exact: true })).toBeDisabled();
+    await expect(scenePanel.getByRole('button', { name: 'Examine', exact: true })).toBeDisabled();
+    await page.waitForTimeout(3200); expect(requests.length).toBe(1);
+    await mkdir(path.join(root, 'test-results'), { recursive: true });
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    await page.screenshot({ path: path.join(root, 'test-results/frontend-scene-recovery-smoke.png'), fullPage: false });
+    await progress.getByRole('button', { name: 'Use visible result', exact: true }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1].intent.direction).toBe('left');
+    expect(new Set(requests.map(body => body.request_id)).size).toBe(2);
+    await expect(progress).toContainText('Preparing movement');
+    await expect(progress).toContainText('No language model is called for this turn');
+    const localResult = sceneVideo('scene-local'); story.jobs.push(localResult); story.clips.push(localResult); story.active_run_id = localResult.id;
+    Object.assign(story.turns.at(-1), { status: 'succeeded', run_id: localResult.id, video: localResult, observation: { inspection_status: 'not_run', cached_scene_run_id: 'scene-old' } });
+    await expect(progress).toContainText('Ready for your next move');
+    await expect(scenePanel).toContainText('positions in this new ending have not been checked');
+    await expect(scenePanel).toContainText('Previously: Left side of the street');
+    await scenePanel.getByRole('button', { name: /Person in purple/ }).click();
+    await expect(scenePanel.getByRole('button', { name: 'This is me', exact: true })).toHaveCount(0);
+    await expect(scenePanel.getByRole('button', { name: 'Examine', exact: true })).toBeDisabled();
+    await expect(scenePanel.getByRole('button', { name: 'Inspect this ending', exact: true })).toBeEnabled();
+    expect(sceneRequests).toHaveLength(3);
+    expect(errors).toEqual([]);
+    console.log(JSON.stringify({ passed: true, scenario: 'scene-recovery', explicitSceneRequests: sceneRequests.map(item => item.path.split('/').at(-1)), movementRequests: requests.map(body => body.intent.direction), pageErrors: errors, screenshot: 'test-results/frontend-scene-recovery-smoke.png' }, null, 2));
+  } else {
   await expect(page.getByRole('region', { name: 'World and inventory' })).toBeVisible();
   const inventory = page.locator('.game-inventory');
   await expect(inventory).toContainText('Inventory · 2');
@@ -183,6 +292,7 @@ try {
   await page.screenshot({ path: path.join(root, 'test-results/frontend-game-smoke.png'), fullPage: true });
   console.log(JSON.stringify({ passed: true, moves: requests.map(body => body.intent), pageErrors: errors,
     screenshot: 'test-results/frontend-game-smoke.png' }, null, 2));
+  }
 } finally {
   await browser.close();
   await new Promise(resolve => server.close(resolve));

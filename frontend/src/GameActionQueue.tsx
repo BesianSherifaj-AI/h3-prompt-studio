@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { GameIntent, Story } from "./storyTypes";
+import { storyTurnLabel, type GameIntent, type Story } from "./storyTypes";
 
 export type QueuedMove = { id: string; message: string; intent?: GameIntent; readyAt: number; submitted: boolean };
 export type MoveQueue = { branch: string; paused: boolean; items: QueuedMove[]; error: string };
@@ -102,7 +102,7 @@ export function useGameActionQueue(story: Story | null, blocked: boolean, send: 
   };
 }
 
-export function GameActionQueue({ controls, busy, onCheck }: { controls: ReturnType<typeof useGameActionQueue>; busy: boolean; onCheck: () => void }) {
+export function GameActionQueue({ controls, busy, story, onCheck }: { controls: ReturnType<typeof useGameActionQueue>; busy: boolean; story?: Story; onCheck: () => void }) {
   const { queue, now } = controls;
   return <section className="game-action-queue" aria-label="Scene queue">
     <div className="game-queue-heading"><strong>Scene queue · {queue.items.length}</strong>
@@ -112,7 +112,7 @@ export function GameActionQueue({ controls, busy, onCheck }: { controls: ReturnT
     {!!queue.error && <p role="alert">{queue.error}</p>}
     {queue.paused && queue.items[0]?.submitted && <button type="button" onClick={onCheck}>Check saved request</button>}
     <ol>{queue.items.map((item, index) => <li key={item.id}>
-      <label><span>{index + 1}. {item.submitted ? "Submitted · waiting for its result" : queue.paused ? "Paused" : busy || index > 0 ? "Waiting in order" : `Starts in ${Math.max(0, Math.ceil((item.readyAt - now) / 1000))}s`}</span>
+      <label><span>{index + 1}. {story?.turns.some(turn => turn.id === item.id || turn.request_id === item.id) ? storyTurnLabel(story.turns.find(turn => turn.id === item.id || turn.request_id === item.id)) : item.submitted ? "Submitted · waiting for acknowledgement" : queue.paused ? "Paused" : busy || index > 0 ? "Waiting in order" : `Starts in ${Math.max(0, Math.ceil((item.readyAt - now) / 1000))}s`}</span>
         <textarea aria-label={`Queued scene ${index + 1}`} value={item.message} maxLength={4000} readOnly={item.submitted} onChange={e => controls.edit(item.id, e.target.value)} rows={2}/></label>
       <button type="button" aria-label={`Remove queued scene ${index + 1}`} onClick={() => controls.remove(item.id)}>×</button>
     </li>)}</ol>

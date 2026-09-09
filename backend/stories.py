@@ -68,13 +68,16 @@ def _render_placements(world, effects, visible_ids, action='', *, include_ground
     after_cast = {c['id']: c for c in after['characters']}
     places = {p['id']: p['name'] for p in after['locations']}
     after_entities = {e['id']: e for e in after['entities']}
-    def assignment(entity, cast):
+    def assignment(entity, cast, *, final=False):
         carrier = entity.get('worn_by_id') or entity.get('holder_id')
         if carrier:
             person = cast[carrier]
             relation = 'worn by ' if entity.get('worn_by_id') else 'held by '
             location = places.get(person.get('location_id'))
             return relation + person['name'] + (' in ' + location if location else '')
+        if entity.get('state', {}).get('placement_unverified') and not (final and any(
+                effect.get('entity_id') == entity['id'] and effect.get('kind') in ('holder', 'worn_by') for effect in effects)):
+            return 'Preserve its observed placement; its holder or wearer has not been identified'
         location = places.get(entity.get('location_id'))
         return 'held by nobody and worn by nobody' + (' in ' + location if location else '; its placement follows the approved action')
     rows = []
@@ -88,7 +91,7 @@ def _render_placements(world, effects, visible_ids, action='', *, include_ground
         carrier = final.get('worn_by_id') or final.get('holder_id')
         relation = ('worn by ' if final.get('worn_by_id') else 'held by ') + after_cast[carrier]['name'] if carrier else ''
         rows.append({'entity_id': before['id'], 'name': before['name'], 'start': assignment(before, before_cast),
-                     'end': assignment(final, after_cast), 'unchanged': unchanged,
+                     'end': assignment(final, after_cast, final=True), 'unchanged': unchanged,
                      'carrier_ids': sorted(carriers), 'constant_assignment': relation})
         if include_ground:
             state = before.get('state', {})
@@ -502,6 +505,7 @@ class StoryManager(StoryStateMixin):
         self.lock, self.stop = threading.RLock(), threading.Event()
         self.records, self.workers = {}, {}
         self.replacement_workers = {}
+        self.scene_workers = {}
         self.cancel_events = {}
         for path in self.directory.glob('*.json'):
             try:
@@ -510,6 +514,9 @@ class StoryManager(StoryStateMixin):
                 for turn in value['turns']:
                     if turn['status'] in WORKING:
                         turn.update(status='uncertain', stage='Session restarted · resume this turn', error='Your work is saved. Resume to reconnect without duplicating a render.')
+                for inspection in value.get('scene_inspections', {}).values():
+                    if inspection.get('status') in ('pending', 'running'):
+                        inspection.update(status='failed', error='Scene inspection stopped when the app restarted. Inspect the saved ending again; no video was rendered.')
                 self.records[value['id']] = value
             except (ValueError, KeyError, TypeError):
                 continue
@@ -628,8 +635,11 @@ class StoryManager(StoryStateMixin):
         if story.get('state_version') != 2:
             story = copy.deepcopy(story)
         state = self._state(story)
-        result = copy.deepcopy({k: v for k, v in story.items() if k not in ('base_project', 'observed_by_run', 'action_requests', 'create_digest', 'branch_states', 'state_by_run')})
+        result = copy.deepcopy({k: v for k, v in story.items() if k not in ('base_project', 'observed_by_run', 'action_requests', 'create_digest', 'branch_states', 'state_by_run', 'scene_inspections', 'scene_binding_requests')})
         result.update(copy.deepcopy(state))
+        if isinstance(result.get('navigation'), dict):
+            result['navigation']['views'] = [{k: view[k] for k in ('run_id', 'location_id', 'position', 'frame_id') if k in view}
+                                             for view in result['navigation'].get('views', [])]
         result['clips'] = [self.videos().get(r) for r in story['branches'][story['active_branch_id']]]
         known = {r['id'] for r in result['clips']}
         all_jobs = list(result['clips'])
@@ -641,6 +651,8 @@ class StoryManager(StoryStateMixin):
             if rid not in known:
                 known.add(rid); all_jobs.append(self.videos().get(rid))
         for turn in result['turns']:
+            if isinstance(turn.get('navigation_move'), dict):
+                turn['navigation_move'].pop('basis', None)
             if turn.get('assistant_repair'):
                 turn['assistant_repair'].pop('rejected_response', None)
             if turn.get('assistant_attempt_history'):
@@ -835,6 +847,63 @@ class StoryManager(StoryStateMixin):
         self.workers[turn_id] = worker
         worker.start()
 
+    def refresh_scene(self, story_id, body):
+        """Explicitly inspect an existing accepted frame; never queue a video."""
+        request_id = safe_id(body.get('request_id'))
+        fingerprint = digest(body)
+        with self.lock:
+            story = self._story(story_id)
+            old = story.get('scene_inspections', {}).get(request_id)
+            if old:
+                if old['request_digest'] != fingerprint:
+                    raise ValueError('This scene inspection request ID belongs to another request.')
+                return {key: old.get(key) for key in ('request_id', 'run_id', 'status', 'error')}
+            state = self._state(story)
+            if (not story.get('active_run_id') or body.get('run_id') != story['active_run_id']
+                    or body.get('branch_id') != story['active_branch_id']
+                    or body.get('configuration_revision') != state['configuration_revision']):
+                raise ValueError('The story ending or settings changed. Inspect the current accepted ending.')
+            if any(turn['status'] in ACTIVE for turn in story['turns']):
+                raise ValueError('Finish or review the current turn before inspecting its accepted source. Use Retry inspection for a pending ending.')
+            if any(job['status'] in ('pending', 'running') for record in self.records.values() for job in record.get('scene_inspections', {}).values()):
+                raise ValueError('A saved-frame inspection is already running. Wait for that result.')
+            if state['settings'].get('assistant_provider') == 'supervised':
+                raise ValueError('Choose the local assistant to inspect an existing scene, or include visible_scene in the next supervised ending response.')
+            job = {'id': request_id, 'request_id': request_id, 'request_digest': fingerprint,
+                   'run_id': body['run_id'], 'branch_id': body['branch_id'], 'snapshot': copy.deepcopy(state),
+                   'configuration_revision': state['configuration_revision'], 'status': 'pending', 'error': None,
+                   'assistant_model': self.get_settings().get('model'), 'ending_observation_protocol': 3}
+            story.setdefault('scene_inspections', {})[request_id] = job
+            self._save(story)
+            if self.start_workers:
+                worker = threading.Thread(target=self.process_scene_inspection, args=(story_id, request_id), daemon=True)
+                self.scene_workers[request_id] = worker
+                worker.start()
+            return {key: job.get(key) for key in ('request_id', 'run_id', 'status', 'error')}
+
+    def process_scene_inspection(self, story_id, request_id):
+        from .ending_observation import observation_request, validate_observation
+        story = self._story(story_id)
+        job = story['scene_inspections'][request_id]
+        with self.lock:
+            if job['status'] != 'pending':
+                return
+            self._change(story, job, status='running', stage='Inspecting the saved ending', error=None)
+        try:
+            snapshot = job['snapshot']
+            execution = {**story, **copy.deepcopy(snapshot)}
+            final = self.ending_asset(job['run_id'])
+            plan = {'characters': [], 'effects': []}
+            context, schema = observation_request(snapshot['world'], plan, snapshot['player_character_id'],
+                object_schema({}), include_scene=True)
+            observation = self._predict(execution, job, 'ending-inspection', None,
+                'Inspect only this actual saved final frame. Return the visible_scene inventory. Do not invent identity, ownership, hidden objects or actions from the expected story.',
+                context, schema, [final])
+            observation = validate_observation(observation, snapshot['world'], plan, snapshot['player_character_id'], include_scene=True)
+            self._change(story, job, status='succeeded', stage='Saved ending inspected', observation=observation, error=None)
+        except Exception as exc:
+            self._change(story, job, status='failed', stage='Saved ending inspection needs attention', error=str(exc)[:1200])
+
     def _change(self, story, turn, **changes):
         with self.lock:
             if turn.get('pending_replacement') and turn.get('cancel_requested') and changes.get('status') not in (None, 'stopping', 'uncertain'):
@@ -915,6 +984,14 @@ class StoryManager(StoryStateMixin):
 
     def plan(self, story, turn, project, ending=None):
         if turn.get('snapshot') and story.get('narrative_version') == 2:
+            if story['mode'] == 'game' and ending and story['settings'].get('fast_actions', True):
+                from .movement import deterministic_movement
+                movement = deterministic_movement(project, story['world'], story.get('player_character_id'),
+                    turn.get('intent'), turn['duration'], guides=story.get('guides', []),
+                    observed_state=self.latest_scene_observation(story, turn.get('parent_run_id')))
+                if movement is not None:
+                    self._change(self._story(story['id']), turn, planning_mode='deterministic_movement', stage='Preparing the movement directly')
+                    return movement
             from .game_director import plan_turn
             def sequence(prepared_model=None):
                 def predict(stage, actor_id, system, content, schema):
@@ -928,15 +1005,16 @@ class StoryManager(StoryStateMixin):
                     if not intent or intent.get('kind') == 'freeform':
                         intent = infer_simple_intent(story['world'], story.get('player_character_id'), turn['message'])
                     fast = None if quoted_speech(turn['message']) else mechanical_plan(story['world'], story.get('player_character_id'), intent, turn['duration'],
-                        guides=story.get('guides', []), user_instructions=_author_instructions(project))
+                        guides=story.get('guides', []), user_instructions=_author_instructions(project),
+                        current_setting=(project.get('shots') or [{}])[-1].get('setting', ''))
                     if fast:
                         visible_context = actor_context(story['world'], story.get('player_character_id'))
                         fast['actor_actions'] = [{'subject_id': story.get('player_character_id'), 'action': fast['action'],
-                                                  'activity': 'hold' if intent['kind'] in ('wait', 'inventory') else 'act'}]
+                                                  'activity': 'hold' if intent['kind'] in ('wait', 'inventory') or (intent['kind'] == 'move' and intent.get('camera') == 'camera') else 'act'}]
                         if intent.get('kind') == 'give' and intent.get('recipient_id'):
                             fast['actor_actions'].append({'subject_id': intent['recipient_id'], 'action': 'Receive the offered object as specified in the approved action.', 'activity': 'act'})
                         directed = direct_plan(fast, project, duration=turn['duration'], predict=predict,
-                            guides=story.get('guides', []), game_mode=True,
+                            guides=story.get('guides', []), game_mode=True, movement_intent=intent,
                             observed_state=story['observed_by_run'].get(turn.get('parent_run_id'), {}),
                             current_facts=_current_scene_facts(story['world'], visible_context),
                             known_objects=_known_scene_objects(story['world'], visible_context,
@@ -1101,6 +1179,12 @@ class StoryManager(StoryStateMixin):
 
     def _project(self, story, turn, source, ending):
         plan = turn['plan']
+        frame_movement = bool(turn.get('planning_mode') == 'deterministic_movement' and ending
+                              and story['settings'].get('transition', 'auto') != 'continue')
+        if frame_movement:
+            # A new first-frame task preserves the visible starting image while
+            # allowing the new button direction to replace the old momentum.
+            plan['transition'] = 'cut'
         project = copy.deepcopy(source)
         if story.get('narrative_version') == 2 and story.get('world'):
             from .world import project_from_world
@@ -1224,6 +1308,8 @@ class StoryManager(StoryStateMixin):
         project['rendered_scene_contracts'] = {scene['id']: hashlib.sha256(
             json.dumps(scene['scene_contract'], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             for scene in project['shots'] if scene.get('scene_contract') is not None}
+        from .movement import apply_movement_frames
+        apply_movement_frames(story, turn, project, ending, self.ending_asset, current_frame=frame_movement)
         return check_project(project)
 
     def _asset_jobs_for_recovery(self, turn):
@@ -1591,6 +1677,11 @@ class StoryManager(StoryStateMixin):
                                                   width=job.get('width'), height=job.get('height'), frames=job.get('frames'),
                                                   new_seconds=job.get('new_seconds'), video_url=job.get('video_url'))
             self._change(story, turn, status='observing', stage='Reading the ending and preparing your choices')
+            if not turn.get('observation') and turn.get('planning_mode') == 'deterministic_movement':
+                from .movement import movement_observation
+                previous = self.latest_scene_observation(story, turn.get('parent_run_id'))
+                observation = movement_observation(previous, turn['plan'], turn.get('parent_run_id'))
+                self._change(story, turn, observation=observation, stage='Movement rendered · ending not inspected')
             if not turn.get('observation'):
                 final = self.ending_asset(job['id'])
                 try:
@@ -1604,11 +1695,12 @@ class StoryManager(StoryStateMixin):
                         # and request hash. Only a genuinely new inspection
                         # opts into complete coverage; old observations remain
                         # readable without rewriting their evidence.
-                        turn['ending_observation_protocol'] = prior[-1].get('observation_protocol_version', 1) if prior else 2
+                        turn['ending_observation_protocol'] = prior[-1].get('observation_protocol_version', 1) if prior else 3
                         self._save(story)
                     require_coverage = turn['ending_observation_protocol'] >= 2 and bool(final_contract.get('actors') or final_contract.get('objects'))
+                    include_scene = turn['ending_observation_protocol'] >= 3 and story['mode'] == 'game'
                     visual_context, observation_schema = observation_request(execution['world'], turn['plan'],
-                        execution.get('player_character_id'), OBSERVE_SCHEMA, final_contract, require_coverage=require_coverage)
+                        execution.get('player_character_id'), OBSERVE_SCHEMA, final_contract, require_coverage=require_coverage, include_scene=include_scene)
                     candidates = visual_context.get('known_visual_candidates', {})
                     candidates['characters'] = [row for row in candidates.get('characters', []) if row['id'] in visible_ids]
                     object_ids = {row['entity_id'] for row in final_contract.get('objects', [])}
@@ -1622,7 +1714,7 @@ class StoryManager(StoryStateMixin):
                          'scene_contract_check': 'Compare only visible evidence against intended final actor posture/position, appearance/colors, distinct people and object identities/counts/holders. Report duplicates or mismatches and ambiguity in uncertainties. The contract is intent, not evidence. A single final frame cannot prove continuous stillness, motion, a transfer, or spoken words. Do not draw conclusions about missing or offscreen people or obscured inventory.',
                          **visual_context}, observation_schema, [final])
                     observation = validate_observation(observation, execution['world'], turn['plan'], execution.get('player_character_id'), final_contract,
-                        require_coverage=require_coverage)
+                        require_coverage=require_coverage, include_scene=include_scene)
                 except AwaitingAssistant:
                     raise
                 except Exception as exc:
