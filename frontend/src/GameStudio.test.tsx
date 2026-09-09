@@ -167,6 +167,22 @@ beforeEach(() => {
 });
 
 describe("separate Game screen", () => {
+  it.each([undefined, null, {}, { observed_state: "" }, { observed_state: "  " }, { observed_state: 42 }])("keeps visible-result acceptance disabled without a usable inspection: %j", (observation) => {
+    const value = savedStory();
+    value.turns.push({ id: "inspection", request_id: "inspection-request", status: "inspection_failed", message: "Open the note.", created_at: 3, plan, observation });
+    vi.mocked(useStorySession).mockReturnValue(session(value));
+    const html = render();
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Use visible result<\/button>/);
+    expect(html).toContain("Retry ending inspection first so there is a visible result to use.");
+    expect(html).toMatch(/<button>Retry ending inspection<\/button>/);
+    expect(html).toMatch(/<button>Use intended story<\/button>/);
+  });
+  it("allows keeping a successfully inspected visible outcome", () => {
+    const value = savedStory();
+    value.turns.push({ id: "inspection", request_id: "inspection-request", status: "awaiting_acceptance", message: "Open the note.", created_at: 3, plan, observation: { observed_state: "The note lies open on the table." } });
+    vi.mocked(useStorySession).mockReturnValue(session(value));
+    expect(render()).toMatch(/<button(?![^>]*disabled)[^>]*>Use visible result<\/button>/);
+  });
   it("shows a ready player when a later cancelled turn leaves a completed ending available", () => {
     const value = savedStory();
     value.turns.push({
@@ -213,15 +229,17 @@ describe("separate Game screen", () => {
     const html = render();
     expect(html).toContain("What is this story about?");
     expect(html).toContain("Start game");
-    expect(html).toContain("Arin");
+    expect(html).not.toContain("Arin");
+    expect(html).not.toContain("A mysterious note arrives at the cafe.");
+    expect(html).toContain("Import current Studio cast &amp; photos");
     expect(html).toContain("8 steps");
     expect(html).not.toMatch(
       /<label class="game-checkbox"><input[^>]* checked/,
     );
-    expect(html).toContain('aria-label="Reference type for Arin"');
-    expect(html).toContain('aria-label="Character or owner for Arin"');
-    expect(html).toContain('aria-label="Prompt tag for Arin"');
-    expect(html).toContain("Replace image");
+    expect(html).toContain("Bring your characters");
+    expect(html).toContain("My own character");
+    expect(html).toContain("Pixel preview · ~0.2 MP / 3 seconds");
+    expect(html).toContain("Add photos");
     expect(state.create).not.toHaveBeenCalled();
     expect(state.sendTurn).not.toHaveBeenCalled();
   });
@@ -334,18 +352,51 @@ describe("separate Game screen", () => {
     expect(html).toContain("Render this scene");
     expect(html).toContain("Review or cancel the scene above");
     expect(html).toMatch(
-      /<button class="primary" disabled="">(?:(?!<\/button>)[\s\S])*Make my move/,
+      /<button class="primary" disabled="">(?:(?!<\/button>)[\s\S])*Queue my move/,
     );
   });
-  it("keeps a failed response visible and offers safe resume", () => {
+  it("keeps a failed response visible and names the saved-turn recovery", () => {
     const value = savedStory();
     value.turns[1].status = "failed";
     value.turns[1].error = "The local server disconnected.";
     vi.mocked(useStorySession).mockReturnValue(session(value));
     const html = render();
-    expect(html).toContain("Resume safely");
+    expect(html).toContain("Check saved render");
     expect(html).toContain("The local server disconnected.");
     expect(html).toContain(plan.action);
+  });
+  it("keeps movement and the composer at the player, with history behind a separate view", () => {
+    const state = session(savedStory());
+    vi.mocked(useStorySession).mockReturnValue(state);
+    const html = render();
+    expect(html).toContain('aria-label="Game views"');
+    expect(html).toContain('aria-label="Story conversation" hidden=""');
+    const video = html.indexOf('aria-label="Game video"');
+    const movement = html.indexOf('aria-label="Move forward"');
+    const composer = html.indexOf('id="game-next-move"');
+    const history = html.indexOf('aria-label="Story conversation"');
+    expect(video).toBeLessThan(movement);
+    expect(movement).toBeLessThan(composer);
+    expect(composer).toBeLessThan(history);
+    expect(html).toContain('<section class="game-context-actions"');
+    expect(html).not.toContain('<details class="game-context-actions"');
+    expect(html).toContain('Movement options');
+    expect(state.sendTurn).not.toHaveBeenCalled();
+    expect(state.turnAction).not.toHaveBeenCalled();
+  });
+  it("offers pre-plan AI recovery directly in Play without creating a new turn", () => {
+    const value = savedStory();
+    value.turns.push({id: "failed-plan", request_id: "failed-plan-request", status: "failed", message: "I move forward.", created_at: 3, error: "The assistant response was interrupted."});
+    const state = session(value);
+    vi.mocked(useStorySession).mockReturnValue(state);
+    const html = render();
+    const start = html.indexOf('class="game-attention-link"');
+    const attention = html.slice(start, html.indexOf('class="game-player-meta"', start));
+    expect(attention).toContain('class="primary"');
+    expect(attention).toContain("Retry AI response");
+    expect(attention).toContain("Review details");
+    expect(state.sendTurn).not.toHaveBeenCalled();
+    expect(state.turnAction).not.toHaveBeenCalled();
   });
 });
 

@@ -28,6 +28,7 @@ class AssetRunError(ValueError):
 
 
 MODELS = ('z_image_turbo_bf16.safetensors', 'z_image_turbo_fp8_e4m3fn.safetensors')
+H3_FRAME_MODEL = 'h3-frame-fl2va-5f'
 ENCODER, VAE = 'qwen_3_4b.safetensors', 'ae.safetensors'
 NODES = ('UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode',
          'ConditioningZeroOut', 'ModelSamplingAuraFlow', 'EmptySD3LatentImage',
@@ -77,12 +78,14 @@ def _spec(value):
         raise AssetRunError('Use a short reference tag such as arin-face or cafe-background.')
     result['person_id'] = _id(result['person_id']) if result.get('person_id') is not None else None
     result.setdefault('model', MODELS[0])
-    if result['model'] not in MODELS:
-        raise AssetRunError('Select an installed Z-Image-Turbo BF16 or FP8 model.')
+    if result['model'] not in (*MODELS, H3_FRAME_MODEL):
+        raise AssetRunError('Select an installed Z-Image-Turbo or experimental H3 frame generator.')
     for key in ('width', 'height'):
         result.setdefault(key, 512)
         if type(result[key]) is not int or not 128 <= result[key] <= 1024 or result[key] % 16:
             raise AssetRunError('Image dimensions must be multiples of 16 between 128 and 1024 pixels.')
+        if result['model'] == H3_FRAME_MODEL and result[key] % 32:
+            raise AssetRunError('Experimental H3 frame dimensions must be multiples of 32.')
     if type(result.get('seed')) is not int or not 0 <= result['seed'] <= MAX_SEED:
         raise AssetRunError('Provide an explicit whole-number seed between 0 and 9007199254740991.')
     return result
@@ -102,7 +105,13 @@ def _choices(info, node, field):
     if not isinstance(required, dict) or not isinstance(optional, dict):
         return []
     descriptor = required.get(field, optional.get(field, []))
-    return descriptor[0] if isinstance(descriptor, list) and descriptor and isinstance(descriptor[0], list) else []
+    if not isinstance(descriptor, list) or not descriptor:
+        return []
+    if isinstance(descriptor[0], list):
+        return descriptor[0]
+    if descriptor[0] == 'COMBO' and len(descriptor) > 1 and isinstance(descriptor[1], dict):
+        return descriptor[1].get('options', [])
+    return []
 
 
 def _catalog(info):
@@ -119,8 +128,50 @@ def _catalog(info):
     return models, missing
 
 
+def _h3_catalog(info):
+    from .comfy_transfer import HERETIC, FL_LORA
+    required_nodes = ('UNETLoader', 'CLIPLoader', 'VAELoader', 'LoraLoaderModelOnly', 'MiniMaxH3SigmaShift',
+                      'MiniMaxH3ImageToVideo', 'BasicGuider', 'RandomNoise', 'KSamplerSelect', 'BasicScheduler',
+                      'SamplerCustomAdvanced', 'VAEDecode', 'ImageFromBatch', 'SaveImage')
+    missing = [node for node in required_nodes if not isinstance(info.get(node), dict)]
+    required_models = [('UNETLoader', 'unet_name', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'),
+                       ('CLIPLoader', 'clip_name', HERETIC), ('CLIPLoader', 'type', 'minimax'),
+                       ('VAELoader', 'vae_name', 'minimax_h3_video_vae_fp16.safetensors'),
+                       ('LoraLoaderModelOnly', 'lora_name', FL_LORA), ('KSamplerSelect', 'sampler_name', 'euler'),
+                       ('BasicScheduler', 'scheduler', 'simple')]
+    missing += [f'{node}: {option}' for node, field, option in required_models if option not in _choices(info, node, field)]
+    return ([] if missing else [H3_FRAME_MODEL]), missing
+
+
+def _h3_frame_graph(request_id, spec):
+    from .comfy_transfer import HERETIC, FL_LORA
+    def node(kind, **inputs):
+        return {'class_type': kind, 'inputs': inputs}
+    # Five frames are accepted by native Core but below H3's trained range.
+    # This is an experimental extracted frame, not a native text-to-image model.
+    return {
+        '1': node('UNETLoader', unet_name='minimax_h3_fl2va_pruned_int8_convrot.safetensors', weight_dtype='default'),
+        '2': node('CLIPLoader', clip_name=HERETIC, type='minimax', device='default'),
+        '3': node('VAELoader', vae_name='minimax_h3_video_vae_fp16.safetensors'),
+        '4': node('LoraLoaderModelOnly', model=['1', 0], lora_name=FL_LORA, strength_model=1.0),
+        '5': node('MiniMaxH3SigmaShift', model=['4', 0], shift_video=6.0, shift_audio=3.0),
+        '6': node('MiniMaxH3ImageToVideo', clip=['2', 0], vae=['3', 0], prompt=spec['prompt'],
+                  width=spec['width'], height=spec['height'], length=5),
+        '7': node('BasicGuider', model=['5', 0], conditioning=['6', 0]),
+        '8': node('RandomNoise', noise_seed=spec['seed']),
+        '9': node('KSamplerSelect', sampler_name='euler'),
+        '11': node('BasicScheduler', model=['5', 0], scheduler='simple', steps=4, denoise=1.0),
+        '12': node('SamplerCustomAdvanced', noise=['8', 0], guider=['7', 0], sampler=['9', 0], sigmas=['11', 0], latent_image=['6', 1]),
+        '13': node('VAEDecode', samples=['12', 0], vae=['3', 0]),
+        '14': node('ImageFromBatch', image=['13', 0], batch_index=2, length=1),
+        '10': node('SaveImage', images=['14', 0], filename_prefix=f'h3_prompt_studio/assets/{request_id}/image'),
+    }
+
+
 def build_graph(request_id, spec):
     """The native official Turbo graph; no arbitrary caller-supplied nodes."""
+    if spec['model'] == H3_FRAME_MODEL:
+        return _h3_frame_graph(request_id, spec)
     def node(kind, **inputs):
         return {'class_type': kind, 'inputs': inputs}
     return {
@@ -182,15 +233,25 @@ class AssetRunManager:
                 with self.client_factory() as client:
                     response = client.get(origin + '/object_info')
                     response.raise_for_status()
-                    models, missing = _catalog(response.json())
-                servers.append({'comfy_url': origin, 'models': models, 'missing': missing, 'ready': not missing})
+                    info = response.json()
+                    models, missing = _catalog(info)
+                    h3_models, h3_missing = _h3_catalog(info)
+                available_models = ([] if missing else models) + h3_models
+                servers.append({'comfy_url': origin, 'models': available_models, 'missing': missing,
+                                'h3_missing': h3_missing, 'ready': bool(available_models)})
             except (httpx.HTTPError, ValueError):
                 errors.append(f'ComfyUI node inventory is unavailable at {origin}.')
-        available = [model for model in MODELS if any(s['ready'] and model in s['models'] for s in servers)]
+        available = [model for model in (*MODELS, H3_FRAME_MODEL) if any(s['ready'] and model in s['models'] for s in servers)]
         return {'ready': bool(available), 'models': available, 'default_model': available[0] if available else None,
                 'encoder': ENCODER, 'vae': VAE, 'width': 512, 'height': 512, 'max_dimension': 1024,
                 'steps': 8, 'cfg': 1, 'sampler': 'res_multistep', 'scheduler': 'simple', 'shift': 3,
-                'servers': servers, 'errors': errors}
+                'generators': [{'id': model, 'model': model, 'available': True, 'compatible': True,
+                                'name': 'H3 frame · experimental' if model == H3_FRAME_MODEL else model,
+                                'label': 'H3 frame · experimental, 5 frames /4 steps' if model == H3_FRAME_MODEL else model,
+                                'experimental': model == H3_FRAME_MODEL, 'kind': 'h3_frame' if model == H3_FRAME_MODEL else 'z_image_turbo',
+                                'steps': 4 if model == H3_FRAME_MODEL else 8,
+                                'note': 'Extracts one frame below the trained video duration. Speed and quality require local testing.' if model == H3_FRAME_MODEL else 'Native eight-step Z-Image-Turbo recipe.'}
+                               for model in available], 'servers': servers, 'errors': errors}
 
     def _record(self, ident):
         ident = _id(ident)
@@ -294,7 +355,7 @@ class AssetRunManager:
                 options = self.options()
                 server = next((s for s in options['servers'] if s['ready'] and record['spec']['model'] in s['models']), None)
                 if not server:
-                    raise AssetRunError('The selected Z-Image model, qwen_3_4b encoder, ae VAE and native Turbo nodes must be installed together in ComfyUI.')
+                    raise AssetRunError('The selected generator’s models, encoder, VAE and native nodes must be installed together in ComfyUI. Check Image generator availability.')
                 origin = server['comfy_url']
                 if origin not in record['origins']:
                     raise AssetRunError('ComfyUI settings changed during image preparation. Submit a new request.')
@@ -337,7 +398,7 @@ class AssetRunManager:
                         self._save(record, prompt_id=prompt_id, prompt_confirmed=True,
                                    status='queued', stage='Image queued', error=None)
 
-                self.resources.prepare_comfy_then('image', queue_once)
+                self.resources.prepare_comfy_then('video' if record['spec']['model'] == H3_FRAME_MODEL else 'image', queue_once)
             except Exception as exc:
                 if record.get('submission_intent') and record['status'] not in ('failed', 'cancelled'):
                     self._save(record, status='uncertain', stage='Recovering image submission',
@@ -426,8 +487,10 @@ class AssetRunManager:
             _id(asset['id'])
             asset = {**asset, 'semantic_role': spec['semantic_role'], 'prompt_tag': spec['prompt_tag'],
                      'description': spec['prompt'], 'person_id': spec['person_id'],
-                     'generated_by': {'kind': 'z_image_turbo', 'run_id': record['id'], 'model': spec['model'],
-                                      'seed': spec['seed'], 'steps': 8, 'cfg': 1}}
+                     'generated_by': {'kind': 'h3_frame' if spec['model'] == H3_FRAME_MODEL else 'z_image_turbo',
+                                      'run_id': record['id'], 'model': spec['model'], 'seed': spec['seed'],
+                                      'steps': 4 if spec['model'] == H3_FRAME_MODEL else 8, 'cfg': 1,
+                                      **({'experimental': True, 'generated_frames': 5, 'selected_frame': 2} if spec['model'] == H3_FRAME_MODEL else {})}}
             if spec['person_id'] and spec['semantic_role'] == 'object':
                 asset['simple_owner_id'] = spec['person_id']
             atomic_json(asset_path, asset)

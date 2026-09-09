@@ -1,4 +1,25 @@
 import type { VideoJob } from "./VideoWorkspace";
+import type { Project } from "./model";
+
+export type GameGuide = { id: string; revision: number; text: string; scope: "next" | "persistent"; enabled: boolean };
+export type GameCharacter = {
+  id: string; name: string; control: "player" | "npc"; description: string;
+  personality: string; goals: string; speaking_style: string; private_knowledge: string;
+  relationships: Record<string, string> | string; asset_ids: string[];
+  location_id?: string | null; witnessed_events?: string[];
+  state?: Record<string, unknown>;
+};
+export type GameWorld = {
+  schema_version: number; current_location_id: string | null;
+  characters: GameCharacter[]; locations: Array<{id:string;name:string;description:string;exits:any[];asset_ids:string[]}>;
+  entities: Array<{id:string;name:string;kind:string;location_id?:string|null;owner_id?:string|null;holder_id?:string|null;worn_by_id?:string|null;asset_ids:string[];affordances:string[];state:Record<string,unknown>}>;
+  objectives: any[]; rules: string; events: any[];
+};
+export type GameIntent = { kind: string; target_id?: string; recipient_id?: string; extent?: string; speed?: string; camera?: string; presentation?: string; direction?: string };
+export type StoryConfiguration = {
+  project: Project; world: GameWorld; guides: GameGuide[]; settings: StorySettings;
+  premise: string; player_name: string; player_character_id: string;
+};
 
 export type StoryChoice = { title: string; message: string };
 export type StoryPlan = {
@@ -21,7 +42,11 @@ export type StoryTurnStatus =
   | "succeeded"
   | "failed"
   | "uncertain"
-  | "cancelled";
+  | "cancelled"
+  | "awaiting_assistant"
+  | "awaiting_acceptance"
+  | "inspection_failed"
+  | "stopping";
 export type StoryTurn = {
   id: string;
   request_id: string;
@@ -59,6 +84,11 @@ export type Story = {
   jobs?: VideoJob[];
   observed_state?: string | Record<string, unknown>;
   project_id: string;
+  project?: Project;
+  world?: GameWorld;
+  guides?: GameGuide[];
+  configuration_revision?: number;
+  player_character_id?: string;
   [key: string]: unknown;
 };
 export type ImageGeneratorModel = {
@@ -76,12 +106,19 @@ export type StoryTicket = {
   body: Record<string, unknown>;
   requestId: string;
 };
+export const PIXEL_STYLE = "2D pixel art, hand-drawn 16-bit sprite animation, crisp visible square pixels, flat illustrated backgrounds, limited palette, readable silhouettes. No 3D voxel blocks, Minecraft or Roblox aesthetic.";
 export const DEFAULT_STORY_SETTINGS: StorySettings = {
   review_before_render: false,
-  duration: 5,
-  resolution: "0.3",
+  duration: 3,
+  resolution: "0.2",
+  experimental_preview: true,
   steps: 8,
-  style: "Cinematic and natural",
+  style: PIXEL_STYLE,
+  aspect_ratio: "16:9",
+  transition: "auto",
+  assistant_provider: "lmstudio",
+  fast_actions: true,
+  concurrency: 1,
 };
 export const RUNNING_STORY_STATUSES = new Set<StoryTurnStatus>([
   "planning",
@@ -89,12 +126,14 @@ export const RUNNING_STORY_STATUSES = new Set<StoryTurnStatus>([
   "rendering",
   "observing",
   "uncertain",
+  "awaiting_assistant",
+  "stopping",
 ]);
 export function storyTurnPending(turn?: StoryTurn | null) {
   return (
     !!turn &&
     (RUNNING_STORY_STATUSES.has(turn.status) ||
-      turn.status === "awaiting_review")
+      ["awaiting_review", "awaiting_acceptance", "inspection_failed"].includes(turn.status))
   );
 }
 export function storyTurnLabel(turn?: StoryTurn | null) {
@@ -110,6 +149,10 @@ export function storyTurnLabel(turn?: StoryTurn | null) {
       failed: "This turn needs attention",
       uncertain: "Checking the previous request",
       cancelled: "Turn cancelled",
+      awaiting_assistant: "Waiting for a supervised assistant response",
+      awaiting_acceptance: "Choose what becomes part of the story",
+      inspection_failed: "Video ready · ending inspection needs attention",
+      stopping: "Stopping the current turn",
     }[turn.status] ||
     turn.stage ||
     "Updating story"
@@ -201,7 +244,7 @@ export function validStoryTicket(
     /^[a-zA-Z0-9_-]{1,200}$/.test(ticket.storyId) &&
     typeof ticket.path === "string" &&
     ticket.path.startsWith(`/stories/${encodeURIComponent(ticket.storyId)}/`) &&
-    /^(turns|branch|turns\/[a-zA-Z0-9_-]+\/(approve|retry|cancel|reroll))$/.test(
+    /^(turns|branch|turns\/[a-zA-Z0-9_-]+\/(approve|retry|cancel|reroll|edit|resume|retry-inspection|accept-intended|accept-visible|stop-and-apply))$/.test(
       ticket.path.slice(
         `/stories/${encodeURIComponent(ticket.storyId)}/`.length,
       ),

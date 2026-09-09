@@ -36,6 +36,14 @@ export function renamePromptTag(p: Project, id: string, value: string): void {
   for (const s of p.shots) {
     for (const key of ['action','setting','performance','final_state','sound']) (s as any)[key] = change((s as any)[key] || '');
     strings(s.camera);
+    if (s.scene_contract) {
+      for (const key of ['environment', 'background_activity'] as const)
+        if (typeof s.scene_contract[key] === 'string') s.scene_contract[key] = change(s.scene_contract[key]);
+      for (const actor of s.scene_contract.actors || [])
+        for (const key of ['start', 'action', 'end'] as const) actor[key] = change(actor[key]);
+      for (const object of s.scene_contract.objects || [])
+        for (const key of ['name', 'description', 'start', 'end'] as const) object[key] = change(object[key]);
+    }
   }
   if (p.simple?.person_actions) strings(p.simple.person_actions);
 }

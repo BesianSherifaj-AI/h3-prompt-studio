@@ -10,7 +10,7 @@ from pathlib import Path
 
 DIRECTOR_LOCK_FIELDS = frozenset({
     'camera.framing', 'camera.movement', 'camera.height', 'camera.focus', 'camera.speed',
-    'transition', 'setting', 'visible_subject_ids', 'offscreen_subject_ids', 'final_state',
+    'transition', 'setting', 'visible_subject_ids', 'offscreen_subject_ids', 'final_state', 'scene_contract',
 })
 
 
@@ -18,7 +18,8 @@ def directed_structure(project):
     """Explicit scene controls belong to the user, including their timing."""
     simple = project.get('simple')
     return (isinstance(simple, dict) and simple.get('directed') is True) or any(
-        s.get('director_locks') for s in project.get('shots', []) if isinstance(s, dict)
+        s.get('director_locks') or ('scene_contract' in s and s.get('scene_contract_source') != 'generated')
+        for s in project.get('shots', []) if isinstance(s, dict)
     )
 
 def uid():
@@ -135,6 +136,13 @@ def check_project(project):
                     if any(field not in DIRECTOR_LOCK_FIELDS for field in value['director_locks']):
                         raise ValueError(f'{path}.director_locks contains an unsupported scene control.')
                 dialogue = value.get('dialogue')
+                if 'scene_contract' in value:
+                    from .scene_contract import validate_scene_contract
+                    problems = validate_scene_contract(value['scene_contract'])
+                    if problems:
+                        raise ValueError(f'{path}.scene_contract: ' + problems[0]['message'])
+                if 'scene_contract_source' in value and value['scene_contract_source'] not in ('generated', 'authored'):
+                    raise ValueError(f'{path}.scene_contract_source must be generated or authored.')
                 if not isinstance(dialogue, list):
                     raise ValueError(f'{path}.dialogue must be a list of dialogue objects.')
                 for line_index, line in enumerate(dialogue):
@@ -151,7 +159,7 @@ def atomic_json(path: Path, value):
     temp.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
     temp.replace(path)
 
-ALLOWED_SHOT_FIELDS = {'action', 'setting', 'camera', 'performance', 'final_state', 'sound', 'transition', 'visible_subject_ids', 'offscreen_subject_ids'}
+ALLOWED_SHOT_FIELDS = {'action', 'setting', 'camera', 'performance', 'final_state', 'sound', 'transition', 'visible_subject_ids', 'offscreen_subject_ids', 'scene_contract'}
 
 def merge_plan(project, proposal):
     """A model can suggest a plan but cannot replace source facts or exact dialogue."""
@@ -195,7 +203,11 @@ def merge_plan(project, proposal):
         for field in ALLOWED_SHOT_FIELDS:
             if field in item:
                 target[field] = copy.deepcopy(item[field])
+                if field == 'scene_contract':
+                    target['scene_contract_source'] = 'generated'
         locks = set(source.get('director_locks', [])) if source is not None else set()
+        if source is not None and 'scene_contract' in source and source.get('scene_contract_source') != 'generated':
+            locks.add('scene_contract')
         for field in locks:
             if field.startswith('camera.'):
                 if not isinstance(target.get('camera'), dict):
@@ -203,12 +215,25 @@ def merge_plan(project, proposal):
                 key = field.split('.', 1)[1]
                 target['camera'][key] = copy.deepcopy(source['camera'].get(key, ''))
             else:
-                target[field] = copy.deepcopy(source.get(field, [] if field.endswith('_ids') else ''))
+                default = {} if field == 'scene_contract' else ([] if field.endswith('_ids') else '')
+                target[field] = copy.deepcopy(source.get(field, default))
+                if field == 'scene_contract':
+                    target['scene_contract_source'] = source.get('scene_contract_source', 'authored')
         for field in ('visible_subject_ids', 'offscreen_subject_ids'):
             ids = target[field]
             if not isinstance(ids, list) or not all(isinstance(v, str) and v in subjects for v in ids):
                 raise ValueError('AI referenced a subject that is not in your project.')
         visible, offscreen = 'visible_subject_ids', 'offscreen_subject_ids'
+        if 'scene_contract' in locks:
+            contract_ids = [row['subject_id'] for row in target.get('scene_contract', {}).get('actors', [])]
+            if any(sid not in subjects for sid in contract_ids):
+                raise ValueError('Your authored scene continuity refers to an unknown character.')
+            if (visible in locks and not set(contract_ids) <= set(source[visible])) or (offscreen in locks and set(contract_ids) & set(source[offscreen])):
+                raise ValueError('Your authored physical scene continuity conflicts with the selected visible/off-screen characters. Resolve those scene controls before planning.')
+            # Physical actor controls imply that actor is in the shot. A model
+            # cannot silently remove the actor while the authored pose survives.
+            target[offscreen] = [sid for sid in target[offscreen] if sid not in contract_ids]
+            target[visible] += [sid for sid in contract_ids if sid not in target[visible]]
         if locks & {visible, offscreen}:
             if set(source[visible]) & set(source[offscreen]):
                 raise ValueError('A character cannot be both in the scene and off-screen. Choose one place for each character in this scene.')
@@ -266,11 +291,11 @@ def merge_plan(project, proposal):
         for key in result['style']:
             if isinstance(proposal['style'].get(key), str):
                 result['style'][key] = proposal['style'][key][:3000]
-    return result
+    return check_project(result)
 
 def merge_assist(project, shot_id, field, value):
     result = copy.deepcopy(check_project(project))
-    if field not in ALLOWED_SHOT_FIELDS - {'visible_subject_ids', 'offscreen_subject_ids', 'transition'}:
+    if field not in ALLOWED_SHOT_FIELDS - {'visible_subject_ids', 'offscreen_subject_ids', 'transition', 'scene_contract'}:
         raise ValueError('This field is protected from AI replacement.')
     target = next((s for s in result['shots'] if s['id'] == shot_id), None)
     if not target:

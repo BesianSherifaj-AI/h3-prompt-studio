@@ -54,8 +54,11 @@ import {
 import { createBridge } from "./bridge";
 import { makeBridgeSnapshot, matchesBridgeSnapshot } from "./bridgeSnapshot";
 import MotionTools from "./MotionTools";
+import MotionLab from "./MotionLab";
 import FilesOutputs from "./FilesOutputs";
 import SimpleStudio from "./SimpleStudio";
+import SceneContinuity from "./SceneContinuity";
+import { pruneSceneActors } from "./sceneContinuityState";
 import ComfyPanel from './ComfyPanel';
 import ModelPicker, { residentModelOptions } from './ModelPicker';
 import ContinuationLinkReview from './ContinuationLinkReview';
@@ -211,7 +214,7 @@ function Modal({ title, subtitle, onClose, children, wide = false }: any) {
 }
 
 export default function App() {
-  const [workspaceMode, setWorkspaceMode] = useState<'studio'|'game'>(()=>{try{return localStorage.getItem('h3-workspace-mode')==='game'?'game':'studio';}catch{return 'studio';}});
+  const [workspaceMode, setWorkspaceMode] = useState<'studio'|'game'>(()=>{try{return new URLSearchParams(window.location.search).has('game') || localStorage.getItem('h3-workspace-mode')==='game'?'game':'studio';}catch{return 'studio';}});
   const [gameSource, setGameSource] = useState<string|undefined>();
   const [gameSourceKey, setGameSourceKey] = useState(0);
   const [studioStoryId,setStudioStoryId] = useState('');
@@ -752,7 +755,7 @@ export default function App() {
       const originalKey = JSON.stringify(original);
       const result = useAI ? await api("/ai/plan", {
         project: prepared,
-        instructions: simpleInstructions(prepared) + "\nKeep each action, camera and performance field to one short sentence. Avoid repeated descriptions and extra camera moves. Keep speaking faces visible." + (prepared.assistant_instructions?.trim() ? "\nAdditional user direction: " + prepared.assistant_instructions : ""),
+        instructions: simpleInstructions(prepared) + "\nKeep each scene action to one coherent beat. Use scene_contract for precise actor starting positions, who acts or stays in place, object identity and counts, and ending positions. Retain detailed staging when it matters; avoid repeated descriptions and extra camera moves. Keep speaking faces visible." + (prepared.assistant_instructions?.trim() ? "\nAdditional user direction: " + prepared.assistant_instructions : ""),
         persona: aiPersona,
         vision: connection.lm?.models?.find((m:any)=>m.id===settings.model)?.vision !== false,
       }) : {candidate:prepared,compiled:await api('/compile',{project:prepared}),seconds:0,observations:[]};
@@ -1678,6 +1681,11 @@ export default function App() {
                     onClick={() =>
                       update((d) => {
                         d.subjects = d.subjects.filter((x) => x.id !== s.id);
+                        for (const target of d.shots) {
+                          target.visible_subject_ids = target.visible_subject_ids.filter((id) => id !== s.id);
+                          target.offscreen_subject_ids = target.offscreen_subject_ids.filter((id) => id !== s.id);
+                          pruneSceneActors(d, target.id);
+                        }
                       })
                     }
                   />
@@ -1991,6 +1999,7 @@ export default function App() {
                                   target.visible_subject_ids.push(s.id);
                                 if (v === "offscreen")
                                   target.offscreen_subject_ids.push(s.id);
+                                pruneSceneActors(d, target.id);
                               })
                             }
                             options={[
@@ -2176,6 +2185,7 @@ export default function App() {
                         timing guides the model but does not trim the rendered
                         video.
                       </p>
+                      <SceneContinuity project={p} shot={shot} index={p.shots.findIndex((item) => item.id === shot.id)} update={update} />
                     </>
                   )}
                 </div>
@@ -2588,6 +2598,7 @@ export default function App() {
           onClose={() => setModal("")}
         >
           <ContinuationPlanner project={p} update={update} onContinue={continueProject} busy={!!busy}/>
+          <button type="button" onClick={() => setModal('motion-lab')}>Compare motion prompts · Pixel preview</button>
           <MotionTools
             duration={shot?.duration || p.duration}
             subjects={p.subjects}
@@ -2602,6 +2613,7 @@ export default function App() {
           />
         </Modal>
       )}
+      {modal === 'motion-lab' && <MotionLab project={p} onClose={() => setModal('')} />}
       {modal === "system-prompt" && (
         <Modal
           wide

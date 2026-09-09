@@ -4,6 +4,8 @@ import type { Project } from "./model";
 import type { ContinuationRenderPreset } from "./quickPreview";
 import { loadContinuationDraft, saveContinuationDraft } from "./continuationDraft";
 import "./VideoWorkspace.css";
+import LiveRenderProgress from "./LiveRenderProgress";
+import UpscaleButton from "./UpscaleButton";
 
 export type VideoJob = {
   id: string;
@@ -305,6 +307,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
       <button type="button" disabled={!canReroll} onClick={() => current && void runAction(() => onReroll(current))} title="Keep this take's prompt, photos and settings, and render with a new seed."><Shuffle size={17} aria-hidden="true" /><span>Try another take</span></button></>}
       <button className={!hasResult ? 'video-workspace-generate' : ''} type="button" disabled={working} onClick={() => void runAction(() => onGenerate(generatePreset))}><Play size={17} fill="currentColor" aria-hidden="true" /><span>Generate video</span></button>
     </div>
+    {current && ["queued", "running"].includes(current.status) && <LiveRenderProgress runId={current.id}/>}
     {source && <div className="video-workspace-source" aria-label="Continuation source">
       {endingUrl && <img src={endingUrl} alt="Ending frame used for continuation" />}
       <div><strong>Continuing after {videoTakeTitle(source, takeNumber(source))}</strong><span>{source.id !== current?.id ? 'You are previewing history. Your story still continues from this ending.' : 'The saved ending and motion carry into the next scene automatically.'}</span></div>
@@ -364,6 +367,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
       {playable && current?.download_url && <a className="video-workspace-download" href={current.scene_video_url || current.download_url} download><Download size={14} aria-hidden="true" /> Save scene</a>}
     </div>
 
+    <UpscaleButton runId={playable ? current?.id : undefined}/>
     {(status || busy || submitting) && <div className={`video-workspace-status ${status?.status === "failed" || status?.status === "uncertain" ? "needs-attention" : ""}`} role="status" aria-live="polite">
       {pending || busy || submitting ? <LoaderCircle size={15} className={status?.status === "uncertain" ? "" : "video-workspace-spin"} aria-hidden="true" /> : status?.status === "succeeded" ? <Check size={15} aria-hidden="true" /> : <RefreshCw size={15} aria-hidden="true" />}
       <div><strong>{busy && !pending ? (typeof busy === "string" ? busy : "Preparing your video") : submitting && !pending ? "Starting your request" : status ? labels[status.status] : "Preparing your video"}</strong>

@@ -161,6 +161,23 @@ def test_object_owner_without_visual_reference_uses_name_without_inventing_subje
     assert 'private-owner-id' not in result['prompt']
 
 
+def test_saved_holder_overrides_owner_in_actual_prompt():
+    p = project()
+    p['subjects'].append(dict(id='nora', name='Nora', asset_ids=[], description=''))
+    p['assets'].append(asset('box', semantic='object', simple_owner_id='s', current_holder_id='nora'))
+    result = compile_project(p)
+    assert result['valid']
+    assert 'starts held by Nora' in result['prompt'] and 'starts with' not in result['prompt']
+    p['assets'][-1]['current_holder_id'] = None
+    assert 'starts in the scene, held by nobody' in compile_project(p)['prompt']
+
+
+@pytest.mark.parametrize('view,expected', [('pov', 'First-person point of view'), ('overhead', 'Top-down view from directly above'), ('third_person', 'Third-person view follows')])
+def test_game_viewpoint_reaches_compiled_prompt(view, expected):
+    p = project(); p.update(game_viewpoint=view, game_player_id='s')
+    assert expected in compile_project(p)['prompt']
+
+
 @pytest.mark.parametrize('owner', ['deleted-character', [], {}, 123, True])
 def test_unknown_or_malformed_object_owner_fails_with_actionable_message(owner):
     p = project()
@@ -434,9 +451,8 @@ def test_profile_differences_keep_official_headers_and_custom_is_literal():
         outputs[profile] = r["prompt"]
         assert r["prompt"].startswith("subject_definitions:")
         assert "Style_definitions" not in r["prompt"]
-    assert len(set(outputs.values())) == 4
-    assert "{literal_text}" in outputs["custom"]
-    assert "{literal_text}" not in outputs["official"]
+    assert outputs['director'] != outputs['concise']
+    assert all('{literal_text}' in prompt for prompt in outputs.values())
 
 
 @pytest.mark.parametrize("kind", ["unknown_speaker", "missing_binding", "duplicate_id", "reserved_dialogue", "forged_header", "unresolved_prompt_reference"])

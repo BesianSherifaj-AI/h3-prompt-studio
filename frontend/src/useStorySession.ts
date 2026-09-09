@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError } from "./api";
+import { api as request, ApiError } from "./api";
 import type { Project } from "./model";
 import {
   normalizeImageGenerators,
@@ -11,10 +11,17 @@ import {
   type StorySettings,
   type StoryTicket,
   type StoryTurn,
+  type GameIntent,
+  type StoryConfiguration,
 } from "./storyTypes";
 
 const SELECTED = "h3-game:selected-story";
 const CREATE = "h3-game:pending-create";
+// These endpoints acknowledge saved work; inference and rendering run on the server.
+// A missing acknowledgement must unlock recovery without repeating a mutation.
+const api = (path: string, body?: any, form?: FormData, method?: string) =>
+  request(path, body, form, method, { timeoutMs: body === undefined && !form ? 15_000 : 30_000 });
+const notSubmitted = (message: string) => Object.assign(new Error(message), { notSubmitted: true });
 export type PendingStoryCreation = {
   requestId: string;
   body: {
@@ -25,6 +32,9 @@ export type PendingStoryCreation = {
     source_run_id?: string;
     settings: StorySettings;
     request_id: string;
+    world?: StoryConfiguration["world"];
+    guides?: StoryConfiguration["guides"];
+    player_character_id?: string;
   };
 };
 export function readPendingStoryCreation(): PendingStoryCreation | null {
@@ -197,10 +207,14 @@ export function useStorySession(skipRestore = false) {
     mounted.current = true;
     let alive = true;
     const init = async () => {
-      const results = await Promise.allSettled([
-        api("/stories"),
-        api("/assets/generators"),
-      ]);
+      const storiesRequest = api("/stories");
+      // Opening a saved game does not need image-generator discovery to finish.
+      void api("/assets/generators").then(result => {
+        if (!alive) return;
+        setGenerators(normalizeImageGenerators(result?.generators || result?.models));
+        setDefaultGenerator(result?.default_model || "");
+      }).catch(() => { /* The configured default remains available. */ });
+      const results = await Promise.allSettled([storiesRequest]);
       if (!alive) return;
       if (results[0].status === "fulfilled") {
         const list: Story[] = Array.isArray(results[0].value?.stories)
@@ -232,7 +246,10 @@ export function useStorySession(skipRestore = false) {
         }
         let saved = "";
         try {
-          if (!skipRestore) saved = localStorage.getItem(SELECTED) || "";
+          if (!skipRestore) {
+            const linked = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("game") || "" : "";
+            saved = /^[0-9a-f-]{36}$/i.test(linked) ? linked : localStorage.getItem(SELECTED) || "";
+          }
         } catch {
           /* No saved selection. */
         }
@@ -244,10 +261,6 @@ export function useStorySession(skipRestore = false) {
         )
           await selectStory(saved);
       } else setError((results[0].reason as Error).message);
-      if (results[1].status === "fulfilled") {
-        setGenerators(normalizeImageGenerators(results[1].value?.models));
-        setDefaultGenerator(results[1].value?.default_model || "");
-      }
       if (alive) setLoading(false);
     };
     void init();
@@ -285,9 +298,9 @@ export function useStorySession(skipRestore = false) {
 
   const runTicket = async (next: StoryTicket) => {
     if (sending.current)
-      throw new Error("The previous action is still being sent.");
+      throw notSubmitted("The previous action is still being sent.");
     if (ticket.current && ticket.current.requestId !== next.requestId)
-      throw new Error(
+      throw notSubmitted(
         "Reconnect to the previous request before making another move.",
       );
     sending.current = true;
@@ -299,37 +312,59 @@ export function useStorySession(skipRestore = false) {
     storeTicket(next, next.storyId);
     try {
       const result = await api(next.path, next.body);
+      const full = asStory(result);
+      const expectedTurn = next.path === `/stories/${encodeURIComponent(next.storyId)}/turns`
+        ? next.requestId : next.path.match(/\/turns\/([^/]+)\//)?.[1];
+      const acceptedTurn = expectedTurn && result?.id === expectedTurn &&
+        typeof result?.status === "string" && typeof result?.request_id === "string";
+      if (!(full?.id === next.storyId || acceptedTurn))
+        throw new Error("The saved request was not confirmed. Reconnect to check its status before sending another move.");
       mutation.current++;
       if (ticket.current?.requestId === next.requestId) {
         ticket.current = null;
         storeTicket(null, next.storyId);
         if (mounted.current) setPendingTicket(null);
       }
-      const full = asStory(result);
       if (full) apply(full);
-      else if (selected.current === next.storyId && result?.id) {
+      else if (selected.current === next.storyId && acceptedTurn) {
         const turn = result as StoryTurn;
         const old = current.current;
         if (old)
           apply({
             ...old,
-            turns: [...old.turns.filter((t) => t.id !== turn.id), turn],
+            turns: old.turns.some(t => t.id === turn.id)
+              ? old.turns.map(t => t.id === turn.id ? turn : t)
+              : [...old.turns, turn],
           });
       }
-      await refresh(next.storyId).catch(() => {
+      void refresh(next.storyId).catch(() => {
         /* The accepted turn will be polled; never repeat it. */
       });
       return result as StoryTurn | Story;
     } catch (e) {
       mutation.current++;
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
-        if (ticket.current?.requestId === next.requestId) ticket.current = null;
+      const rejected = e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408;
+      if (rejected) {
+        Object.assign(e, { notSubmitted: true });
+        if (ticket.current?.requestId === next.requestId) {
+          ticket.current = null;
+          if (mounted.current) setPendingTicket(null);
+        }
         storeTicket(null, next.storyId);
-        if (mounted.current) setPendingTicket(null);
+      }
+      const recovered = await refresh(next.storyId).catch(() => null);
+      const accepted = !rejected && next.path === `/stories/${encodeURIComponent(next.storyId)}/turns`
+        ? recovered?.turns.find(turn => turn.request_id === next.requestId) : undefined;
+      if (accepted) {
+        storeTicket(null, next.storyId);
+        if (ticket.current?.requestId === next.requestId) {
+          ticket.current = null;
+          if (mounted.current) setPendingTicket(null);
+        }
+        return accepted;
       }
       if (mounted.current && selected.current === next.storyId)
         setError((e as Error).message);
-      await refresh(next.storyId).catch(() => {});
       throw e;
     } finally {
       sending.current = false;
@@ -340,12 +375,13 @@ export function useStorySession(skipRestore = false) {
     id: string,
     path: string,
     body: Record<string, unknown> = {},
+    stableRequestId?: string,
   ) => {
-    const requestId = crypto.randomUUID();
+    const requestId = stableRequestId || crypto.randomUUID();
     return runTicket({
       storyId: id,
       path,
-      body: { ...body, request_id: requestId },
+      body: structuredClone({ ...body, request_id: requestId }),
       requestId,
     });
   };
@@ -389,7 +425,7 @@ export function useStorySession(skipRestore = false) {
         );
       return acceptCreation(incoming);
     } catch (e) {
-      if (posted && e instanceof ApiError && e.status >= 400 && e.status < 500)
+      if (posted && e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408)
         rememberCreation(null);
       setError((e as Error).message);
       throw e;
@@ -405,6 +441,9 @@ export function useStorySession(skipRestore = false) {
       player_name: string;
       source_run_id?: string;
       settings: StorySettings;
+      world?: StoryConfiguration["world"];
+      guides?: StoryConfiguration["guides"];
+      player_character_id?: string;
     },
   ) => {
     if (createAttempt.current)
@@ -431,10 +470,10 @@ export function useStorySession(skipRestore = false) {
     return submitCreation(createAttempt.current, true);
   };
   const patch = async (
-    changes: Partial<Pick<Story, "premise" | "player_name" | "settings">>,
+    changes: Partial<StoryConfiguration> & { expected_configuration_revision?: number },
   ) => {
     const id = selected.current;
-    if (!id || sending.current) return;
+    if (!id || sending.current) throw new Error("Wait for the previous request before saving changes.");
     sending.current = true;
     setSubmitting(true);
     mutation.current++;
@@ -442,13 +481,13 @@ export function useStorySession(skipRestore = false) {
       const incoming = asStory(
         await api(
           `/stories/${encodeURIComponent(id)}`,
-          changes,
+          { ...changes, expected_configuration_revision: changes.expected_configuration_revision ?? current.current?.configuration_revision },
           undefined,
           "PATCH",
         ),
       );
       mutation.current++;
-      if (incoming) apply(incoming);
+      if (incoming) { apply(incoming); return incoming; }
       else await refresh(id);
     } catch (e) {
       setError((e as Error).message);
@@ -463,31 +502,36 @@ export function useStorySession(skipRestore = false) {
     duration?: number,
     planned?: StoryPlan,
     storyId = selected.current,
+    intent?: GameIntent,
+    stableRequestId?: string,
   ) => {
     if (!storyId || !message.trim())
-      throw new Error("Write your next move first.");
+      throw notSubmitted("Write your next move first.");
     if (
       current.current?.id === storyId &&
       current.current.turns.some(storyTurnPending)
     )
-      throw new Error(
+      throw notSubmitted(
         "Finish or cancel the current turn before making another move.",
       );
     return perform(storyId, `/stories/${encodeURIComponent(storyId)}/turns`, {
       message: message.trim(),
       ...(duration ? { duration } : {}),
       ...(planned ? { planned } : {}),
-    });
+      ...(intent ? { intent } : {}),
+      ...(current.current?.id === storyId ? { expected_parent: current.current.active_run_id || null, configuration_revision: current.current.configuration_revision } : {}),
+    }, stableRequestId);
   };
   const turnAction = (
     turn: StoryTurn,
-    action: "approve" | "retry" | "cancel" | "reroll",
+    action: "approve" | "retry" | "cancel" | "reroll" | "edit" | "resume" | "retry-inspection" | "accept-intended" | "accept-visible" | "stop-and-apply",
     plan?: StoryPlan,
+    extra?: Record<string, unknown>,
   ) =>
     perform(
       selected.current,
       `/stories/${encodeURIComponent(selected.current)}/turns/${encodeURIComponent(turn.id)}/${action}`,
-      plan ? { plan } : {},
+      { ...(plan ? { plan } : {}), ...extra },
     );
   const branch = (runId: string) =>
     perform(

@@ -4,6 +4,23 @@ import { newShot, type Project, type Asset } from './model';
 const asset=(id:string,name:string):Asset=>({id,name,media_type:'image',role:'reference_image',semantic_role:'wardrobe',enabled:true,locked_order:false,description:'clothes only',observation:'old',approved_observation:'old'});
 const make=()=>({schema_version:1,id:'p',title:'Demo',mode:'ref2va',duration:5,aspect_ratio:'16:9',profile:'concise',authoring_mode:'full',story:{text:'Use @green-dress beside @green-dress-2. Email a@green-dress.test',locked:true},style:{},assets:[asset('a','Green Dress'),asset('b','Green Dress')],subjects:[{id:'s',name:'Mira',asset_ids:['a'],description:''}],shots:[newShot()],soundscape:'',music:'',custom_instructions:''}) as Project;
 describe('stable photo references',()=>{
+  it('renames references in generated scene continuity without changing IDs, literal speech or authorship',()=>{
+    const p=make();ensurePromptTags(p);
+    p.shots[0].scene_contract_source='generated';
+    p.shots[0].scene_contract={
+      actors:[{subject_id:'s',activity:'hold',start:'Wearing @green-dress',action:'Watches @green-dress-2',end:'Keeps @green-dress on'}],
+      objects:[{entity_id:'prop',name:'Ribbon from @green-dress',description:'Matches @green-dress',count:1,start:'Beside @green-dress',end:'Still beside @green-dress'}],
+      environment:'Color from @green-dress',background_activity:'Nobody touches @green-dress',
+    };
+    p.shots[0].dialogue=[{text:'Say @green-dress literally.'}];
+    renamePromptTag(p,'a','emerald');
+    const contract=p.shots[0].scene_contract;
+    expect(contract.actors?.[0]).toEqual({subject_id:'s',activity:'hold',start:'Wearing @emerald',action:'Watches @green-dress-2',end:'Keeps @emerald on'});
+    expect(contract.objects?.[0]).toEqual({entity_id:'prop',name:'Ribbon from @emerald',description:'Matches @emerald',count:1,start:'Beside @emerald',end:'Still beside @emerald'});
+    expect(contract.environment).toBe('Color from @emerald');expect(contract.background_activity).toBe('Nobody touches @emerald');
+    expect(p.shots[0].scene_contract_source).toBe('generated');expect(p.shots[0].director_locks).toBeUndefined();
+    expect(p.shots[0].dialogue[0].text).toBe('Say @green-dress literally.');
+  });
   it('creates readable unique tags that survive name and order changes',()=>{const p=make();ensurePromptTags(p);expect(p.assets.map(a=>a.prompt_tag)).toEqual(['green-dress','green-dress-2']);p.assets[0].name='Other';movePhoto(p,'a',1);ensurePromptTags(p);expect(p.assets[1].prompt_tag).toBe('green-dress');});
   it('renames exact prose mentions without changing dialogue, emails or longer tags',()=>{const p=make();ensurePromptTags(p);p.shots[0].dialogue=[{text:'Say @green-dress literally.'}];renamePromptTag(p,'a','emerald');expect(p.story.text).toBe('Use @emerald beside @green-dress-2. Email a@green-dress.test');expect(p.shots[0].dialogue[0].text).toBe('Say @green-dress literally.');});
   it('rejects duplicates and malformed tags without mutations',()=>{const p=make();ensurePromptTags(p);const before=structuredClone(p);expect(()=>renamePromptTag(p,'a','green-dress-2')).toThrow();expect(()=>renamePromptTag(p,'a','3 invalid')).toThrow();expect(p).toEqual(before);});

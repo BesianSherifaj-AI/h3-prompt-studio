@@ -148,11 +148,28 @@ class Client:
             raise AssertionError('Unexpected inference request')
         if isinstance(result, Exception):
             raise result
+        if system == OBSERVE_SYSTEM:
+            result = observed_for_schema(result, schema)
         return copy.deepcopy(result)
 
     def analyse_image(self, model, image, asset):
         self.inspections.append(asset['id'])
         return {'observation': 'One clearly visible ' + asset['name'] + '.'}
+
+
+def observed_for_schema(observation, schema):
+    """Default fake vision explicitly marks requested identities unverified.
+
+    Supplied checklists remain untouched so malformed/partial fault fixtures
+    still exercise production rejection rather than being repaired by a fake.
+    """
+    result = copy.deepcopy(observation)
+    if 'continuity_checks' in schema.get('required', []) and 'continuity_checks' not in result:
+        variants = schema['properties']['continuity_checks']['items'].get('anyOf', [])
+        result['continuity_checks'] = [{'kind': variant['properties']['kind']['const'], 'id': identity,
+            'status': 'uncertain', 'detail': 'Fake image evidence does not verify this identity.'}
+            for variant in variants for identity in variant['properties']['id']['enum']]
+    return result
 
 
 @pytest.fixture
@@ -280,6 +297,9 @@ def test_default_automatic_flow_and_explicit_review(rig):
     rig.manager.action(session['id'], turn['id'], 'approve', receipt)
     rig.manager.action(session['id'], turn['id'], 'approve', receipt)
     rig.manager.process(session['id'], turn['id'])
+    assert rig.manager.get(session['id'])['turns'][0]['status'] == 'awaiting_acceptance'
+    rig.manager.action(session['id'], turn['id'], 'accept-intended', {'request_id': uid()})
+    rig.manager.process(session['id'], turn['id'])
     assert rig.manager.get(session['id'])['turns'][0]['status'] == 'succeeded'
     assert len(rig.videos.queues) == 1
 
@@ -395,6 +415,16 @@ def test_new_character_and_place_are_bound_once_in_an_explicit_scene_cut(rig):
                                  setting='Walled garden', dialogue=[{'speaker': 'Lio', 'text': 'Welcome to the garden.'}]))
     session = story(rig, source=opening['id'])
     turn = render(rig, session)
+    assert turn['status'] == 'awaiting_review'
+    assert not rig.assets.requests
+    rig.manager.action(session['id'], turn['id'], 'approve', {'request_id': uid()})
+    rig.manager.process(session['id'], turn['id'])
+    turn = rig.manager.get(session['id'])['turns'][-1]
+    assert turn['status'] == 'awaiting_review' and turn['created_assets']
+    assert not rig.videos.queues
+    rig.manager.action(session['id'], turn['id'], 'approve', {'request_id': uid()})
+    rig.manager.process(session['id'], turn['id'])
+    turn = rig.manager.get(session['id'])['turns'][-1]
     assert turn['status'] == 'succeeded', turn.get('error')
     prepared = rig.videos.snapshot(turn['run_id'])
     lio = next(person for person in prepared['subjects'] if person['name'] == 'Lio')
@@ -434,7 +464,8 @@ def test_completed_memory_uses_active_branch_observations_and_never_speculative_
     stored = rig.manager.records[session['id']]
     internal = next(t for t in stored['turns'] if t['id'] == next_turn['id'])
     context = rig.manager.context(stored, internal, rig.videos.snapshot(first['run_id']))
-    assert context['observed_current_state'] == rig.client.observation
+    assert context['observed_current_state'] == first['observation']
+    assert {key: context['observed_current_state'][key] for key in rig.client.observation} == rig.client.observation
     events = context['completed_events_do_not_repeat']
     assert len(events) == 1 and events[0]['dialogue'] == plan()['dialogue']
     assert all(choice['message'] not in events[0]['action'] for choice in choices())

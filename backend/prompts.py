@@ -6,6 +6,7 @@ import json
 import math
 
 from .projects import directed_structure
+from .scene_contract import scene_contract_schema
 
 
 PERSONAS = [
@@ -134,6 +135,27 @@ BASE_SYSTEM = (
     "Proposals are reviewed before application. Do not include H3 Picture/Video/Audio tokens or compiler markup; the deterministic compiler owns that syntax."
 )
 
+SCENE_CONTROL_SYSTEM = (
+    'Describe scene_contract in every shot as concrete generation directions, not a summary. '
+    'actors contains one row for every visible subject_id, and no off-screen subject. '
+    'Use activity hold when a character stays seated, stands watching or listens without moving position; '
+    'specify their known posture, location and small permitted gesture explicitly. '
+    'Use activity act for the character actually performing the approved movement; assign each gesture to that identity. '
+    'Each row establishes start, assigned action and end. A silent bystander does not imitate the active character. '
+    'objects contains the important physical props only, each with a stable entity_id, name, count, appearance, '
+    'starting placement/holder and ending placement/holder. Reuse supplied IDs; for a new text-only prop establish '
+    'a short unique ID and reuse it across shots. Multiple images of one prop are one physical instance. '
+    'A transfer moves the existing object and leaves the former holder empty of that object. '
+    'Keep separate same-kind props distinguishable by supplied appearance and location. '
+    'Environment records established layout, lighting and colors; background_activity states any intended background motion. '
+    'An empty background needs no crowd. Keep off-screen voices off-screen, and do not add mouth movement for voiceover. '
+    'Preserve approved first-frame evidence, references, user choices and previous ending over invented details. '
+    'For text-only new scenes, establish a coherent concrete look consistent with the brief once; reuse it afterward. '
+    'For an unclear image detail leave it unspecified, rather than inventing a color, pose or hand. '
+    'Keep all fields compact and complementary: do not copy the full action into every actor or prop. '
+    'These controls narrow generation but are not proof that a video will obey them.'
+)
+
 
 def text_schema(limit=1200):
     return {"type": "string", "maxLength": limit}
@@ -199,7 +221,7 @@ def project_context(project):
     result["subjects"] = [{k: copy.deepcopy(s.get(k)) for k in ("id", "name", "asset_ids", "description")} for s in project.get("subjects", [])]
     result["assets"] = [{k: copy.deepcopy(a.get(k)) for k in ("id", "name", "prompt_tag", "role", "semantic_role", "enabled", "locked_order", "description", "approved_observation", "simple_owner_id")}
                         for a in project.get("assets", []) if a.get("enabled", True)]
-    result["shots"] = [{k: copy.deepcopy(s.get(k)) for k in ("id", "duration", "action", "setting", "camera", "performance", "final_state", "visible_subject_ids", "offscreen_subject_ids", "dialogue", "sound", "transition", "director_locks")}
+    result["shots"] = [{k: copy.deepcopy(s.get(k)) for k in ("id", "duration", "action", "setting", "camera", "performance", "final_state", "visible_subject_ids", "offscreen_subject_ids", "dialogue", "sound", "transition", "director_locks", "scene_contract", "scene_contract_source")}
                        for s in project.get("shots", [])]
     continuation = project.get('simple', {}).get('continuation')
     if isinstance(continuation, dict):
@@ -228,6 +250,9 @@ def plan_schema(project):
         "visible_subject_ids": copy.deepcopy(references), "offscreen_subject_ids": copy.deepcopy(references),
         "sound": text_schema(500), "transition": text_schema(160),
     })
+    # Saved/supervised older proposals remain usable; the compiler provides
+    # restrained defaults when this new optional staging block is absent.
+    shot['properties']['scene_contract'] = scene_contract_schema(subject_ids, required=True)
     shot_limits = {"minItems": 1, "maxItems": 6}
     if directed_structure(project):
         count = len(project.get("shots", []))
@@ -241,12 +266,12 @@ def plan_schema(project):
 
 
 def plan_prompt(project, instructions="", persona="universal"):
-    system = BASE_SYSTEM + "\n" + persona_instruction(persona) + (
+    system = BASE_SYSTEM + "\n" + SCENE_CONTROL_SYSTEM + "\n" + persona_instruction(persona) + (
         "\nPropose a feasible shot plan within the exact project duration. Shot durations must add up to that duration. "
         "When the project already contains authored scenes, preserve their count, order, individual durations, intended action and dialogue ownership by default; refine their direction instead of replacing the structure. "
         "A request to improve or plan the existing three scenes means keep those three scenes. Do not merge, split, reorder or redistribute their events unless the user explicitly asks to change the structure. "
         "Only for a blank/template project or an explicit new structure request should you design a new sequence; prefer a feasible continuous shot when appropriate to that new brief. "
-        "Do not output IDs, story, assets or dialogue replacements. Existing exact dialogue stays in the project; leave room for it. "
+        "Do not replace project or shot IDs, story, assets or dialogue. Use supplied subject and object IDs for scene bindings. Existing exact dialogue stays in the project; leave room for it. "
         "Keep each supplied line with its original scene and speaker. Do not copy the line into action prose, add words, translate it or invent another spoken line. "
         "Reference existing subjects only by their supplied IDs. For first/last-frame modes respect the start/end compositions. "
         "Each scene's director_locks lists exact user-selected controls. Preserve those values literally, including empty values and selected character rosters; improve only unlocked fields. "

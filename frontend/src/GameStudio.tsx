@@ -34,8 +34,11 @@ import {
   validTag,
 } from "./tags";
 import type { VideoJob } from "./VideoWorkspace";
+import LiveRenderProgress from "./LiveRenderProgress";
+import UpscaleButton from "./UpscaleButton";
 import {
   DEFAULT_STORY_SETTINGS,
+  PIXEL_STYLE,
   RUNNING_STORY_STATUSES,
   storyChoices,
   storyCurrentVideo,
@@ -48,6 +51,14 @@ import {
   type StoryTurn,
 } from "./storyTypes";
 import { useStorySession } from "./useStorySession";
+import { GameActionQueue, useGameActionQueue } from "./GameActionQueue";
+import GameEditor from "./GameEditor";
+import MotionLab from "./MotionLab";
+import { GameSoundtrack, GameVoiceInput } from "./GameAudio";
+import { focusGameInventory, GameActions, GameReceipt, GameStages, isInventoryCommand } from "./GameControls";
+import { blankGameProject, configurationFromStory, emptyWorld, ensurePlayer, prepareGameConfiguration } from "./gameConfiguration";
+import { api } from "./api";
+import type { GameGuide, GameIntent, StoryConfiguration } from "./storyTypes";
 import "./GameStudio.css";
 
 export type GameStudioProps = {
@@ -59,6 +70,10 @@ export type GameStudioProps = {
   initialSourceRunId?: string;
   initialSourceKey?: string | number;
 };
+function hasVisibleObservation(turn: StoryTurn): boolean {
+  const observation = turn.observation as { observed_state?: unknown } | null | undefined;
+  return typeof observation?.observed_state === "string" && observation.observed_state.trim().length > 0;
+}
 export async function openCreatedGame(
   created: Story,
   sendTurn: (
@@ -88,6 +103,11 @@ const STARTER_MOVES = [
   },
   { title: "Surprise me", message: "Surprise me" },
 ];
+const SETUP_DRAFT = "h3-game:setup-v1.2";
+function readSetupDraft(): StoryConfiguration {
+  try { const v = JSON.parse(localStorage.getItem(SETUP_DRAFT) || "null"); if (v?.project?.assets && v?.world?.characters && typeof v.premise === "string") return v; } catch { /* Optional browser storage. */ }
+  return { project: blankGameProject(), world: emptyWorld(), guides: [], settings: { ...DEFAULT_STORY_SETTINGS }, premise: "", player_name: "", player_character_id: "" };
+}
 export type GameReferenceKind =
   | "person"
   | "wardrobe"
@@ -246,7 +266,7 @@ export function gameReferenceIssues(project: Project): string[] {
       );
     tags.add(asset.prompt_tag);
     if (
-      asset.enabled !== false &&
+      asset.media_type === "image" && asset.enabled !== false &&
       asset.role !== "context" &&
       ["face", "character", "wardrobe"].includes(asset.semantic_role) &&
       !gameReferenceOwner(project, asset)
@@ -257,7 +277,7 @@ export function gameReferenceIssues(project: Project): string[] {
   }
   if (
     project.assets.filter(
-      (asset) => asset.enabled !== false && asset.role !== "context",
+      (asset) => asset.media_type === "image" && asset.enabled !== false && asset.role !== "context",
     ).length > 9
   )
     issues.push(
@@ -481,14 +501,24 @@ export default function GameStudio({
     pendingTicket,
     pendingCreation,
   } = session;
-  const [premise, setPremise] = useState(project.story?.text || ""),
-    [player, setPlayer] = useState(project.subjects?.[0]?.name || "");
-  const [playerSelection, setPlayerSelection] = useState(
-    project.subjects?.[0]?.name || "custom",
-  );
+  const [initialSetup] = useState(readSetupDraft);
+  const [setupBase, setSetupBase] = useState(initialSetup.project);
+  const [setupWorld, setSetupWorld] = useState(initialSetup.world);
+  const [premise, setPremise] = useState(initialSetup.premise),
+    [player, setPlayer] = useState(initialSetup.player_name);
+  const [playerSelection, setPlayerSelection] = useState(initialSetup.player_name || "custom");
   const [settings, setSettings] = useState<StorySettings>({
     ...DEFAULT_STORY_SETTINGS,
+    ...initialSetup.settings,
   });
+  const [editorDraft, setEditorDraft] = useState<StoryConfiguration | null>(null), [editorDirty, setEditorDirty] = useState(false), [editorTab, setEditorTab] = useState("cast");
+  const [editorDraftKey, setEditorDraftKey] = useState("");
+  const editorRevision = useRef<number | undefined>(undefined);
+  const [composerMode, setComposerMode] = useState<"play" | "guide">("play"), [guideScope, setGuideScope] = useState<"next" | "persistent">("next");
+  const [editingGuideId, setEditingGuideId] = useState<string | null>(null);
+  const [motionProject, setMotionProject] = useState<Project | null>(null);
+  const conversationNearEnd = useRef(true);
+  const [playView, setPlayView] = useState<"play" | "history">("play");
   const [settingsOpen, setSettingsOpen] = useState(false),
     [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState(""),
@@ -550,13 +580,13 @@ export default function GameStudio({
   );
   const selectedVideo = playingFilm
     ? playlist[filmIndex] || currentVideo
-    : videos.find((clip) => clip.id === preview?.id) || currentVideo;
+    : videos.find((clip) => clip.id === preview?.id) || (activeTurn && ["observing", "inspection_failed", "awaiting_acceptance"].includes(activeTurn.status) ? videos.find(clip => clip.id === activeTurn.run_id) : undefined) || currentVideo;
   const choices = storyChoices(story),
     displayedChoices = choices.length ? choices : STARTER_MOVES;
   const setupProject =
     pendingCreation?.body.project ??
     gameProjectWithUploads(
-      project,
+      setupBase,
       setupAssets,
       referenceEdits,
       referenceReplacements,
@@ -575,6 +605,34 @@ export default function GameStudio({
     (edit) => edit.removed,
   ).length;
   const memory = gameMemoryText(story?.observed_state);
+  const configurationKey = story ? `h3-game:configuration:${story.id}:${story.active_branch_id}` : "";
+  const config: StoryConfiguration = story ? (editorDraftKey === configurationKey ? editorDraft : null) || configurationFromStory(story, setupBase) : {
+    project: setupProject, world: setupWorld, guides: [], settings, premise, player_name: player,
+    player_character_id: setupWorld.characters.find(c => c.control === "player")?.id || "",
+  };
+  const changeConfiguration = (next: StoryConfiguration) => {
+    if (story) { setEditorDraft(next); setEditorDraftKey(configurationKey); setEditorDirty(true); try { localStorage.setItem(configurationKey, JSON.stringify({ value: next, revision: editorRevision.current })); } catch {} }
+    else { setSetupBase(next.project); setSetupWorld(next.world); setPremise(next.premise); setPlayer(next.player_name); setPlayerSelection(next.player_name || "custom"); setSettings(next.settings); setSetupAssets([]); setReferenceEdits({}); setReferenceReplacements({}); }
+  };
+  const saveConfiguration = async () => {
+    if (!story) { const next = ensurePlayer(config); changeConfiguration(next); return; }
+    if (!editorDirty || editorDraftKey !== configurationKey) return;
+    const saved = await session.patch({ ...prepareGameConfiguration(config), expected_configuration_revision: editorRevision.current });
+    if (saved) { setEditorDraft(configurationFromStory(saved, config.project)); editorRevision.current = saved.configuration_revision; }
+    setEditorDirty(false); try { localStorage.removeItem(configurationKey); } catch {}
+  };
+  useEffect(() => {
+    if (!story) return;
+    let restored: { value: StoryConfiguration; revision?: number } | null = null;
+    try { const r = JSON.parse(localStorage.getItem(configurationKey) || "null"); if (r?.value?.project?.assets && r?.value?.world?.characters) restored = r; } catch {}
+    setEditorDraft(restored?.value || configurationFromStory(story, setupBase));
+    setEditorDraftKey(configurationKey);
+    setEditorDirty(!!restored); editorRevision.current = restored ? restored.revision : story.configuration_revision;
+  }, [configurationKey]);
+  useEffect(() => {
+    if (story && !editorDirty) { setEditorDraft(configurationFromStory(story, setupBase)); editorRevision.current = story.configuration_revision; }
+  }, [story?.configuration_revision, story?.active_run_id, editorDirty]);
+  useEffect(() => { if (!story && !pendingCreation && !sourceRunId) try { localStorage.setItem(SETUP_DRAFT, JSON.stringify(config)); } catch {} }, [setupProject, setupWorld, premise, player, settings, story?.id]);
   const draftKey = story
     ? `h3-game:draft:${story.id}:${story.active_branch_id || "main"}`
     : "";
@@ -588,6 +646,8 @@ export default function GameStudio({
       return;
     lastSource.current = { runId: initialSourceRunId, key: initialSourceKey };
     setSourceRunId(initialSourceRunId);
+    setSetupBase(structuredClone(project));
+    setSetupWorld(emptyWorld());
     void session.selectStory("");
     setPremise(project.story?.text || "");
     setPlayer(project.subjects?.[0]?.name || "");
@@ -599,16 +659,6 @@ export default function GameStudio({
     setReferenceReplacements({});
     setSetupAssets([]);
   }, [initialSourceRunId, initialSourceKey]);
-
-  useEffect(() => {
-    if (session.selectedId || story) return;
-    setPremise(project.story?.text || "");
-    setPlayer(project.subjects?.[0]?.name || "");
-    setPlayerSelection(project.subjects?.[0]?.name || "custom");
-    setSetupAssets([]);
-    setReferenceEdits({});
-    setReferenceReplacements({});
-  }, [project.id]);
 
   useEffect(() => {
     if (!story) return;
@@ -639,11 +689,11 @@ export default function GameStudio({
     }
   };
   useEffect(() => {
-    conversationEnd.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest",
-    });
-  }, [story?.turns.length, lastTurn?.status]);
+    if (playView === "history" && conversationNearEnd.current) {
+      const list = conversationEnd.current?.parentElement;
+      if (list) list.scrollTop = list.scrollHeight;
+    }
+  }, [story?.turns.length, lastTurn?.status, playView]);
   useEffect(() => {
     if (!settingsOpen) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -676,16 +726,15 @@ export default function GameStudio({
     void perform(async () => {
       setStarting(true);
       try {
-        const gameProject = gameProjectWithUploads(
-          { ...project, story: { ...project.story, text: premise.trim() } },
-          setupAssets,
-          referenceEdits,
-          referenceReplacements,
-        );
+        const openingConfig = prepareGameConfiguration(config);
+        const gameProject = openingConfig.project;
         const created = await session.create(gameProject, {
           premise: gameProject.story.text,
           player_name: player.trim(),
           settings,
+          world: openingConfig.world,
+          guides: openingConfig.guides,
+          player_character_id: openingConfig.player_character_id,
           ...(sourceRunId ? { source_run_id: sourceRunId } : {}),
         });
         setSourceRunId(undefined);
@@ -708,18 +757,27 @@ export default function GameStudio({
       }
     });
   };
-  const send = (text: string) => {
-    if (busy || !text.trim()) return;
-    void perform(async () => {
-      await session.sendTurn(text.trim(), story?.settings.duration || 5);
-      changeMessage("");
+  const moveQueue = useGameActionQueue(story, busy, async move => {
+      try { await saveConfiguration(); }
+      catch (error) { throw Object.assign(error as Error, { notSubmitted: true }); }
+      const result = await session.sendTurn(move.message, config.settings.duration || 5, undefined, story?.id, move.intent, move.id);
       setPreview(null);
       setPlayingFilm(false);
-    });
+      return result;
+  });
+  const send = (text: string, intent?: GameIntent) => {
+    if (story && !intent && isInventoryCommand(text)) {
+      focusGameInventory(story.id);
+      changeMessage("");
+      return;
+    }
+    if (moveQueue.enqueue(text, intent)) {
+      changeMessage("");
+    }
   };
   const takeAction = (
     turn: StoryTurn,
-    action: "approve" | "retry" | "cancel" | "reroll",
+    action: "approve" | "retry" | "cancel" | "reroll" | "edit" | "resume" | "retry-inspection" | "accept-intended" | "accept-visible" | "stop-and-apply",
     plan?: StoryPlan,
   ) =>
     void perform(async () => {
@@ -776,12 +834,21 @@ export default function GameStudio({
       if (replaceInput.current) replaceInput.current.value = "";
     }
   };
-  const saveSettings = () =>
+  const saveGuide = () => {
+    if (!story || !message.trim()) return;
+    const oldGuide = config.guides.find(g => g.id === editingGuideId);
+    const guide: GameGuide = { id: oldGuide?.id || crypto.randomUUID(), revision: (oldGuide?.revision || 0) + 1, text: message.trim(), scope: guideScope, enabled: true };
+    const next = { ...config, guides: oldGuide ? config.guides.map(g => g.id === oldGuide.id ? guide : g) : [...config.guides, guide] };
+    changeConfiguration(next);
     void perform(async () => {
-      if (story)
-        await session.patch({ settings, player_name: player, premise });
-      setSettingsOpen(false);
+      const saved = await session.patch({ ...prepareGameConfiguration(next), expected_configuration_revision: editorRevision.current });
+      if (saved) { setEditorDraft(configurationFromStory(saved, next.project)); editorRevision.current = saved.configuration_revision; }
+      setEditorDirty(false); try { localStorage.removeItem(configurationKey); } catch {}
+      changeMessage("");
+      setEditingGuideId(null);
     });
+  };
+  const submitComposer = () => composerMode === "guide" ? saveGuide() : send(message);
   const resetGame = () => {
     void session.selectStory("");
     setPreview(null);
@@ -791,14 +858,15 @@ export default function GameStudio({
     setReferenceEdits({});
     setReferenceReplacements({});
     setSourceRunId(undefined);
-    setPremise(project.story?.text || "");
-    setPlayer(project.subjects?.[0]?.name || "");
-    setPlayerSelection(project.subjects?.[0]?.name || "custom");
+    setSetupBase(blankGameProject()); setSetupWorld(emptyWorld()); setEditorDraft(null); setEditorDirty(false);
+    setPremise("");
+    setPlayer("");
+    setPlayerSelection("custom");
     setSettings({ ...DEFAULT_STORY_SETTINGS });
   };
 
   return (
-    <main className="game-studio" aria-label="Story game">
+    <main className={`game-studio${story ? " has-story" : ""}${settingsOpen ? " is-editor-open" : ""}`} aria-label="Story game">
       <header className="game-topbar">
         <div className="game-brand">
           <span className="game-brand-icon">
@@ -820,7 +888,7 @@ export default function GameStudio({
             onClick={() => setSettingsOpen(true)}
           >
             <Settings2 size={17} />
-            <span>Settings</span>
+            <span>Edit game</span>
           </button>
         </div>
       </header>
@@ -854,6 +922,9 @@ export default function GameStudio({
             ? `You play ${story.player_name || "your character"}`
             : "Local models · Your references · Your direction"}
         </span>
+        {story && <button className="quiet" onClick={() => { setEditorTab("photos"); setSettingsOpen(true); }}><ImagePlus size={16}/> Add photo / sound</button>}
+        {story && <button className="quiet" onClick={() => { setEditorTab("render"); setSettingsOpen(true); }}>{config.settings.resolution} MP · {config.settings.steps} steps · {String(config.settings.aspect_ratio || config.project.aspect_ratio)}{editorDirty ? " · unsaved changes" : ""}</button>}
+        {story && <details className="game-session-tools"><summary>More tools</summary><button className="quiet" onClick={() => changeConfiguration({ ...config, settings: { ...config.settings, experimental_preview: true, resolution: "0.2", duration: 3, steps: 8, style: PIXEL_STYLE } })}>Pixel preview · 0.2 MP</button><button className="quiet" onClick={() => setMotionProject(prepareGameConfiguration(config).project)}>Compare motion prompts</button></details>}
       </div>
       {(localError || session.error) && (
         <div className="game-alert" role="alert">
@@ -975,6 +1046,11 @@ export default function GameStudio({
                   Add photos
                 </button>
               </div>
+              <button type="button" className="quiet" onClick={() => {
+                setSetupBase(structuredClone(project)); setPremise(project.story?.text || "");
+                setSetupWorld(configurationFromStory({ project, settings, player_name: player, premise } as Story, project).world);
+                setSetupAssets([]); setReferenceEdits({}); setReferenceReplacements({});
+              }}>Import current Studio cast & photos</button>
               <input
                 ref={fileInput}
                 type="file"
@@ -1207,7 +1283,7 @@ export default function GameStudio({
                   onChange={(event) => setPremise(event.target.value)}
                   maxLength={5000}
                   rows={5}
-                  placeholder="A quiet café. A handwritten note. Someone across the table knows more than they are saying…"
+                  placeholder="Describe the world you want to play in, the situation, and what matters to your character."
                   required
                 />
               </label>
@@ -1277,7 +1353,7 @@ export default function GameStudio({
                 </span>
               </label>
               <div className="game-defaults">
-                <span>0.3 MP</span>
+                <span>{setupSettings.resolution} MP</span>
                 <span>{setupSettings.steps} steps</span>
                 <span>{setupSettings.duration} seconds</span>
                 <button
@@ -1288,6 +1364,9 @@ export default function GameStudio({
                   Change settings
                 </button>
               </div>
+              <button type="button" className="quiet" onClick={() => {
+                setSettings(old => ({ ...old, experimental_preview: true, resolution: "0.2", duration: 3, steps: 8, style: PIXEL_STYLE }));
+              }}>Pixel preview · ~0.2 MP / 3 seconds</button>
               <button
                 className="primary game-start"
                 disabled={
@@ -1323,7 +1402,13 @@ export default function GameStudio({
 
       {story && (
         <>
-          <section className="game-play-layout">
+          <nav className="game-view-tabs" aria-label="Game views">
+            <button aria-pressed={playView === "play" && !settingsOpen} onClick={() => { setPlayView("play"); setSettingsOpen(false); }}><Play size={17}/> Play</button>
+            <button aria-pressed={settingsOpen} onClick={() => setSettingsOpen(true)}><Settings2 size={17}/> Edit</button>
+            <button aria-pressed={playView === "history" && !settingsOpen} onClick={() => { setPlayView("history"); setSettingsOpen(false); }}><MessageSquare size={17}/> History <span>{story.turns.length}</span></button>
+          </nav>
+          <section className={`game-play-layout view-${playView}`}>
+
             <div className="game-stage">
               <div className="game-section-title">
                 <div>
@@ -1354,7 +1439,8 @@ export default function GameStudio({
                   {playerStatus}
                 </span>
               </div>
-              <div className="game-player">
+              <div className="game-video-control-row">
+              <div className="game-player" style={{ aspectRatio: selectedVideo?.width && selectedVideo.height ? `${selectedVideo.width} / ${selectedVideo.height}` : String(config.settings.aspect_ratio || config.project.aspect_ratio).replace(":", "/") }}>
                 {selectedVideo?.video_url ? (
                   <video
                     key={`${playingFilm ? "film" : "take"}:${selectedVideo.id}`}
@@ -1387,6 +1473,58 @@ export default function GameStudio({
                   </div>
                 )}
               </div>
+              <GameActions story={story} disabled={false} onAction={send}/>
+              </div>
+            <form
+              className="game-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitComposer();
+              }}
+            >
+              <div className="game-composer-modes" aria-label="Message mode"><button type="button" aria-pressed={composerMode === "play"} onClick={() => setComposerMode("play")}>Play · my action or speech</button><button type="button" aria-pressed={composerMode === "guide"} onClick={() => setComposerMode("guide")}>Guide · direct the game</button>{composerMode === "guide" && <label>Apply guidance<select value={guideScope} onChange={e => setGuideScope(e.target.value as "next" | "persistent")}><option value="next">Next response</option><option value="persistent">From now on</option></select></label>}</div>
+              {onUploadFiles && <GameVoiceInput key={story.id} onUpload={onUploadFiles} onAsset={(asset, reference) => changeConfiguration({ ...config, project: { ...config.project, assets: [...config.project.assets, { ...asset, role: reference ? "reference_audio" : "context", enabled: reference, audio_use: reference ? "reference" : "context", simple_owner_id: config.player_character_id }] } })} onText={text => changeMessage(message.trim() ? `${message.trim()}\n${text}` : text)}/>}
+              <label className="game-composer-label" htmlFor="game-next-move">
+                {composerMode === "play" ? "Or write your own move" : "Tell the assistant how to direct the game"}
+              </label>
+              <div>
+                <textarea
+                  id="game-next-move"
+                  ref={composer}
+                  value={message}
+                  maxLength={5000}
+                  rows={2}
+                  placeholder={composerMode === "play" ? "I step forward and say, “…”" : "Change a character’s behavior, the mood, or where the story is going. This will not be spoken."}
+                  onChange={(event) => changeMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      (event.ctrlKey || event.metaKey)
+                    ) {
+                      event.preventDefault();
+                      submitComposer();
+                    }
+                  }}
+                />
+                <button className="primary" disabled={(composerMode === "guide" && (submitting || !!pendingTicket)) || !message.trim()}>
+                  {submitting ? (
+                    <LoaderCircle size={18} className="game-spin" />
+                  ) : (
+                    <Send size={18} />
+                  )}
+                  <span>{composerMode === "play" ? "Queue my move" : "Save guidance · no video"}</span>
+                </button>
+              </div>
+              <p className="game-help">
+                {activeTurn?.status === "awaiting_review"
+                  ? "Review or cancel the scene above before making another move."
+                  : busy
+                    ? "Keep adding or editing queued moves while this scene finishes."
+                    : "A choice joins the queue. Edit or remove it during the 3-second window before it starts."}
+              </p>
+            </form>
+              <GameActionQueue controls={moveQueue} busy={busy} onCheck={() => void perform(() => session.resumePending())}/>
+              {lastTurn && ["awaiting_review", "inspection_failed", "awaiting_acceptance", "failed", "uncertain", "awaiting_assistant"].includes(lastTurn.status) && <div className="game-attention-link" role="status"><span>{lastTurn.error || storyTurnLabel(lastTurn)}</span><div className="game-attention-actions">{lastTurn.status === "failed" && !lastTurn.plan && !lastTurn.run_id && <button className="primary" disabled={submitting || !!pendingTicket} onClick={() => takeAction(lastTurn, "retry")}><RefreshCw size={15}/> Retry AI response</button>}<button className="quiet" onClick={() => setPlayView("history")}>Review details</button></div></div>}
               {selectedVideo && (
                 <div className="game-player-meta">
                   <span>
@@ -1418,6 +1556,8 @@ export default function GameStudio({
               {selectedVideo?.video_url && (
                 <details className="game-clip-details">
                   <summary>Clip details &amp; original output</summary>
+                  <UpscaleButton runId={selectedVideo.id}/>
+                  <GameSoundtrack key={selectedVideo.id} runId={selectedVideo.id} project={config.project}/>
                   <p>
                     {selectedVideo.scene_video_url
                       ? "The player shows new footage. The original output can include preserved motion from the previous scene."
@@ -1519,6 +1659,9 @@ export default function GameStudio({
                 </div>
               )}
               {activeTurn && (
+                <>
+                <GameStages turn={activeTurn}/>
+                {activeTurn.run_id && activeTurn.status === "rendering" && <LiveRenderProgress runId={activeTurn.run_id}/>}
                 <div className="game-progress" aria-live="polite">
                   <div>
                     <strong>{storyTurnLabel(activeTurn)}</strong>
@@ -1537,6 +1680,7 @@ export default function GameStudio({
                     </button>
                   )}
                 </div>
+                </>
               )}
               {memory && (
                 <details className="game-memory">
@@ -1559,6 +1703,7 @@ export default function GameStudio({
             <aside
               className="game-conversation"
               aria-label="Story conversation"
+              hidden={playView !== "history"}
             >
               <div className="game-section-title">
                 <div>
@@ -1570,7 +1715,7 @@ export default function GameStudio({
                   {story.turns.length === 1 ? "turn" : "turns"}
                 </span>
               </div>
-              <div className="game-conversation-scroll">
+              <div className="game-conversation-scroll" onScroll={e => { const el = e.currentTarget; conversationNearEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
                 {!story.turns.length && (
                   <div className="game-chat-opening">
                     <p>{story.premise}</p>
@@ -1610,12 +1755,17 @@ export default function GameStudio({
                             : "Turn cancelled."}
                         </p>
                       )}
-                      {turn.error && (
-                        <p className="game-turn-error" role="alert">
-                          {turn.error}
-                        </p>
-                      )}
+                      {turn.error && (turn.status === "failed" && turn.id !== lastTurn?.id && turn.parent_run_id !== story.active_run_id
+                        ? <details className="game-help"><summary>Earlier failed attempt · the story has since continued</summary><p>{turn.error}</p></details>
+                        : <p className="game-turn-error" role="alert">{turn.error}</p>)}
+                      {turn.status === "awaiting_review" && Array.isArray(turn.created_assets) && turn.created_assets.length > 0 && <div className="game-appearance-review"><strong>Review the new appearances</strong><p>These images will condition the scene. Open a thumbnail to inspect it before continuing.</p><div>{(turn.created_assets as Asset[]).filter(asset => asset.media_type === "image").map(asset => <a key={asset.id} href={`/api/assets/${encodeURIComponent(asset.id)}/file`} target="_blank" rel="noreferrer"><img src={`/api/assets/${encodeURIComponent(asset.id)}/thumbnail`} alt={asset.name}/><span>{asset.name}</span></a>)}</div></div>}
                       <div className="game-turn-actions">
+                        {["inspection_failed", "awaiting_acceptance"].includes(turn.status) && <>
+                          <button disabled={submitting} onClick={() => takeAction(turn, "retry-inspection")}>Retry ending inspection</button>
+                          <button disabled={submitting} onClick={() => takeAction(turn, "accept-intended")}>Use intended story</button>
+                          <button disabled={submitting || !hasVisibleObservation(turn)} title={hasVisibleObservation(turn) ? "Keep the visible outcome and only the changes supported by the inspected image." : "Retry ending inspection first so there is a visible result to use."} onClick={() => takeAction(turn, "accept-visible")}>Use visible result</button>
+                        </>}
+                        {turn.status === "awaiting_assistant" && <button onClick={() => void perform(async () => { const requests = await api("/assistant/requests"); setLocalError(`Supervised assistant is waiting. ${Array.isArray(requests.requests) ? requests.requests.length : "Pending"} request(s) are available to the testing agent. This does not queue another video.`); })}>Check supervised requests</button>}
                         {turn.status === "awaiting_review" && (
                           <>
                             <button
@@ -1623,7 +1773,7 @@ export default function GameStudio({
                               disabled={submitting || !!pendingTicket}
                               onClick={() => takeAction(turn, "approve")}
                             >
-                              <Play size={13} /> Render this scene
+                              <Play size={13} /> {Array.isArray(turn.created_assets) && turn.created_assets.length ? "Use these appearances" : "Render this scene"}
                             </button>
                             {turn.plan && (
                               <button
@@ -1688,13 +1838,13 @@ export default function GameStudio({
                             )}
                           </>
                         )}
-                        {["failed", "uncertain"].includes(turn.status) && (
+                        {["failed", "uncertain"].includes(turn.status) && (turn.status !== "failed" || turn.id === lastTurn?.id || turn.parent_run_id === story.active_run_id) && (
                           <>
                             <button
                               disabled={submitting || !!pendingTicket}
                               onClick={() => takeAction(turn, "retry")}
                             >
-                              <RefreshCw size={13} /> Resume safely
+                              <RefreshCw size={13} /> {turn.run_id ? "Check saved render" : turn.plan ? "Resume saved turn" : "Retry AI response"}
                             </button>
                             <button
                               className="quiet"
@@ -1706,12 +1856,44 @@ export default function GameStudio({
                           </>
                         )}
                       </div>
+                      <GameReceipt turn={turn}/>
                     </div>
                   </article>
                 ))}
                 <div ref={conversationEnd} />
               </div>
             </aside>
+          <section className="game-move-panel" aria-label="Your next move" hidden={playView !== "play"}>
+            {!!config.guides.length && <div className="game-guide-chips" aria-label="Active guidance">{config.guides.filter(g => g.enabled).map(g => <div key={g.id}><button className="quiet" onClick={() => { setComposerMode("guide"); setGuideScope(g.scope); setEditingGuideId(g.id); changeMessage(g.text); }}>{g.scope === "next" ? "Next response" : "From now on"}: {g.text}</button><button aria-label={`Remove guidance: ${g.text}`} className="icon-button" onClick={() => changeConfiguration({ ...config, guides: config.guides.filter(item => item.id !== g.id) })}><X size={16}/></button></div>)}</div>}
+            <div className="game-move-heading">
+              <div>
+                <span className="game-eyebrow">
+                  {choices.length ? "CHOOSE YOUR NEXT MOVE" : "TRY A MOVE"}
+                </span>
+                <h2>What do you do?</h2>
+              </div>
+              <button
+                className="quiet"
+                onClick={() => send("Surprise me")}
+              >
+                <Sparkles size={15} /> Surprise me
+              </button>
+            </div>
+            <div className="game-choice-grid">
+              {displayedChoices.map((choice, index) => (
+                <button
+                  key={`${index}:${choice.message}`}
+                  onClick={() => send(choice.message)}
+                >
+                  <span className="game-choice-number">{index + 1}</span>
+                  <strong>{choice.title}</strong>
+                  <p>{choice.message}</p>
+                  <ArrowRight size={17} />
+                </button>
+              ))}
+            </div>
+
+          </section>
           </section>
           {editing?.turn.plan && (
             <div
@@ -1736,270 +1918,22 @@ export default function GameStudio({
               />
             </div>
           )}
-          <section className="game-move-panel" aria-label="Your next move">
-            <div className="game-move-heading">
-              <div>
-                <span className="game-eyebrow">
-                  {choices.length ? "CHOOSE YOUR NEXT MOVE" : "TRY A MOVE"}
-                </span>
-                <h2>What do you do?</h2>
-              </div>
-              <button
-                className="quiet"
-                disabled={busy}
-                onClick={() => send("Surprise me")}
-              >
-                <Sparkles size={15} /> Surprise me
-              </button>
-            </div>
-            <div className="game-choice-grid">
-              {displayedChoices.map((choice, index) => (
-                <button
-                  key={`${index}:${choice.message}`}
-                  disabled={busy}
-                  onClick={() => send(choice.message)}
-                >
-                  <span className="game-choice-number">{index + 1}</span>
-                  <strong>{choice.title}</strong>
-                  <p>{choice.message}</p>
-                  <ArrowRight size={17} />
-                </button>
-              ))}
-            </div>
-            <form
-              className="game-composer"
-              onSubmit={(event) => {
-                event.preventDefault();
-                send(message);
-              }}
-            >
-              <label className="game-composer-label" htmlFor="game-next-move">
-                Or write your own move
-              </label>
-              <div>
-                <textarea
-                  id="game-next-move"
-                  ref={composer}
-                  value={message}
-                  maxLength={5000}
-                  rows={2}
-                  placeholder={`I ${story.player_name ? "look at the note and ask what it means…" : "step forward and…"}`}
-                  onChange={(event) => changeMessage(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      (event.ctrlKey || event.metaKey)
-                    ) {
-                      event.preventDefault();
-                      send(message);
-                    }
-                  }}
-                />
-                <button className="primary" disabled={busy || !message.trim()}>
-                  {submitting ? (
-                    <LoaderCircle size={18} className="game-spin" />
-                  ) : (
-                    <Send size={18} />
-                  )}
-                  <span>Make my move</span>
-                </button>
-              </div>
-              <p className="game-help">
-                {activeTurn?.status === "awaiting_review"
-                  ? "Review or cancel the scene above before making another move."
-                  : busy
-                    ? "Your next move can be drafted while this turn finishes."
-                    : "A choice sends your action. Turn on review in Settings to approve each response before rendering."}
-              </p>
-            </form>
-          </section>
+
         </>
       )}
 
-      {settingsOpen && !pendingCreation && (
-        <div
-          className="game-settings-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSettingsOpen(false);
-          }}
-        >
-          <aside
-            className="game-settings"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="game-settings-title"
-          >
-            <header>
-              <div>
-                <span className="game-eyebrow">MAKE IT YOURS</span>
-                <h2 id="game-settings-title">Game settings</h2>
-              </div>
-              <button
-                ref={settingsClose}
-                className="icon-button"
-                aria-label="Close game settings"
-                onClick={() => setSettingsOpen(false)}
-              >
-                <X size={20} />
-              </button>
-            </header>
-            <section>
-              <h3>Your story</h3>
-              <label>
-                You play
-                <input
-                  value={player}
-                  maxLength={100}
-                  onChange={(event) => setPlayer(event.target.value)}
-                />
-              </label>
-              <label>
-                Story style
-                <input
-                  value={settings.style || ""}
-                  maxLength={160}
-                  onChange={(event) =>
-                    setSettings((old) => ({
-                      ...old,
-                      style: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label className="game-checkbox">
-                <input
-                  type="checkbox"
-                  checked={settings.review_before_render}
-                  onChange={(event) =>
-                    setSettings((old) => ({
-                      ...old,
-                      review_before_render: event.target.checked,
-                    }))
-                  }
-                />
-                <span>
-                  <strong>Review before rendering</strong>
-                  <small>Approve or edit each planned scene first.</small>
-                </span>
-              </label>
-            </section>
-            <section>
-              <h3>Video</h3>
-              <div className="game-field-row">
-                <label>
-                  New scene length
-                  <select
-                    value={settings.duration}
-                    onChange={(event) =>
-                      setSettings((old) => ({
-                        ...old,
-                        duration: Number(event.target.value),
-                      }))
-                    }
-                  >
-                    {[4, 5, 7, 10, 13].map((n) => (
-                      <option key={n} value={n}>
-                        {n} seconds
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Preview quality
-                  <select
-                    value={settings.steps}
-                    onChange={(event) =>
-                      setSettings((old) => ({
-                        ...old,
-                        steps: Number(event.target.value),
-                        resolution: "0.3",
-                      }))
-                    }
-                  >
-                    <option value={8}>Quality · 0.3 MP / 8 steps</option>
-                    <option value={4}>Quick draft · 0.3 MP / 4 steps</option>
-                  </select>
-                </label>
-              </div>
-              <p className="game-help">
-                This is new action after the previous ending. Motion context is
-                added automatically. Continuations keep their source dimensions.
-              </p>
-            </section>
-            <section>
-              <h3>Prompt assistant</h3>
-              {modelPicker || (
-                <p className="game-help">
-                  Use the Studio model selector to choose your local assistant.
-                </p>
-              )}
-              <p className="game-help">
-                Opening these settings does not start a model or a video.
-              </p>
-            </section>
-            <section>
-              <h3>New scene images</h3>
-              <label>
-                Image generator
-                <select
-                  value={settings.image_model || ""}
-                  onChange={(event) =>
-                    setSettings((old) => ({
-                      ...old,
-                      image_model: event.target.value || undefined,
-                    }))
-                  }
-                >
-                  <option value="">
-                    Use the configured default
-                    {session.defaultGenerator
-                      ? ` · ${session.defaultGenerator}`
-                      : ""}
-                  </option>
-                  {session.generators.map((model) => (
-                    <option
-                      key={model.id}
-                      value={model.id}
-                      disabled={
-                        model.available === false || model.compatible === false
-                      }
-                    >
-                      {model.name}
-                      {model.available === false
-                        ? " · unavailable"
-                        : model.compatible === false
-                          ? " · incompatible"
-                          : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p className="game-help">
-                The story can request an image when a new scene needs one.
-                Compatible installed generators appear here.
-              </p>
-              {!session.generators.length && (
-                <p className="game-help">
-                  No image generator is listed yet. Existing reference photos
-                  remain available.
-                </p>
-              )}
-            </section>
-            <footer>
-              <button className="quiet" onClick={() => setSettingsOpen(false)}>
-                Close
-              </button>
-              <button
-                className="primary"
-                disabled={busy || !player.trim()}
-                onClick={saveSettings}
-              >
-                <Check size={16} /> Save settings
-              </button>
-            </footer>
-          </aside>
-        </div>
-      )}
+      {motionProject && <MotionLab project={motionProject} onClose={() => setMotionProject(null)}/>}
+      {settingsOpen && !pendingCreation && <GameEditor key={`${story?.id || setupBase.id}:${story?.active_branch_id || "setup"}`} value={config} onChange={changeConfiguration}
+        onSave={() => void perform(saveConfiguration)} onClose={() => setSettingsOpen(false)}
+        dirty={editorDirty || !story} saving={submitting} busy={!!activeTurn}
+        onUploadFiles={onUploadFiles} modelPicker={modelPicker} generators={session.generators}
+        initialTab={editorTab}
+        onStopApply={activeTurn ? () => void perform(async () => {
+          await session.turnAction(activeTurn, "stop-and-apply", undefined, {
+            ...prepareGameConfiguration(config), expected_configuration_revision: editorRevision.current,
+          });
+          setEditorDirty(false); try { localStorage.removeItem(configurationKey); } catch {}
+        }) : undefined}/>}
     </main>
   );
 }

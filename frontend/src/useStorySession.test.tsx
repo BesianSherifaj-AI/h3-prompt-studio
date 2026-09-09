@@ -33,6 +33,97 @@ const project = (): Project => ({
   music: "",
   custom_instructions: "",
 });
+
+describe("Game turn acknowledgement and recovery", () => {
+  async function selectedSession() {
+    const session = captureSession();
+    vi.mocked(api).mockResolvedValueOnce(story());
+    await session.selectStory(story().id);
+    vi.mocked(api).mockReset();
+    return session;
+  }
+  const savedTurn = (requestId: string) => ({
+    id: requestId, request_id: requestId, status: "planning" as const,
+    message: "I open the door.", created_at: 1,
+  });
+  const storedTicket = () => JSON.parse(localStorage.getItem("h3-game:pending:confirmed-game") || "null");
+
+  it("retains the exact original body after an unreadable acknowledgement and later edits", async () => {
+    const session = await selectedSession();
+    const plan = { action: "I open the door.", dialogue: [], transition: "continue" as const,
+      setting: "Street", final_state: "The door is open.", choices: [], asset_requests: [] };
+    vi.mocked(api).mockResolvedValueOnce({ accepted: true }).mockResolvedValueOnce(story());
+    await expect(session.sendTurn("I open the door.", 3, plan, undefined, undefined, "stable-request-original")).rejects.toThrow("not confirmed");
+    const original = structuredClone(storedTicket());
+    expect(original.requestId).toBe("stable-request-original");
+    plan.action = "An edited instruction must not replace an uncertain request.";
+    vi.mocked(api).mockResolvedValueOnce(savedTurn(original.requestId)).mockResolvedValueOnce(story());
+    await session.resumePending();
+    expect(vi.mocked(api).mock.calls[2][1]).toEqual(original.body);
+    expect(storedTicket()).toBeNull();
+  });
+
+  it("reconciles a lost acknowledgement without pausing a successfully saved move or sending it twice", async () => {
+    const session = await selectedSession(), turn = savedTurn("stable-request-recovered");
+    vi.mocked(api).mockRejectedValueOnce(new TypeError("Connection interrupted"))
+      .mockResolvedValueOnce({ ...story(), turns: [turn] });
+    await expect(session.sendTurn(turn.message, 3, undefined, undefined, undefined, turn.id)).resolves.toEqual(turn);
+    expect(storedTicket()).toBeNull();
+    expect(vi.mocked(api).mock.calls.filter(call => call[1] !== undefined)).toHaveLength(1);
+  });
+
+  it("a confirmed turn unlocks promptly even when its following status read stalls", async () => {
+    const session = await selectedSession(), turn = savedTurn("stable-request-confirmed");
+    vi.mocked(api).mockResolvedValueOnce(turn).mockImplementationOnce(() => new Promise(() => {}));
+    await expect(session.sendTurn(turn.message, 3, undefined, undefined, undefined, turn.id)).resolves.toEqual(turn);
+    expect(storedTicket()).toBeNull();
+    await expect(session.sendTurn("A second move")).rejects.toMatchObject({ notSubmitted: true });
+    expect(api).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks local overlapping sends as unsubmitted so their queue entries remain retryable", async () => {
+    const session = await selectedSession();
+    let finish!: (value: unknown) => void;
+    vi.mocked(api).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = session.sendTurn("I open the door.", 3, undefined, undefined, undefined, "stable-request-first");
+    await expect(session.sendTurn("I look inside.")).rejects.toMatchObject({ notSubmitted: true });
+    expect(api).toHaveBeenCalledTimes(1);
+    vi.mocked(api).mockResolvedValueOnce(story());
+    finish(savedTurn("stable-request-first"));
+    await first;
+  });
+
+  it("definitive rejections unlock correction even if the following read fails", async () => {
+    const session = await selectedSession();
+    vi.mocked(api).mockRejectedValueOnce(new ApiError("Choose a visible target.", 400))
+      .mockRejectedValueOnce(new TypeError("Offline"));
+    await expect(session.sendTurn("I open the door.")).rejects.toMatchObject({ notSubmitted: true });
+    expect(storedTicket()).toBeNull();
+  });
+
+  it("an HTTP request timeout keeps its saved UUID because server acceptance is unknown", async () => {
+    const session = await selectedSession();
+    vi.mocked(api).mockRejectedValueOnce(new ApiError("Request timed out", 408)).mockResolvedValueOnce(story());
+    await expect(session.sendTurn("I open the door.", 3, undefined, undefined, undefined, "stable-request-timeout")).rejects.toThrow("timed out");
+    expect(storedTicket()?.requestId).toBe("stable-request-timeout");
+  });
+
+  it("ignores a late read from the previously selected story", async () => {
+    const session = await selectedSession();
+    let finish!: (value: unknown) => void;
+    vi.mocked(api).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const stale = session.refresh();
+    const other = { ...story(), id: "other-game", active_run_id: "other-ending" };
+    vi.mocked(api).mockResolvedValueOnce(other);
+    await session.selectStory(other.id);
+    finish({ ...story(), active_run_id: "stale-ending" });
+    await stale;
+    vi.mocked(api).mockResolvedValueOnce(savedTurn("stable-request-new-story")).mockResolvedValueOnce(other);
+    await session.sendTurn("Look around.", 3, undefined, undefined, undefined, "stable-request-new-story");
+    expect(vi.mocked(api).mock.calls[2][0]).toBe("/stories/other-game/turns");
+    expect(vi.mocked(api).mock.calls[2][1].expected_parent).toBe("other-ending");
+  });
+});
 const pending = (): PendingStoryCreation => ({
   requestId: "original-creation-request",
   body: {
@@ -123,8 +214,8 @@ describe("unconfirmed Game creation", () => {
     await expect(session.resumeCreation()).resolves.toMatchObject({
       id: "confirmed-game",
     });
-    expect(api).toHaveBeenNthCalledWith(2, "/stories");
-    expect(api).toHaveBeenNthCalledWith(3, "/stories", firstBody);
+    expect(api).toHaveBeenNthCalledWith(2, "/stories", undefined, undefined, undefined, { timeoutMs: 15000 });
+    expect(api).toHaveBeenNthCalledWith(3, "/stories", firstBody, undefined, undefined, { timeoutMs: 30000 });
     expect(localStorage.getItem(CREATE)).toBeNull();
     expect(localStorage.getItem("h3-game:selected-story")).toBe(
       "confirmed-game",
@@ -142,8 +233,8 @@ describe("unconfirmed Game creation", () => {
       })
       .mockResolvedValueOnce(story());
     await expect(session.resumeCreation()).resolves.toEqual(story());
-    expect(api).toHaveBeenNthCalledWith(1, "/stories");
-    expect(api).toHaveBeenNthCalledWith(2, "/stories/confirmed-game");
+    expect(api).toHaveBeenNthCalledWith(1, "/stories", undefined, undefined, undefined, { timeoutMs: 15000 });
+    expect(api).toHaveBeenNthCalledWith(2, "/stories/confirmed-game", undefined, undefined, undefined, { timeoutMs: 15000 });
     expect(api).toHaveBeenCalledTimes(2);
     expect(localStorage.getItem(CREATE)).toBeNull();
   });
@@ -154,7 +245,7 @@ describe("unconfirmed Game creation", () => {
     vi.mocked(api).mockRejectedValueOnce(new ApiError("Reconnect first", 403));
     await expect(session.resumeCreation()).rejects.toThrow("Reconnect first");
     expect(readPendingStoryCreation()).toEqual(pending());
-    expect(api).toHaveBeenCalledExactlyOnceWith("/stories");
+    expect(api).toHaveBeenCalledExactlyOnceWith("/stories", undefined, undefined, undefined, { timeoutMs: 15000 });
   });
 
   it("does not clear an original request when a matching list entry has an incomplete full response", async () => {

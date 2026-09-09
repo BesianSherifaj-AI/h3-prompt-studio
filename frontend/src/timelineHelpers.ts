@@ -3,6 +3,7 @@ import type { Project, Shot } from "./model";
 import { setSimpleMode } from "./simple";
 import { setDirectorValue } from "./shotDirections";
 import type { DirectedShot } from "./shotDirections";
+import { clearSceneContract, clearSceneEnding } from "./sceneContinuityState";
 
 export type TimelineRange = { id: string; index: number; start: number; end: number; duration: number };
 const ms = (value: number) => Math.round(value * 1000);
@@ -55,9 +56,11 @@ export function splitSceneAt(p: Project, shotId: string, at: number, transition:
   copy.action = "";
   copy.performance = "";
   copy.dialogue = [];
+  clearSceneContract(copy);
   original.duration = seconds(ms(at) - ms(range.start));
   // The former ending still belongs at the end of this interval.
   original.final_state = "";
+  clearSceneEnding(p, original.id);
   original.director_locks = (original.director_locks || []).filter((path) => path !== "final_state");
   p.shots.splice(range.index + 1, 0, copy);
   setDirectorValue(p, copy.id, "transition", transition);

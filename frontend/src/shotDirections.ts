@@ -1,5 +1,6 @@
 import { newShot, uid } from "./model";
 import type { Project, Shot } from "./model";
+import { clearSceneContract, pruneSceneActors } from "./sceneContinuityState";
 
 export type DirectedShot = Shot & { director_locks?: string[] };
 export type DirectorPath =
@@ -51,6 +52,8 @@ export function setDirectorValue(
   if (keep) locks.add(path);
   else locks.delete(path);
   shot.director_locks = [...locks];
+  if (path === "visible_subject_ids" || path === "offscreen_subject_ids")
+    pruneSceneActors(p, shotId);
 }
 
 /** Keep named people in exactly one visibility group. An explicit empty roster is valid. */
@@ -147,6 +150,8 @@ export function duplicateScene(p: Project, shotId: string): void {
   copy.id = uid();
   // Repeating exact speech is rarely intended by copying a camera setup.
   copy.dialogue = [];
+  // A new beat needs new positions and ownership; replaying the old contract can undo its action.
+  clearSceneContract(copy);
   const splitMs = Math.round(source.duration * 1000);
   source.duration = Math.ceil(splitMs / 2) / 1000;
   copy.duration = Math.floor(splitMs / 2) / 1000;

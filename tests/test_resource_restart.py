@@ -209,10 +209,11 @@ def test_legacy_family_marker_does_not_authorize_automatic_unloading(restart_rig
     with pytest.raises(resources.ResourceError, match='outside this Studio'):
         restored.prepare_h3()
     assert not any(event[0] == 'unload' for event in rig.client.events)
-    # An explicit Prepare AI still lets the user acquire the selected model.
-    assert restored.run_ai(MODEL)['ready']
-    assert read_state(rig)['exclusive_instance']['instance_id'] == 'unmarked-selected-model'
-    assert rig.reopen().prepare_h3()['ready']
+    # Preparing AI cannot turn an unrelated instance into owned memory.
+    with pytest.raises(resources.ResourceError, match='outside this Studio'):
+        restored.run_ai(MODEL)
+    assert read_state(rig)['exclusive_instance'] is None
+    assert not any(event[0] == 'unload' for event in rig.client.events)
 
 
 @pytest.mark.parametrize('ownership', [None, {}, {'instance_id': 'incomplete'},

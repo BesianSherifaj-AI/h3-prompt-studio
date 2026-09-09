@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "created_on": "2026-09-09",
+  "classification": "Original authored Studio render and saved-motion continuation tests. Rendered earlier in the reliability work, before the new scene-contract compiler. Not autonomous writing benchmarks.",
+  "assembly": "Original new footage trimmed to ten seconds per scene at 24 fps and concatenated at normal speed. No fabricated frames, captions, replacement audio or visual corrections.",
+  "source_script": "scripts/render_story_examples.py",
+  "films": [
+    {
+      "file": "chase-30s.mp4",
+      "title": "A Very Polite Pursuit",
+      "sha256": "e8491e2f3eb2073aa7639d15266928701c5b61ccbb0633142bbf0fc13238cb4c",
+      "probe": {
+        "duration": 30.0,
+        "width": 608,
+        "height": 320,
+        "frames": 720,
+        "audio": true,
+        "duration_scope": "video stream",
+        "container_duration": 30.021322,
+        "audio_duration": 30.005333
+      },
+      "settings": {
+        "steps": 4,
+        "resolution": "0.2",
+        "seed": 3382877878,
+        "aspect_ratio": "16:9"
+      },
+      "clips": [
+        {
+          "index": 1,
+          "server_execution_seconds": 93.827,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 4,
+          "original_sha256": "f3dbae30515cf87a4523c5c5a6ba124b21afaf109f68a707a64d7361796da8b3",
+          "new_footage_sha256": "f3dbae30515cf87a4523c5c5a6ba124b21afaf109f68a707a64d7361796da8b3"
+        },
+        {
+          "index": 2,
+          "server_execution_seconds": 101.595,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 4,
+          "original_sha256": "e6477a371a94b149f4a95c175015420c32a9e517a8eff703d944ae2d7de95872",
+          "new_footage_sha256": "a01aa25bed48e90e7f137948447cabffa350ec2885d5b81a787cc42a4a1ebc17"
+        },
+        {
+          "index": 3,
+          "server_execution_seconds": 67.736,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 4,
+          "original_sha256": "ba3248f84da314ccc92631e839be4a9ce8226cdb5e181e8142309796c1d08215",
+          "new_footage_sha256": "14f5e13f5e15ba0e6f757168ab724e11f2b49687871b57b1c3d1bf05513a9919"
+        }
+      ],
+      "ffmpeg_decode_passed": true,
+      "visual_review": "Sampled frames show the adult runner, small yellow robot and blue ball, ending with a readable handoff. The output uses shaded cartoon forms rather than strictly flat pixel sprites; the cone maneuver is approximate.",
+      "contact_sheet": "chase-frames.jpg"
+    },
+    {
+      "file": "parody-60s.mp4",
+      "title": "The Extremely Important Parcel",
+      "sha256": "06fb9c3b0a6ca7f19575416efbe31a87b14b252f4ded1c59e00eaac9934c2d92",
+      "probe": {
+        "duration": 60.0,
+        "width": 608,
+        "height": 320,
+        "frames": 1440,
+        "audio": true,
+        "duration_scope": "video stream",
+        "container_duration": 60.021322,
+        "audio_duration": 60.005333
+      },
+      "settings": {
+        "steps": 8,
+        "resolution": "0.2",
+        "seed": 3382877878,
+        "aspect_ratio": "16:9"
+      },
+      "clips": [
+        {
+          "index": 1,
+          "server_execution_seconds": 95.904,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 8,
+          "original_sha256": "93970160cdba1d79bd8f42cd3a63a5aae7310052b11707d29b49b88e164897e5",
+          "new_footage_sha256": "93970160cdba1d79bd8f42cd3a63a5aae7310052b11707d29b49b88e164897e5"
+        },
+        {
+          "index": 2,
+          "server_execution_seconds": 110.723,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 8,
+          "original_sha256": "4703dc16da7656aee827bf32023bf15d536c57087639c1eb72b20ca8da584473",
+          "new_footage_sha256": "fd8bfb76cb61c2f73a1c8b1e4758d1b118166f193dbc6fbe43c46225241ce9ce"
+        },
+        {
+          "index": 3,
+          "server_execution_seconds": 114.798,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 8,
+          "original_sha256": "3aa2d18e06dbe1382887d05595ddb921923f76f44b67570783b3b8180acb6dc8",
+          "new_footage_sha256": "8f360fd33eb697172e0f9b0d237fab4c1c4b5a80a9b4a7d3fc3489866c77a2f9"
+        },
+        {
+          "index": 4,
+          "server_execution_seconds": 82.697,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 8,
+          "original_sha256": "7b29a55bff4203d0f6a7a85ae60359bfc429ac0c1b41ea1510f2bf2eac51e0fa",
+          "new_footage_sha256": "c24a21c489bf7cf8923e65db670210bfb2d916aa14db684ed85123443273326c"
+        },
+        {
+          "index": 5,
+          "server_execution_seconds": 81.984,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 8,
+          "original_sha256": "ce17d9dde4abd7dac38efe7d2ae8882bc9e8e3f5c94526a7ffed39f5b8a13c72",
+          "new_footage_sha256": "fcddc89fb78fa55e8978c5732fd9ad1769d7656eb020b4da37cb53127a67bbfe"
+        },
+        {
+          "index": 6,
+          "server_execution_seconds": 79.983,
+          "seed": 3382877878,
+          "width": 608,
+          "height": 320,
+          "steps": 8,
+          "original_sha256": "3dc89f17f5233da8478a0d16792a4597a523a1c8803168f44a6193ee4201464e",
+          "new_footage_sha256": "0d47b8761c8c55e6b10fe4f5107ee08ef750012d09d94819292b7a262a272068"
+        }
+      ],
+      "ffmpeg_decode_passed": true,
+      "visual_review": "Sampled frames show consistent main characters and parcel, exaggerated salutes and walking, and the yellow-duck reveal. The crouch does not convincingly show passing under the rail.",
+      "contact_sheet": "parody-frames.jpg"
+    }
+  ]
+}

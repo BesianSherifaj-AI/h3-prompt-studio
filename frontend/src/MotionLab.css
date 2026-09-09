@@ -1,0 +1,44 @@
+.motion-lab { box-sizing: border-box; width: min(1120px, calc(100vw - 32px)); max-width: 1120px; max-height: calc(100dvh - 32px); padding: 0; border: 1px solid #b7c3d6; border-radius: 18px; background: #f8fafc; color: #172033; font-size: 16px; line-height: 1.5; box-shadow: 0 24px 90px #13234455; overflow: hidden; }
+.motion-lab::backdrop { background: #101a30a6; backdrop-filter: blur(3px); }
+.motion-lab * { box-sizing: border-box; }
+.motion-lab-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 24px; border-bottom: 1px solid #d8dfeb; background: white; }
+.motion-lab-header p { display: flex; align-items: center; gap: 8px; color: #5054ae; margin: 0 0 4px; font-weight: 700; }
+.motion-lab-header h2 { font-size: clamp(21px, 3vw, 27px); margin: 0; line-height: 1.25; }
+.motion-lab-body { padding: 20px 24px 28px; max-height: calc(100dvh - 156px); overflow-y: auto; scrollbar-gutter: stable; }
+.motion-lab-body > p:first-child { margin-top: 0; }
+.motion-lab button { min-height: 44px; display: inline-flex; justify-content: center; align-items: center; gap: 8px; padding: 9px 13px; border: 1px solid #bec8d7; border-radius: 9px; background: white; color: #22334e; font: inherit; font-weight: 600; cursor: pointer; }
+.motion-lab button:hover:enabled { background: #eef2ff; border-color: #807acf; }
+.motion-lab button:disabled { opacity: .55; cursor: not-allowed; }
+.motion-lab .motion-lab-close { flex: 0 0 44px; width: 44px; padding: 6px; }
+.motion-lab .motion-lab-primary { color: white; background: #4f46a5; border-color: #4f46a5; }
+.motion-lab .motion-lab-primary:hover:enabled { background: #3c348b; color: white; }
+.motion-lab :focus-visible { outline: 3px solid #827bea; outline-offset: 3px; }
+.motion-lab label { display: flex; flex-direction: column; gap: 6px; font-weight: 650; min-width: 0; }
+.motion-lab input, .motion-lab select, .motion-lab textarea { width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid #b9c5d7; border-radius: 8px; background: white; color: #182a43; font: inherit; font-size: 16px; }
+.motion-lab textarea { resize: vertical; }
+.motion-lab label > span { font-weight: 400; }
+.motion-lab-summary { display: flex; flex-wrap: wrap; gap: 10px 20px; padding: 12px 16px; background: #eaeafc; border: 1px solid #d8d4f4; border-radius: 10px; }
+.motion-lab-help { color: #536078; font-size: 14px; }
+.motion-lab-history { margin: 18px 0; }
+.motion-lab-setup { padding: 18px; background: white; border: 1px solid #d5ddea; border-radius: 12px; display: grid; gap: 20px; }
+.motion-lab-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.motion-lab-pair label > span { color: #536078; font-size: 14px; }
+.motion-lab-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.motion-lab-actions > span { color: #59657b; font-size: 14px; }
+.motion-lab-sticky { position: sticky; top: -20px; z-index: 1; padding: 14px 0; background: #f8fafcf5; border-bottom: 1px solid #dae0e9; }
+.motion-lab-results { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+.motion-lab-result { min-width: 0; padding: 16px; border: 1px solid #cdd7e5; border-radius: 12px; background: white; display: grid; gap: 12px; align-content: start; }
+.motion-lab-result h3 { margin: 0 0 4px; font-size: 18px; }
+.motion-lab-result header > span { color: #536078; font-size: 14px; }
+.motion-lab-result video { width: 100%; max-height: 420px; background: #172033; border-radius: 8px; }
+.motion-lab-empty { min-height: 150px; display: grid; place-items: center; padding: 20px; background: #eff3f9; color: #58677d; border-radius: 8px; }
+.motion-lab-metrics { margin: 0; font-variant-numeric: tabular-nums; font-size: 14px; color: #526278; }
+.motion-lab-ratings { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.motion-lab-ratings label { font-size: 14px; }
+.motion-lab-ratings select { padding: 8px 4px; font-size: 14px; }
+.motion-lab details { border-top: 1px solid #dce3ed; padding-top: 10px; }
+.motion-lab summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 650; }
+.motion-lab pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font-size: 14px; padding: 12px; background: #f0f3f8; border-radius: 8px; }
+.motion-lab-error { margin-top: 14px; padding: 12px; border: 1px solid #efbdad; border-radius: 9px; background: #fff0eb; color: #81351f; overflow-wrap: anywhere; }
+.motion-lab-error button { margin: 8px 0 0 10px; }
+@media (max-width: 720px) { .motion-lab { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); border-radius: 12px; } .motion-lab-header { padding: 14px; } .motion-lab-body { padding: 16px 12px 22px; max-height: calc(100dvh - 126px); } .motion-lab-pair, .motion-lab-results { grid-template-columns: 1fr; } .motion-lab-sticky { position: static; } .motion-lab-ratings { grid-template-columns: 1fr; } .motion-lab-ratings label { font-size: 16px; } .motion-lab-ratings select { font-size: 16px; } }

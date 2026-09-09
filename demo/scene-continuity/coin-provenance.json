@@ -1,0 +1,380 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-09",
+  "title": "The Coin Safety Inspector",
+  "classification": "Original authored Studio scene-contract and saved-motion continuation demonstration. No uploaded reference images; not an autonomous writing benchmark.",
+  "file": "continuity-30s.mp4",
+  "sha256": "8ffa1f79f99f01985c2221f175438219ae1a43dd620c9fe86bc6aa89a580aca1",
+  "probe": {
+    "duration": 30.0,
+    "width": 608,
+    "height": 320,
+    "frames": 720,
+    "audio": true,
+    "duration_scope": "video stream",
+    "container_duration": 30.021322,
+    "audio_duration": 30.005333
+  },
+  "ffmpeg_decode_passed": true,
+  "settings": {
+    "resolution": "0.2",
+    "steps": 8,
+    "seed": 909202630,
+    "aspect_ratio": "16:9"
+  },
+  "assembly": "Three actual new-footage segments trimmed to exactly ten seconds (240 frames at 24 fps) each and concatenated at normal speed; original audio retained. No visual repairs or added overlays.",
+  "visual_review": {
+    "method": "One-second samples throughout all three scenes, plus four samples per second during the first five seconds of the handoff. Full video decoded by FFmpeg. This does not inspect every frame for visual correctness.",
+    "observed": "Mira raises one coin, offers it to seated Ivo, and ends empty-handed. Ivo remains seated in the samples, then places one visible coin on the bench and rests empty hands on his knees. Main colors, clothing and bench remain recognizable.",
+    "limits": "The stylized transfer does not reliably distinguish the prescribed left/right hands. The courtyard includes unrequested static door/window details, and subtle comic facial acting is limited. Ending inspection cannot certify every intervening frame or exact acting.",
+    "sampled_frames": "coin-frames.jpg",
+    "poster": "coin-poster.png"
+  },
+  "global_qa_settings_unchanged": true,
+  "source_script": "scripts/render_scene_control_demo.py",
+  "clips": [
+    {
+      "index": 1,
+      "server_execution_seconds": 84.4,
+      "seed": 909202630,
+      "steps": 8,
+      "original_sha256": "340bbc4c4a706dc495da1e424bbd363954637fe5e9e56478681a27dd9a9d2342",
+      "new_footage_sha256": "340bbc4c4a706dc495da1e424bbd363954637fe5e9e56478681a27dd9a9d2342",
+      "new_footage_probe": {
+        "duration": 10.125,
+        "width": 608,
+        "height": 320,
+        "frames": 243,
+        "audio": true
+      },
+      "ending_checks": [
+        {
+          "kind": "actor",
+          "id": "5948dd48-cb7d-5450-a4f1-858065364736",
+          "status": "match",
+          "detail": "Mira is standing left of the bench with her right hand raised to shoulder height, holding a single brass coin. Her teal coat, cream trousers, and brown boots match the intended appearance."
+        },
+        {
+          "kind": "actor",
+          "id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+          "status": "match",
+          "detail": "Ivo is seated on the right end of the bench with both hands resting on his knees. His red cap, gray shirt, and navy trousers match the intended appearance."
+        },
+        {
+          "kind": "object",
+          "id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+          "status": "match",
+          "detail": "A single brass coin is visible in Mira's raised right hand."
+        },
+        {
+          "kind": "object",
+          "id": "e1c1d4c5-37d0-50d5-851d-ffc397239714",
+          "status": "match",
+          "detail": "The blue bench is stationary against the cream wall, with Ivo seated on its right end."
+        }
+      ],
+      "authored_scene_contract": {
+        "actors": [
+          {
+            "subject_id": "5948dd48-cb7d-5450-a4f1-858065364736",
+            "activity": "act",
+            "start": "standing left of the bench, the single coin in her right hand at waist height",
+            "action": "slowly raises only her right hand with the existing coin to shoulder height",
+            "end": "standing in the same place, the coin visible in her raised right hand"
+          },
+          {
+            "subject_id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+            "activity": "hold",
+            "start": "seated on the right end of the bench, both hands on his knees",
+            "action": "quietly watches Mira; only a blink and subtle breathing, hands remain on knees",
+            "end": "still seated at the right end, hands on knees"
+          }
+        ],
+        "objects": [
+          {
+            "entity_id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+            "name": "Brass coin",
+            "count": 1,
+            "description": "One small round flat golden brass disk, unchanged size and color.",
+            "start": "in Mira’s right hand at waist height",
+            "end": "in Mira’s raised right hand"
+          },
+          {
+            "entity_id": "e1c1d4c5-37d0-50d5-851d-ffc397239714",
+            "name": "Blue bench",
+            "count": 1,
+            "description": "One low blue wooden bench with a flat seat and two legs.",
+            "start": "stationary against the cream wall; Ivo sits on its right end",
+            "end": "unchanged in the same place"
+          }
+        ],
+        "environment": "Side-on view of a quiet courtyard, cream plaster wall behind one blue wooden bench. Mira stands left of the bench. Ivo sits on its right end. Clear empty ground and steady warm daylight.",
+        "background_activity": "Empty courtyard, still wall and ground; no other people, animals or moving background objects."
+      }
+    },
+    {
+      "index": 2,
+      "server_execution_seconds": 81.064,
+      "seed": 909202630,
+      "steps": 8,
+      "original_sha256": "7f38889e80624f57bcbb0d431a49c098b34b7fbb25bcc6f4bc93774df7fef834",
+      "new_footage_sha256": "bc075ff208cb35ddbd69e39a8b181f1321424d590f8fe9ce0dc5219cefd05be1",
+      "new_footage_probe": {
+        "duration": 10.625,
+        "width": 608,
+        "height": 320,
+        "frames": 255,
+        "audio": true
+      },
+      "ending_checks": [],
+      "authored_scene_contract": {
+        "actors": [
+          {
+            "subject_id": "5948dd48-cb7d-5450-a4f1-858065364736",
+            "activity": "act",
+            "start": "standing left of the bench, holding the one coin in her right hand",
+            "action": "offers that existing coin to Ivo’s extended left palm, releases it, then withdraws her empty hand",
+            "end": "standing left, both hands empty and lowered"
+          },
+          {
+            "subject_id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+            "activity": "hold",
+            "start": "seated on the right end of the bench, hands on knees",
+            "action": "stays seated; extends only his left hand, receives the existing coin and holds it in that palm",
+            "end": "still seated, the single brass coin in his left palm"
+          }
+        ],
+        "objects": [
+          {
+            "entity_id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+            "name": "Brass coin",
+            "count": 1,
+            "description": "One small round flat golden brass disk, unchanged size and color.",
+            "start": "in Mira’s right hand; Ivo has no coin",
+            "end": "in Ivo’s left palm; Mira’s hands are empty"
+          },
+          {
+            "entity_id": "e1c1d4c5-37d0-50d5-851d-ffc397239714",
+            "name": "Blue bench",
+            "count": 1,
+            "description": "One low blue wooden bench with a flat seat and two legs.",
+            "start": "stationary against the cream wall; Ivo sits on its right end",
+            "end": "unchanged in the same place"
+          }
+        ],
+        "environment": "Side-on view of a quiet courtyard, cream plaster wall behind one blue wooden bench. Mira stands left of the bench. Ivo sits on its right end. Clear empty ground and steady warm daylight.",
+        "background_activity": "Empty courtyard, still wall and ground; no other people, animals or moving background objects."
+      }
+    },
+    {
+      "index": 3,
+      "server_execution_seconds": 81.015,
+      "seed": 909202630,
+      "steps": 8,
+      "original_sha256": "f70db667abd05e086ac3850d5cbce36c9f2625ae5c44f920f323db9b47c3e71c",
+      "new_footage_sha256": "83026d479275be38bd4291cb36a5a19b0f9ea13465d0fa71ef10957404767e80",
+      "new_footage_probe": {
+        "duration": 10.625,
+        "width": 608,
+        "height": 320,
+        "frames": 255,
+        "audio": true
+      },
+      "ending_checks": [
+        {
+          "kind": "object",
+          "id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+          "status": "match",
+          "detail": "The brass coin is visible on the bench seat to Ivo's left, matching the intended endpoint."
+        },
+        {
+          "kind": "actor",
+          "id": "5948dd48-cb7d-5450-a4f1-858065364736",
+          "status": "match",
+          "detail": "Mira is standing to the left of the bench with empty hands, consistent with the contract."
+        },
+        {
+          "kind": "actor",
+          "id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+          "status": "match",
+          "detail": "Ivo is seated on the right end of the bench with empty hands, consistent with the contract."
+        }
+      ],
+      "authored_scene_contract": {
+        "actors": [
+          {
+            "subject_id": "5948dd48-cb7d-5450-a4f1-858065364736",
+            "activity": "hold",
+            "start": "standing left of the bench with empty hands lowered",
+            "action": "stays in place with empty hands; gives one tiny satisfied nod after the coin is placed",
+            "end": "standing in the same place with empty hands"
+          },
+          {
+            "subject_id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+            "activity": "hold",
+            "start": "seated on the right end of the bench, the single coin in his left palm",
+            "action": "stays seated; places the existing coin on the seat immediately to his left, then returns his empty left hand to his knee",
+            "end": "still seated at the right end, both hands empty on knees"
+          }
+        ],
+        "objects": [
+          {
+            "entity_id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+            "name": "Brass coin",
+            "count": 1,
+            "description": "One small round flat golden brass disk, unchanged size and color.",
+            "start": "in Ivo’s left palm",
+            "end": "resting on the bench immediately to Ivo’s left; neither character holds a coin"
+          },
+          {
+            "entity_id": "e1c1d4c5-37d0-50d5-851d-ffc397239714",
+            "name": "Blue bench",
+            "count": 1,
+            "description": "One low blue wooden bench with a flat seat and two legs.",
+            "start": "stationary against the cream wall; Ivo sits on its right end",
+            "end": "unchanged in the same place"
+          }
+        ],
+        "environment": "Side-on view of a quiet courtyard, cream plaster wall behind one blue wooden bench. Mira stands left of the bench. Ivo sits on its right end. Clear empty ground and steady warm daylight.",
+        "background_activity": "Empty courtyard, still wall and ground; no other people, animals or moving background objects."
+      }
+    }
+  ],
+  "strict_inspection_followup": {
+    "protocol_version": 2,
+    "model": "qwen3.8-27b@q4_k_s",
+    "scope": "Three fresh strict final-frame inspections of existing authored demo clips. No render, story change, acceptance or replayed model output.",
+    "story_unchanged": true,
+    "owned_model_released": true,
+    "source_sha256": {
+      "backend/ending_observation.py": "8dc5015f696de2fcb693cbf706c43a6742b6897dbf0eb78df217cffac6156dc2",
+      "backend/stories.py": "8c0f7744bcb3a1e84dddbee1a76c3edfac793f008311a3c8c98e92ea54c480dd"
+    },
+    "cases": [
+      {
+        "index": 1,
+        "status": "validated",
+        "max_tokens": 1400,
+        "seconds": 8.336399299965706,
+        "frame_sha256": "2eef7cad21456b8d87ea6f1cb3e43a2aade99e1055550564cc411bff65a83c29",
+        "checks": [
+          {
+            "kind": "actor",
+            "id": "5948dd48-cb7d-5450-a4f1-858065364736",
+            "status": "match",
+            "detail": "Mira is standing left of the bench with her right hand raised to shoulder height holding a coin, matching the intended endpoint."
+          },
+          {
+            "kind": "actor",
+            "id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+            "status": "match",
+            "detail": "Ivo is seated on the right end of the bench with both hands resting on his knees, matching the intended posture."
+          },
+          {
+            "kind": "object",
+            "id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+            "status": "match",
+            "detail": "The brass coin is visible in Mira's raised right hand, consistent with the intended holder and position."
+          },
+          {
+            "kind": "object",
+            "id": "e1c1d4c5-37d0-50d5-851d-ffc397239714",
+            "status": "match",
+            "detail": "The blue bench is stationary against the wall with Ivo seated on its right end, as intended."
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1672,
+          "completion_tokens": 628,
+          "total_tokens": 2300,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      },
+      {
+        "index": 2,
+        "status": "validated",
+        "max_tokens": 1400,
+        "seconds": 8.609405099996366,
+        "frame_sha256": "5b70a38457677f20f900f785345af1581de3fe89ca023ac323ba4c7a3988e06e",
+        "checks": [
+          {
+            "kind": "actor",
+            "id": "5948dd48-cb7d-5450-a4f1-858065364736",
+            "status": "match",
+            "detail": "Mira is standing to the left of the bench with both hands empty and lowered, matching her intended final posture."
+          },
+          {
+            "kind": "actor",
+            "id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+            "status": "match",
+            "detail": "Ivo is seated on the right end of the bench and holding a small golden object in his hands."
+          },
+          {
+            "kind": "object",
+            "id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+            "status": "match",
+            "detail": "A single small golden disk is visible in Ivo's hands, and Mira’s hands are empty."
+          },
+          {
+            "kind": "object",
+            "id": "e1c1d4c5-37d0-50d5-851d-ffc397239714",
+            "status": "match",
+            "detail": "The blue bench is stationary against the cream wall, with Ivo sitting on its right end."
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1683,
+          "completion_tokens": 633,
+          "total_tokens": 2316,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      },
+      {
+        "index": 3,
+        "status": "validated",
+        "max_tokens": 1400,
+        "seconds": 8.24885329999961,
+        "frame_sha256": "25e29ad623cd8a2b7ab7d5bc6adc8a9f313b1f9a997f423f6c2528f6213198e6",
+        "checks": [
+          {
+            "kind": "actor",
+            "id": "5948dd48-cb7d-5450-a4f1-858065364736",
+            "status": "match",
+            "detail": "Mira is standing to the left of the bench in a teal coat and cream trousers, matching her intended appearance and position."
+          },
+          {
+            "kind": "actor",
+            "id": "7c78dda0-6d97-55b9-856a-6b1d6ba5d2fb",
+            "status": "match",
+            "detail": "Ivo is seated on the right end of the bench in a red cap and gray shirt, with his hands resting near his knees."
+          },
+          {
+            "kind": "object",
+            "id": "c7ead4e2-5282-597d-9a4b-e330776037ab",
+            "status": "match",
+            "detail": "A small golden object is visible on the bench seat between the two characters."
+          },
+          {
+            "kind": "object",
+            "id": "e1c1d4c5-37d0-50d5-851d-ffc397239714",
+            "status": "match",
+            "detail": "The blue wooden bench is stationary against the cream wall, with Ivo seated on its right end."
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1691,
+          "completion_tokens": 630,
+          "total_tokens": 2321,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      }
+    ],
+    "limitation": "Complete coverage means every listed identity received a model assessment. It does not prove those assessments correct or verify intervening motion and exact hand choreography. Original optional reports are retained separately."
+  }
+}

@@ -22,6 +22,27 @@ export type Subject = {
   asset_ids: string[];
   description: string;
 };
+export type SceneActor = {
+  subject_id: string;
+  activity: "act" | "hold";
+  start: string;
+  action: string;
+  end: string;
+};
+export type SceneObject = {
+  entity_id: string;
+  name: string;
+  description: string;
+  count: number;
+  start: string;
+  end: string;
+};
+export type SceneContract = {
+  actors?: SceneActor[];
+  objects?: SceneObject[];
+  environment?: string;
+  background_activity?: string;
+};
 export type Shot = {
   id: string;
   duration: number;
@@ -35,6 +56,9 @@ export type Shot = {
   dialogue: any[];
   sound: string;
   transition: string;
+  scene_contract?: SceneContract;
+  scene_contract_source?: "generated" | "authored";
+  director_locks?: string[];
 };
 export type Project = {
   schema_version: number;

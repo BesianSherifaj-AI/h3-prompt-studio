@@ -13,12 +13,13 @@ import time
 import uuid
 import zipfile
 import httpx
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .projects import new_project, safe_id, atomic_json, check_project, merge_plan, merge_assist, ALLOWED_SHOT_FIELDS
@@ -36,6 +37,7 @@ TRANSFER_TTL = 15 * 60
 VIDEO_RUNS = None
 STORIES = None
 ASSET_RUNS = None
+MOTION_LAB = None
 VIDEO_FILE_LOCKS = {}
 DEFAULT_SETTINGS = {'lm_url': 'http://127.0.0.1:1234/v1', 'model': '', 'context_length': 8192,
                     'comfy_urls': ['http://127.0.0.1:8188', 'http://127.0.0.1:8000', 'http://127.0.0.1:8010'], 'persona': 'universal', 'last_project': '',
@@ -44,12 +46,19 @@ SETTINGS = {**DEFAULT_SETTINGS}
 if (DATA / 'settings.json').exists():
     SETTINGS.update(json.loads((DATA / 'settings.json').read_text(encoding='utf-8')))
 
-def client():
+@lru_cache(maxsize=4)
+def _assistant_client(base_url):
     from .lmstudio import LMStudioClient
-    return LMStudioClient(base_url=SETTINGS['lm_url'], timeout=180)
+    return LMStudioClient(base_url=base_url, timeout=180)
+
+
+def client():
+    # Keep capability knowledge across stages; diagnostics are context-local.
+    # A changed endpoint gets a separate client and never inherits its cache.
+    return _assistant_client(SETTINGS['lm_url'])
 
 RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client, state_path=DATA / 'resource_state.json')
-app = FastAPI(title='H3 Prompt Studio', version='1.1.0', docs_url='/api/docs')
+app = FastAPI(title='H3 Prompt Studio', version='1.3.0', docs_url='/api/docs')
 BRIDGE_PORTS = ('8188', '8000', '8010')
 LOCAL_ORIGINS = [f'http://{host}:{port}' for host in ('127.0.0.1', 'localhost') for port in (8766, 8188, 8010, 8000)]
 app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'PATCH'], allow_headers=['Content-Type', 'X-H3-Bridge', 'X-H3-Token'])
@@ -135,7 +144,7 @@ def bootstrap():
     projects = list_projects()
     last = SETTINGS.get('last_project')
     project = load_project(last) if last and any(p['id'] == last for p in projects) else new_project()
-    return {'version': '1.1.0', 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': SETTINGS,
+    return {'version': app.version, 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': SETTINGS,
             'project': project, 'projects': projects, 'personas': PERSONAS}
 
 def output_locations():
@@ -423,6 +432,35 @@ def video_run_create(body: dict):
 def video_run_get(run_id: str):
     return video_manager().refresh(safe_id(run_id))
 
+@app.get('/api/video/runs/{run_id}/live-progress')
+def video_run_live_progress(run_id: str):
+    return video_manager().live_progress(safe_id(run_id))
+
+@app.get('/api/video/runs/{run_id}/live-progress/events')
+def video_run_progress_events(run_id: str):
+    manager = video_manager()
+    manager.get(safe_id(run_id))
+    return StreamingResponse(manager.live_progress_events(run_id), media_type='text/event-stream',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+@app.get('/api/game/system')
+def game_system():
+    from .game_director import GAME_ENGINE_SYSTEM
+    return {'text': GAME_ENGINE_SYSTEM, 'version': app.version}
+
+@app.get('/api/integrations/upscale')
+def upscale_capabilities():
+    from .upscale_adapter import capabilities
+    return capabilities()
+
+@app.post('/api/integrations/upscale/open')
+def upscale_open(body: dict):
+    from .upscale_adapter import open_gui
+    if set(body) - {'run_id'}:
+        raise ValueError('Choose a completed Studio video or open UPSCALE without a file.')
+    source = scene_video_path(safe_id(body['run_id'])) if body.get('run_id') else None
+    return open_gui(source)
+
 @app.patch('/api/video/runs/{run_id}')
 def video_run_update(run_id: str, body: dict):
     return video_manager().update_metadata(safe_id(run_id), body)
@@ -615,6 +653,71 @@ def story_alternate(story_id: str, body: dict):
 def story_turn_create(story_id: str, body: dict):
     return story_manager().submit(story_id, body)
 
+@app.get('/api/stories/{story_id}/actions')
+def story_available_actions(story_id: str, target_id: str | None = None):
+    return story_manager().available_actions(story_id, target_id)
+
+@app.get('/api/video/runs/{run_id}/receipt')
+def video_receipt(run_id: str):
+    manager = video_manager()
+    run = manager.get(safe_id(run_id))
+    transfer = manager._load(run_id, 'transfer.json')
+    manifest = transfer['manifest']
+    graph = transfer['prompt']
+    record = manager.records[run_id]
+    return {'run_id': run_id, 'request_id': record['request_id'], 'comfy_prompt_id': record.get('prompt_id'),
+            'graph_hash': hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest(),
+            'manifest': manifest, 'graph': graph, 'status': run['status'], 'video_url': run.get('video_url'),
+            'settings': {k: manifest.get(k) for k in ('seed', 'steps', 'resolution', 'width', 'height', 'frames', 'loras')}}
+
+@app.post('/api/stories/{story_id}/preview')
+def story_preview(story_id: str, body: dict):
+    return story_manager().preview(story_id, body)
+
+@app.get('/api/assistant/requests')
+def assistant_pending():
+    return story_manager().supervised_requests()
+
+def motion_lab_manager():
+    global MOTION_LAB
+    from .motion_lab import MotionLabManager
+    with STATE_LOCK:
+        if MOTION_LAB is None:
+            MOTION_LAB = MotionLabManager(DATA, video_manager)
+        return MOTION_LAB
+
+@app.get('/api/motion-lab/recipes')
+def motion_recipes():
+    from .motion_lab import recipes
+    return {'recipes': recipes()}
+
+@app.post('/api/motion-lab')
+def motion_create(body: dict):
+    return motion_lab_manager().create(safe_id(body.get('request_id')), check_project(body.get('project')),
+        body.get('settings', {}), body.get('recipe_ids', []), body.get('seeds', []))
+
+@app.get('/api/motion-lab/{comparison_id}')
+def motion_get(comparison_id: str):
+    return motion_lab_manager().get(safe_id(comparison_id))
+
+@app.post('/api/motion-lab/{comparison_id}/advance')
+def motion_advance(comparison_id: str, body: dict):
+    return motion_lab_manager().advance(safe_id(comparison_id))
+
+@app.post('/api/motion-lab/{comparison_id}/pause')
+def motion_pause(comparison_id: str, body: dict):
+    if type(body.get('paused')) is not bool:
+        raise ValueError('Paused must be true or false.')
+    return motion_lab_manager().set_paused(safe_id(comparison_id), body['paused'])
+
+@app.post('/api/motion-lab/{comparison_id}/rating')
+def motion_rating(comparison_id: str, body: dict):
+    return motion_lab_manager().rate(safe_id(comparison_id), safe_id(body.get('request_id')), body.get('ratings', {}), body.get('notes', ''))
+
+@app.post('/api/assistant/requests/{request_id}/complete')
+def assistant_complete(request_id: str, body: dict):
+    return story_manager().complete_supervised(safe_id(request_id), body)
+
 @app.post('/api/stories/{story_id}/turns/{turn_id}/{action}')
 def story_turn_action(story_id: str, turn_id: str, action: str, body: dict):
     return story_manager().action(story_id, turn_id, action, body)
@@ -764,12 +867,14 @@ def store_asset(data, name, content_type=''):
         audio = next((s for s in probe['streams'] if s.get('codec_type') == 'audio'), None)
         if not video and not audio:
             raise ValueError('No playable audio or video stream was found.')
-        duration = float(probe.get('format', {}).get('duration', 0))
+        from .audio_tools import measured_duration
+        duration = measured_duration(folder / filename, probe)
         if not 0 < duration <= 120:
             raise ValueError('Reference clips must be at most two minutes in the library; enable only H3-compatible lengths.')
         meta = {'id': asset_id, 'name': Path(name).stem[:100], 'media_type': 'video' if video else 'audio', 'filename': filename,
                 'width': video.get('width') if video else None, 'height': video.get('height') if video else None,
-                'duration': duration, 'mime': 'video/mp4' if video else 'audio/mpeg'}
+                'duration': duration, 'mime': (('video/webm' if video else 'audio/webm') if ext == '.webm' else
+                    ('video/mp4' if video else {'.wav': 'audio/wav', '.flac': 'audio/flac', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4'}.get(ext, 'audio/mpeg')))}
     else:
         raise ValueError('Use images, common video clips, or audio files for references.')
     meta['sha256'] = hashlib.sha256((folder / meta['filename']).read_bytes()).hexdigest()
@@ -798,6 +903,56 @@ def get_asset(asset_id: str, variant: str):
     meta = asset_meta(asset_id)
     filename = 'thumbnail.jpg' if variant == 'thumbnail' and meta['media_type'] == 'image' else meta['filename']
     return FileResponse(DATA / 'assets' / safe_id(asset_id) / filename)
+
+@app.get('/api/audio/capabilities')
+def audio_capabilities():
+    from .audio_tools import transcription_capabilities
+    return transcription_capabilities()
+
+@app.post('/api/audio/transcribe')
+def audio_transcribe(body: dict):
+    from .audio_tools import transcribe
+    asset_id = safe_id(body.get('asset_id'))
+    meta = asset_meta(asset_id)
+    if meta['media_type'] not in ('audio', 'video'):
+        raise ValueError('Choose a recording or audio clip to transcribe.')
+    return transcribe(DATA / 'assets' / asset_id / meta['filename'], body.get('options', {}))
+
+@app.post('/api/video/runs/{run_id}/soundtrack')
+def video_soundtrack(run_id: str, body: dict):
+    from .audio_tools import mix_soundtrack
+    request_id = safe_id(body.get('request_id'))
+    source = scene_video_path(safe_id(run_id))
+    supplied = body.get('tracks', [])
+    if not isinstance(supplied, list) or len(supplied) > 8:
+        raise ValueError('Choose at most eight soundtrack layers.')
+    tracks = []
+    for track in supplied:
+        aid = safe_id(track.get('asset_id'))
+        meta = asset_meta(aid)
+        if meta['media_type'] not in ('audio', 'video'):
+            raise ValueError('Soundtrack layers need audio or video files.')
+        tracks.append({**{k: v for k, v in track.items() if k in ('start_seconds', 'end_seconds', 'offset_seconds', 'gain', 'fade_in', 'fade_out', 'duck')},
+                       'path': str(DATA / 'assets' / aid / meta['filename'])})
+    folder = DATA / 'soundtracks' / run_id
+    folder.mkdir(parents=True, exist_ok=True)
+    request_path = folder / (request_id + '.json')
+    with STATE_LOCK:
+        lock = VIDEO_FILE_LOCKS.setdefault('soundtrack:' + request_id, threading.Lock())
+    with lock:
+        if request_path.exists() and json.loads(request_path.read_text('utf-8')) != supplied:
+            raise ValueError('This soundtrack request already belongs to different layers.')
+        atomic_json(request_path, supplied)
+        target = folder / (request_id + '.mp4')
+        result = mix_soundtrack(source, tracks, target) if not target.exists() else {'original_audio_preserved': True}
+    return {**{k: v for k, v in result.items() if k != 'path'}, 'video_url': f'/api/video/runs/{run_id}/soundtrack/{request_id}', 'request_id': request_id}
+
+@app.get('/api/video/runs/{run_id}/soundtrack/{request_id}')
+def soundtrack_playback(run_id: str, request_id: str):
+    path = DATA / 'soundtracks' / safe_id(run_id) / (safe_id(request_id) + '.mp4')
+    if not path.is_file():
+        raise HTTPException(404, 'The soundtrack is not ready.')
+    return FileResponse(path, media_type='video/mp4')
 
 def image_data(asset_id):
     meta = asset_meta(asset_id)

@@ -1,0 +1,37 @@
+{
+  "file": "studio-controls.png",
+  "kind": "actual-built-ui-screenshot",
+  "caption": "Studio Scene continuity controls, shown with a synthetic example and a mocked API. This is a UI screenshot, not a generated video frame.",
+  "captured_on": "2026-09-09",
+  "application_version": "1.3.0",
+  "view": "Simple Studio / Scene continuity",
+  "fixture": {
+    "title": "Scene continuity · synthetic UI example",
+    "premise": "Mira raises one brass coin while Nora stays seated.",
+    "data_origin": "Authored synthetic example; no user projects, stories, assets or personal data."
+  },
+  "capture": {
+    "browser": "Playwright Chromium",
+    "isolated_context": true,
+    "api": "mocked",
+    "built_assets": [
+      "dist/assets/index-BbL3zNp1.js",
+      "dist/assets/index-DmGkTJwV.css"
+    ],
+    "viewport_css_pixels": [
+      1080,
+      3000
+    ],
+    "image_pixels": [
+      744,
+      1135
+    ],
+    "framing": "Direct browser screenshot clipped to the complete continuity panel, with 16px horizontal and 12px vertical surrounding margin.",
+    "app_source_or_styles_modified": false,
+    "post_processing": "None"
+  },
+  "model_calls": 0,
+  "video_render_calls": 0,
+  "page_errors": [],
+  "sha256": "9e71597e137bebcbeb1dffbcca5477ab292875b57ef5af37eaced38847910493"
+}

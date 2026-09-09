@@ -1,0 +1,91 @@
+.scene-continuity {
+  min-width: 0;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #324139;
+}
+.scene-continuity > summary {
+  cursor: pointer;
+  color: #c7dbce;
+  font-size: 13px;
+}
+.scene-continuity > summary > span {
+  color: #96aa9e;
+  font-size: 11px;
+  margin-left: 8px;
+}
+.scene-continuity-content,
+.scene-continuity-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.scene-continuity-content {
+  padding-top: 10px;
+}
+.scene-continuity h4 {
+  margin: 0;
+  color: #c7dbce;
+  font-size: 13px;
+}
+.scene-continuity .scene-continuity-help {
+  color: #9eb0a5;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.scene-continuity-card {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #34463b;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+}
+.scene-continuity-card legend {
+  color: #c7dbce;
+  font-size: 12px;
+  padding: 0 5px;
+}
+.scene-continuity-card-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+.scene-continuity-card-heading > label {
+  flex: 1 1 180px;
+}
+.scene-continuity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+.scene-continuity-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
+  color: #c0d0c5;
+}
+.scene-continuity-field input,
+.scene-continuity-field textarea,
+.scene-continuity-field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+.scene-continuity-field textarea {
+  resize: vertical;
+  min-height: 65px;
+}
+.scene-continuity button {
+  justify-self: start;
+  font-size: 12px;
+}
+.scene-continuity-reset {
+  color: #a8c2b1;
+}

@@ -2,9 +2,17 @@
 
 A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
 
-Version **1.1.0** adds persistent stories, explicit branches, new-footage playback, recovery controls and optional ComfyUI image generation. See the [changelog](CHANGELOG.md). LM Studio handles vision and writing; ComfyUI renders images and video.
+Version **1.3.0** adds explicit scene continuity: who acts, who stays seated, which objects exist, their appearance and count, and where each starts and ends. Game keeps accepted world state between turns; Studio lets you edit the same controls directly. A reported visual mismatch pauses automatic progression for review. LM Studio handles vision and writing; ComfyUI renders video.
 
-The published **v1.0** [The Message demo](demo/README.md) remains available: three actual 0.3 MP scenes, ten shared reference images, exact dialogue, measured render times, and portable projects. Its showreel and measurements describe that release, not the new v1.1 interface. The visual review includes observed model mistakes.
+**[Scene continuity guide](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
+
+The new [Coin Safety Inspector demonstration](demo/scene-continuity/README.md) exercises a seated bystander and a single prop across a continuous sequence. The demo record separates authored direction, generated video and visual review. The model can still make mistakes; prompt instructions are not a guarantee of physical consistency.
+
+[![The Coin Safety Inspector — actual H3 frame](demo/scene-continuity/coin-poster.png)](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)
+
+**[Watch the new 30-second demo](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.3.0/continuity-30s.mp4)** · **[Chase, one-minute parody and Studio images](demo/scene-continuity/README.md)** · **[Download v1.3.0](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/tag/v1.3.0)**
+
+The earlier **v1.0** [The Message demo](demo/README.md) remains available: three actual 0.3 MP scenes, ten shared reference images, exact dialogue, measured render times, and portable projects. Its showreel and measurements describe that release. The visual review includes observed model mistakes.
 
 [![Watch the H3 Prompt Studio showreel](demo/showreel-poster.jpg)](https://github.com/BesianSherifaj-AI/h3-prompt-studio/releases/download/v1.0.0/H3-Prompt-Studio-showreel.mp4)
 
@@ -16,6 +24,7 @@ The showreel combines clearly labeled captures of the working app with real gene
 
 - Assign faces, clothes, props, places, palettes, and styles to named characters. Reorder or replace images while keeping their tags and assignments.
 - Write exact dialogue by speaker. Give each scene its own duration, framing, camera movement, transition, and ending.
+- Direct each visible character's starting pose, action or hold, and ending. Track important props by stable identity, quantity, appearance and placement. Opening the continuity editor and inventory requires no model call.
 - Keep the Studio editor beside the video, with **Photos**, **Story & Dialogue**, and **Settings** tabs.
 - Generate a fresh video or **Try another take** from an existing take's exact prompt and settings.
 - **Continue from this ending** uses the active story endpoint, its saved motion, actual final frame and completed history. Browsing an older take does not move that endpoint; choose **Branch from this preview** to start another path.
@@ -59,15 +68,31 @@ The 0.3 MP preset is 736 × 416 in landscape. Quick drafts use a compatible four
 
 ## Play a story in Game
 
-1. Open **Game**, enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional when a configured image generator can supply missing visuals.
-2. Keep the initial **0.3 MP / 8 steps / 5 seconds** settings, or choose the four-step quick draft. Turn on **Review before rendering** if you want to inspect each response before it creates images or video.
+1. Open **Game**, enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. Separate reference generation is available when a scene explicitly needs it.
+2. New games default to **2D pixel art / 0.2 MP / three seconds / eight steps**. Landscape is608×320; a fresh clip has73frames (3.04 seconds). Change style, quality, duration and viewpoint freely in the editor. Existing games retain their saved settings. Turn on **Review before rendering** to inspect the response before rendering.
 3. Write a move such as `I look at the note and ask what it means.` Put exact spoken words in double quotes, for example `I say "Who sent this?"`. A response that changes quoted player speech is rejected before rendering.
-4. The assistant plans an action and reply, creates any required references, renders the scene, then inspects the actual ending and offers three next moves. You can edit the response, try another take, branch from an older clip, or type your own next action.
+4. The game resolves known item and movement actions, while the assistant directs their presentation. Dialogue, combat and new situations use the creative planner. The scene renders, its ending is inspected, and accepted actions update the saved world. You can edit the response, try another take, branch from an older clip, or type your own next action.
 5. Watch **Latest scene** or **Whole story**, and save the active branch as a film. A reroll replaces the current take within that turn; it does not append the same event twice.
 
 The vision assistant distinguishes intended actions from what it sees in the final frame and records uncertainties. It cannot verify speech or lip sync from an image. Object ownership, handoffs and character consistency can still drift; review the video before building a long story on a mistaken result.
 
+Open **Inventory** or type `open inventory` to see held and worn items immediately. Pick up, drop, give, open, close, inspect and move controls use the saved location and ownership rules. A locked door stays locked, unavailable characters cannot respond, and inspecting an item does not silently pick it up. **Quick item and movement actions** is enabled by default; turn it off when you want the creative planner to include reactions to every interaction. Authored rules, guides and unusual conditions already defer to creative resolution so shortcuts cannot bypass them. Waiting, conversation and combat remain creative turns.
+
+The assistant uses bounded corrections for eligible malformed responses, retains exact request receipts after a lost connection, and validates edited plans before rendering. Failed or cancelled turns do not advance accepted inventory or history. See the [local assistant comparison](docs/ASSISTANT_EVALUATION.md) for the tested model choice, measured latency and evaluation limits.
+
+Use **Play** to act or speak; use **Guide** to change the next response or persistent story behavior. The side editor remains available during play: add/remove references, choose who wears/holds each item, edit personalities, choose aspect ratio and ordered LoRAs. Edits during rendering apply next turn. **What ran** exposes the compiled prompt, actual reference connections, seed and ComfyUI receipt.
+
+**Supervised test assistant** pauses for an external tester to complete the saved role request. It is a diagnostic provider, not an autonomous assistant. Choose **LM Studio** for normal play. Small models can produce schema-valid but semantically invalid responses; a validation error must be fixed before video is queued.
+
+Optional microphone input records first, transcribes into an editable message and never automatically sends a move. Original recordings can separately be selected as H3 audio references. Soundtrack mixing creates a separate preview. See [audio setup](AUDIO_SETUP.md).
+
+**UPSCALE** buttons in Studio and Game open an existing installation's GUI, optionally adding the selected scene. It does not start processing. Install that app separately; set `H3_STUDIO_UPSCALE` to its folder if it is not in `Desktop/UPSCALE` or `OneDrive/Desktop/UPSCALE`. It supports video upscaling/interpolation, not still-image files.
+
+The player shows live operation progress through a local event relay when ComfyUI sends it. The current H3 runtime supplies the playable clip after decoding; intermediate image previews are not shown.
+
 ## Optional image generation
+
+**H3 still frame (experimental)** uses the installed FL2VA model, compatible four-step LoRA and five-frame generation, then saves the middle frame. This is a video-model workaround, not a dedicated image model or identity-preserving editor. A local 608 × 320 pixel courtyard completed in 50.1 seconds including loading. Keep **Z-Image-Turbo** selected when preferred; no fair head-to-head speed claim is made.
 
 The configured baseline is **`z_image_turbo_bf16.safetensors`**. **`z_image_turbo_fp8_e4m3fn.safetensors`** is an optional alternative when installed and reported compatible; its availability is not a speed or quality guarantee. Initial BF16 and FP8 checks used different cache conditions, so they do not establish a fair speed comparison or justify changing the default. Both use ComfyUI's native image workflow with:
 
@@ -132,7 +157,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.1.0 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.3.0 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.

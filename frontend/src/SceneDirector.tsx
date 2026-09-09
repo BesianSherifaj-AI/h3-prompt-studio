@@ -14,6 +14,7 @@ import {
   SHOT_SIZES,
 } from "./shotDirections";
 import type { DirectedShot, DirectorPath } from "./shotDirections";
+import SceneContinuity from "./SceneContinuity";
 import "./SceneDirector.css";
 
 type Props = {
@@ -158,7 +159,7 @@ export function SceneDirector({ project, shot, index, update }: Props) {
               type="button"
               aria-label={`Duplicate scene ${n}`}
               disabled={project.shots.length >= 6}
-              title="Copy this scene's setup without repeating its dialogue"
+              title="Copy this scene's setup; speech and precise continuity stay in the original"
               onClick={() => update((d) => duplicateScene(d, shot.id))}
             >
               Duplicate setup
@@ -166,7 +167,7 @@ export function SceneDirector({ project, shot, index, update }: Props) {
           </div>
           <p className="scene-director-hint">
             Duplicate copies the setup and splits its time. Spoken lines stay in
-            the original scene.
+            the original scene. Add fresh continuity directions to the copy.
           </p>
           <fieldset className="scene-director-setups">
             <legend>Try a camera setup</legend>
@@ -372,6 +373,7 @@ export function SceneDirector({ project, shot, index, update }: Props) {
           )}
         </div>
       </details>
+      <SceneContinuity project={project} shot={shot} index={index} update={update} />
     </div>
   );
 }

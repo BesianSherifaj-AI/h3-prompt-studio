@@ -43,11 +43,11 @@ const turn = (status: StoryTurn["status"]) => ({
 });
 
 describe("Game defaults and turn safety", () => {
-  it("starts with automatic rendering at five new seconds, 0.3 MP and eight steps", () => {
+  it("starts with automatic rendering at three new seconds, 0.2 MP and eight steps", () => {
     expect(DEFAULT_STORY_SETTINGS).toMatchObject({
       review_before_render: false,
-      duration: 5,
-      resolution: "0.3",
+      duration: 3,
+      resolution: "0.2",
       steps: 8,
     });
   });

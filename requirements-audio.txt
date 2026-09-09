@@ -1,0 +1,3 @@
+# Optional local microphone transcription. Core Studio works without this.
+# CPU/int8 is used by the app; model files are cached separately by choice.
+faster-whisper==1.2.1

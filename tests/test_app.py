@@ -74,6 +74,28 @@ def auth(module):
     return {"X-H3-Token": module.TOKEN, "Origin": "http://127.0.0.1:8766"}
 
 
+def test_upscale_handoff_uses_resolved_scene_and_requires_session(server, monkeypatch, tmp_path):
+    module, client, _ = server
+    from backend import upscale_adapter
+    opened = []
+    run_id = str(uuid.uuid4()); source = tmp_path / 'scene.mp4'
+    monkeypatch.setattr(module, 'scene_video_path', lambda rid: source if rid == run_id else None)
+    monkeypatch.setattr(upscale_adapter, 'open_gui', lambda path: opened.append(path) or {'processing_started': False})
+    assert client.post('/api/integrations/upscale/open', json={'run_id': run_id}).status_code == 403
+    assert not opened
+    response = client.post('/api/integrations/upscale/open', json={'run_id': run_id}, headers=auth(module))
+    assert response.status_code == 200 and response.json()['processing_started'] is False
+    assert opened == [source]
+    assert client.post('/api/integrations/upscale/open', json={'path': 'arbitrary.exe'}, headers=auth(module)).status_code == 400
+
+
+def test_stable_game_system_available_without_starting_inference(server):
+    _, client, fake = server
+    response = client.get('/api/game/system')
+    assert response.status_code == 200 and 'identity' in response.json()['text'].lower()
+    assert not fake.loads
+
+
 def test_file_locations_describe_portable_storage(server, monkeypatch, tmp_path):
     module, client, _ = server
     monkeypatch.delenv('H3_STUDIO_COMFY_OUTPUT', raising=False)
@@ -645,28 +667,25 @@ def test_owned_ai_baseline_does_not_ignore_resident_h3(monkeypatch):
     assert lm.loads == lm.unloads == [] and rm.ai_idle_memory_mib == 9200
 
 
-def test_unowned_matching_model_with_online_comfy_is_reestablished_once(monkeypatch):
+def test_unowned_matching_model_with_online_comfy_is_left_untouched(monkeypatch):
     rm, lm = manager(FakeLM([{'id': 'foreign-same-model', 'model_key': 'vision'}]))
     monkeypatch.setattr(httpx, 'get', lambda url, **kw: response(url, {'queue_running': [], 'queue_pending': []}))
     monkeypatch.setattr(httpx, 'post', lambda url, **kw: response(url, {}))
     monkeypatch.setattr(resources.time, 'sleep', lambda seconds: None)
     memory = iter([1000, 1000, 9400, 9400])
     monkeypatch.setattr(resources, 'gpu_snapshot', lambda: {'used_mib': next(memory, 9400)})
-    assert rm.run_ai('vision')['ready']
-    assert lm.unloads == ['foreign-same-model']
-    assert lm.loads == [('vision', {'context_length': 8192})]
-    assert rm.instance_id == rm.baseline_instance_id == 'owned'
-    assert rm.ai_idle_memory_mib == 9400
-    assert rm.run_ai('vision')['ready']
-    assert len(lm.loads) == len(lm.unloads) == 1
+    with pytest.raises(resources.ResourceError, match='outside this Studio'):
+        rm.run_ai('vision')
+    assert lm.loads == lm.unloads == []
 
 
 def test_closed_comfy_adoption_does_not_invent_a_memory_baseline(monkeypatch):
     rm, lm = manager(FakeLM([{'id': 'user-owned', 'model_key': 'vision'}]))
     monkeypatch.setattr(rm, 'queues', lambda: [])
     monkeypatch.setattr(resources, 'gpu_snapshot', lambda: {'used_mib': 12500})
-    assert rm.run_ai('vision')['ready']
-    assert rm.instance_id == 'user-owned' and rm.ai_idle_memory_mib is None
+    with pytest.raises(resources.ResourceError, match='outside this Studio'):
+        rm.run_ai('vision')
+    assert rm.instance_id is None and rm.ai_idle_memory_mib is None
     assert rm.baseline_instance_id is None and lm.loads == lm.unloads == []
 
 
@@ -680,9 +699,9 @@ def test_stale_baseline_cannot_be_applied_to_another_instance(monkeypatch):
     monkeypatch.setattr(resources.time, 'monotonic', clock.monotonic)
     monkeypatch.setattr(resources.time, 'sleep', clock.sleep)
     monkeypatch.setattr(resources, 'gpu_snapshot', lambda: {'used_mib': 12000})
-    with pytest.raises(resources.ResourceError, match='could not be verified'):
+    with pytest.raises(resources.ResourceError, match='outside this Studio'):
         rm.run_ai('vision')
-    assert lm.unloads == ['new-instance'] and lm.loads == []
+    assert lm.unloads == lm.loads == []
     assert rm.ai_idle_memory_mib is None and rm.baseline_instance_id is None
 
 

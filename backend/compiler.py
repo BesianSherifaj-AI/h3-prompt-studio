@@ -6,6 +6,8 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .scene_contract import contract_texts, map_contract_texts, render_scene_contract, validate_scene_contract
+
 MODES = {"ref2va", "fl2va", "i2va", "l2va", "t2va"}
 PROFILES = {"official", "director", "concise", "custom"}
 REFERENCE_ROLES = {"reference_image": "image", "reference_video": "video", "reference_audio": "audio"}
@@ -106,8 +108,9 @@ def compile_project(project: dict) -> dict:
         issue("error", "invalid_profile", "profile", "Choose official, director, concise or custom.")
         profile = ""
     duration = _number(project.get("duration"))
-    if duration is None or duration != duration.to_integral_value() or not 4 <= duration <= 15:
-        issue("error", "invalid_duration", "duration", "H3 authoring duration must be an integer from 4 through 15 seconds.")
+    minimum_duration = 3 if (project.get('comfy_render') or {}).get('experimental_preview') is True else 4
+    if duration is None or duration != duration.to_integral_value() or not minimum_duration <= duration <= 15:
+        issue("error", "invalid_duration", "duration", f"H3 authoring duration must be an integer from {minimum_duration} through 15 seconds. Three-second clips require experimental preview.")
         duration = Decimal(5)
     story = project.get("story", {})
     style = project.get("style", {})
@@ -155,6 +158,9 @@ def compile_project(project: dict) -> dict:
                 issue("error", "object_owner_role", path + ".simple_owner_id", "Starts with is for objects. Clear this assignment, or change this photo's type to Object.")
             elif not isinstance(owner, str) or owner not in subject_map:
                 issue("error", "unknown_object_owner", path + ".simple_owner_id", "Choose an existing character under Starts with, or clear the assignment. The previously selected character is no longer available.")
+        holder = asset.get('current_holder_id')
+        if holder and (not isinstance(holder, str) or holder not in subject_map):
+            issue('error', 'unknown_object_holder', path + '.current_holder_id', 'Choose an existing current holder, or Nobody / in the scene.')
         if mode == "ref2va" and role not in REFERENCE_ROLES or mode != "ref2va" and role in REFERENCE_ROLES:
             if mode == "ref2va":
                 message = "This project uses reference photos. Change this photo to a reference, or choose First frame only or First + last frame."
@@ -165,6 +171,13 @@ def compile_project(project: dict) -> dict:
         active.append(asset)
         if media in ("video", "audio"):
             clip_duration = _number(asset.get("duration"))
+            if 'clip_start_seconds' in asset or asset.get('clip_end_seconds') is not None:
+                start = _number(asset.get('clip_start_seconds', 0))
+                end = _number(asset.get('clip_end_seconds')) if asset.get('clip_end_seconds') is not None else clip_duration
+                if start is None or start < 0 or end is None or end <= start or (clip_duration is not None and end > clip_duration + Decimal('0.05')):
+                    issue('error', 'invalid_media_range', path, 'Choose a valid start/end range within the source recording.')
+                else:
+                    clip_duration = end - start
             if clip_duration is None and asset.get("duration") is not None:
                 issue("error", "invalid_media_duration", path + ".duration", "Clip duration must be a finite number or null when unknown.")
             elif clip_duration is None:
@@ -186,7 +199,7 @@ def compile_project(project: dict) -> dict:
         if len(active) > 12:
             issue("error", "reference_total_limit", "assets", "At most twelve enabled reference files are supported in total.")
         for role in ("reference_video", "reference_audio"):
-            ds = [_number(a.get("duration")) for a in active if a.get("role") == role]
+            ds = [(_number(a.get('clip_end_seconds') if a.get('clip_end_seconds') is not None else a.get('duration')) or Decimal(0)) - (_number(a.get('clip_start_seconds', 0)) or Decimal(0)) for a in active if a.get("role") == role]
             if sum((d for d in ds if d is not None), Decimal(0)) > 15:
                 issue("error", "reference_duration_total", "assets", f"Combined {role} duration exceeds the documented 15-second limit.")
     elif mode in MODES:
@@ -278,6 +291,15 @@ def compile_project(project: dict) -> dict:
         resolve_fields(subject, ("description",), f"subjects[{i}]")
     for i, scene in enumerate(shots):
         resolve_fields(scene, ("action", "setting", "performance", "final_state", "sound", "transition"), f"shots[{i}]")
+        if 'scene_contract' in scene:
+            roster = lambda key: [sid for sid in scene.get(key, []) if isinstance(sid, str)] if isinstance(scene.get(key, []), list) else []
+            problems = validate_scene_contract(scene['scene_contract'], subject_map, roster('visible_subject_ids'), roster('offscreen_subject_ids'))
+            for problem in problems:
+                issue(problem['severity'], problem['code'], f"shots[{i}].scene_contract" + ('.' + problem['path'] if problem['path'] else ''), problem['message'])
+            if not problems:
+                for field, value in contract_texts(scene['scene_contract']):
+                    string(value, f"shots[{i}].scene_contract.{field}")
+                scene['scene_contract'] = map_contract_texts(scene['scene_contract'], lambda value, field: resolve_tags(value, f"shots[{i}].scene_contract.{field}"))
         if isinstance(scene.get("camera"), dict):
             resolve_fields(scene["camera"], tuple(scene["camera"]), f"shots[{i}].camera")
         if isinstance(scene.get("dialogue"), list):
@@ -367,7 +389,9 @@ def compile_project(project: dict) -> dict:
                 if sid not in roster["visible_subject_ids"] + roster["offscreen_subject_ids"]:
                     issue("warning", "speaker_not_in_roster", dp + ".speaker_id", "Set whether this speaker is visible or off-screen in this shot.")
             text = string(line.get("text", ""), dp + ".text", required=True, dialogue=True)
-            language = string(line.get("language", ""), dp + ".language", required=True)
+            language = string(line.get("language", ""), dp + ".language")
+            if not language.strip():
+                issue("error", "missing_dialogue_language", dp + ".language", "Choose a spoken language for this line, or rewrite the response to let the assistant identify it. The exact spoken words remain unchanged.")
             string(line.get("delivery", ""), dp + ".delivery")
             if any(ch in language for ch in "[]<>\r\n"):
                 issue("error", "invalid_language_tag", dp + ".language", "Language must be plain text without brackets, tags or line breaks.")
@@ -509,6 +533,8 @@ def compile_project(project: dict) -> dict:
     for i, shot in enumerate(shots):
         for key in ("action", "setting", "performance", "final_state", "sound"):
             check_prose(shot.get(key, ""), f"shots[{i}].{key}")
+        for key, value in contract_texts(shot.get('scene_contract', {})):
+            check_prose(value, f"shots[{i}].scene_contract.{key}")
         for key, value in shot.get("camera", {}).items():
             check_prose(value, f"shots[{i}].camera.{key}")
         for j, line in enumerate(shot.get("dialogue", [])):
@@ -520,22 +546,36 @@ def compile_project(project: dict) -> dict:
         s = subject_map[sid]
         return (subject_tokens[sid] + " " if sid in subject_tokens else "") + s["name"]
 
+    viewpoint = project.get('game_viewpoint', 'auto')
     style_parts = []
-    for key, lead in (("genre", ""), ("vibe", ""), ("lighting", "Lighting: "), ("color", "Color: "), ("notes", "")):
+    if viewpoint == 'pov':
+        player = project.get('game_player_id')
+        style_parts.append('First-person point of view through ' + (name(player) if player in subject_map else 'the player') + "'s eyes. The player is the camera viewpoint, not a second visible body; their own hands may enter frame. Keep this perspective throughout the shot.")
+    elif viewpoint == 'overhead':
+        style_parts.append('Top-down view from directly above, showing the player and surrounding spatial layout throughout the shot.')
+    elif viewpoint == 'third_person':
+        style_parts.append('Third-person view follows the visible player character from outside their body.')
+    for key, lead in (("genre", ""), ("visual_style", ""), ("vibe", ""), ("lighting", "Lighting: "), ("color", "Color: "), ("notes", "")):
         if _text(style.get(key)):
             style_parts.append(_sentence(lead + _text(style[key])))
-    if profile == "custom" and custom.strip():
+    if custom.strip():
         style_parts.append(_sentence(custom))
     style_text = " ".join(style_parts)
     rendered_shots = []
     for i, shot in enumerate(shots):
         paragraphs = []
         if i == 0 and mode != "ref2va":
-            paragraphs += [style_text, _sentence(story_text)]
+            paragraphs.append(style_text)
+            if story_text.strip() != _text(shot.get('action')):
+                paragraphs.append(_sentence(story_text))
         if i == 0:
             for asset in active:
                 owner = asset.get("simple_owner_id")
-                if asset.get("semantic_role") == "object" and owner:
+                if asset.get('semantic_role') == 'object' and 'current_holder_id' in asset:
+                    holder = asset.get('current_holder_id')
+                    paragraphs.append(f"The object supplied by {primary_ref[asset['id']]['token']} starts held by {name(holder)}; ownership and possession are separate." if holder else
+                                      f"The object supplied by {primary_ref[asset['id']]['token']} starts in the scene, held by nobody.")
+                elif asset.get("semantic_role") == "object" and owner:
                     # A prop's starting owner is a relationship, not a source
                     # for the character's identity or a permanent possession.
                     paragraphs.append(f"The object supplied by {primary_ref[asset['id']]['token']} starts with {name(owner)}; ownership may change through the described action.")
@@ -545,10 +585,13 @@ def compile_project(project: dict) -> dict:
         if _text(shot.get("setting")):
             paragraphs.append(_sentence(shot["setting"]))
         for sid in shot.get("visible_subject_ids", []):
+            if viewpoint == 'pov' and sid == project.get('game_player_id'):
+                continue  # A POV identity/hand reference is not a visible body.
             desc = _text(subject_map[sid].get("description"))
             paragraphs.append(_sentence(name(sid) + " is visible" + (": " + desc if desc else "")))
         for sid in shot.get("offscreen_subject_ids", []):
             paragraphs.append(_sentence(name(sid) + " remains off-screen"))
+        paragraphs.extend(render_scene_contract(project, shot, name))
         movement = _text(camera.get("movement"))
         moving = {"static": "holds a static shot", "push_in": "pushes in", "pull_out": "pulls out", "pan_left": "pans left", "pan_right": "pans right", "truck_left": "trucks left", "truck_right": "trucks right", "tilt_up": "tilts up", "tilt_down": "tilts down", "arc": "arcs around the subject", "tracking": "tracks the subject", "zoom_in": "zooms in", "zoom_out": "zooms out"}
         if movement:
@@ -563,7 +606,12 @@ def compile_project(project: dict) -> dict:
             paragraphs.append(_sentence(" ".join(parts)))
         if _text(camera.get("focus")):
             paragraphs.append(_sentence("Focus on " + camera["focus"]))
-        paragraphs += [_sentence(_text(shot.get(key))) for key in ("action", "performance")]
+        action, performance, ending = (_text(shot.get(key)) for key in ('action', 'performance', 'final_state'))
+        paragraphs.append(_sentence(action))
+        # Generated direction used to repeat the complete approved action and
+        # ending in performance. Remove exact redundancy, never authored nuance.
+        if performance not in (action, action + ' End with: ' + ending):
+            paragraphs.append(_sentence(performance))
         for line in shot.get("dialogue", []):
             sid = line["speaker_id"]
             delivery = _text(line.get("delivery"))

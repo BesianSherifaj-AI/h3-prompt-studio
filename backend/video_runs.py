@@ -10,10 +10,12 @@ import hashlib
 import json
 import math
 import re
+import queue
 import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -119,6 +121,34 @@ def _history_error(history, prompt_id):
     return 'ComfyUI could not finish this video and returned no error message. Review the generation settings and try a new request.'
 
 
+def _progress_event(event, prompt_id):
+    if not isinstance(event, dict) or not isinstance(event.get('data'), dict) or event['data'].get('prompt_id') != prompt_id:
+        return None
+    data, kind = event['data'], event.get('type')
+    if kind == 'executing':
+        node = data.get('node')
+        return {'type': kind, 'data': {'prompt_id': prompt_id, 'node': str(node)[:128] if node is not None else None}}
+    def measured(node):
+        if not isinstance(node, dict) or any(type(node.get(key)) not in (int, float) or not math.isfinite(node[key]) for key in ('value', 'max')):
+            return None
+        if node['value'] < 0 or node['max'] <= 0:
+            return None
+        return {'value': min(node['value'], node['max']), 'max': node['max']}
+    if kind == 'progress':
+        value = measured(data)
+        if value is not None:
+            return {'type': kind, 'data': {**value, 'prompt_id': prompt_id, 'node': str(data.get('node', ''))[:128]}}
+    elif kind == 'progress_state' and isinstance(data.get('nodes'), dict):
+        nodes = {}
+        for ident, node in list(data['nodes'].items())[:1000]:
+            value = measured(node)
+            if value is not None and node.get('prompt_id') == prompt_id and node.get('state') in ('running', 'finished', 'error'):
+                nodes[str(ident)[:128]] = {**value, 'state': node['state'], 'prompt_id': prompt_id}
+        if nodes:
+            return {'type': kind, 'data': {'prompt_id': prompt_id, 'nodes': nodes}}
+    return None
+
+
 class VideoRunManager:
     def __init__(self, data_dir, prepare, resources, *, client_factory=None,
                  poll_interval=1.5, start_workers=True, monitor_timeout=21600):
@@ -131,6 +161,7 @@ class VideoRunManager:
         self.lock = threading.RLock()
         self.stop = threading.Event()
         self.records, self.workers = {}, {}
+        self.progress_observers = {}
         for file in self.directory.glob('*/record.json'):
             try:
                 record = json.loads(file.read_text(encoding='utf-8'))
@@ -201,6 +232,87 @@ class VideoRunManager:
                 public['can_continue'] = True
         public['can_combine'] = available and bool(record.get('continuation_input_source'))
         return public
+
+    def live_progress(self, run_id):
+        """Read-only browser observer descriptor, never a queue/worker action.
+
+        Comfy sends progress to the submission's client ID. The browser uses a
+        same-origin Web Lock so two Studio tabs cannot replace each other's
+        connection. Graph inputs and other jobs are never exposed here.
+        """
+        with self.lock:
+            record = self._record(run_id)
+            result = {'run_id': record['id'], 'status': record['status'], 'available': False,
+                      'websocket_url': None, 'events_url': f'/api/video/runs/{record["id"]}/live-progress/events', 'prompt_id': None, 'node_labels': {},
+                      'preview_available': False,
+                      'note': 'Live node progress is shown when ComfyUI sends it. The video appears after rendering; intermediate images are not shown.'}
+            if record['status'] not in ('queued', 'running', 'uncertain') or not record.get('comfy_url') or not record.get('prompt_id'):
+                return result
+            origin = urlsplit(local_url(record['comfy_url']))
+            result.update(available=True, prompt_id=_id(record['prompt_id']),
+                          websocket_url=urlunsplit(('wss' if origin.scheme == 'https' else 'ws', origin.netloc,
+                                                    origin.path.rstrip('/') + '/ws', urlencode({'clientId': record['client_id']}), '')))
+            labels = {'UNETLoader': 'Loading the video model', 'CLIPLoader': 'Loading the prompt encoder',
+                      'CLIPTextEncode': 'Reading the video prompt', 'VAELoader': 'Loading the decoder',
+                      'SamplerCustomAdvanced': 'Rendering the scene', 'KSampler': 'Rendering the scene',
+                      'VAEDecode': 'Decoding the video', 'SaveVideo': 'Saving the video',
+                      'MMH3Save': 'Saving this ending', 'MMH3Load': 'Loading the previous ending'}
+            try:
+                graph = self._load(record['id'], 'transfer.json').get('prompt', {})
+                result['node_labels'] = {str(ident): labels.get(node.get('class_type'), 'Preparing the scene')
+                                         for ident, node in list(graph.items())[:1000] if isinstance(node, dict)}
+            except (VideoRunError, AttributeError):
+                pass
+            return result
+
+    def live_progress_events(self, run_id, *, connector=None, max_seconds=30):
+        """Bounded same-origin SSE relay; reads only the owned Comfy socket.
+
+        Each connection ends within thirty seconds and idle reads yield every
+        two seconds, allowing the HTTP server to observe disconnects promptly.
+        Existing SDK dependency httpx-ws closes its upstream context on exit.
+        """
+        from httpx_ws import connect_ws, WebSocketDisconnect, WebSocketNetworkError, WebSocketUpgradeError, WebSocketInvalidTypeReceived
+        source = self.live_progress(run_id)
+        if not source['available']:
+            yield 'event: finished\ndata: ' + json.dumps({'status': source['status']}) + '\n\n'
+            return
+        with self.lock:
+            observer = self.progress_observers.setdefault(source['run_id'], threading.Lock())
+        if not observer.acquire(blocking=False):
+            yield 'event: unavailable\ndata: {"message":"Live progress is already open in another tab."}\n\n'
+            return
+        client = None
+        try:
+            client = self.client_factory()
+            url = source['websocket_url'].replace('wss:', 'https:', 1).replace('ws:', 'http:', 1)
+            with (connector or connect_ws)(url, client, max_message_size_bytes=262144, queue_size=32,
+                                           keepalive_ping_interval_seconds=10, keepalive_ping_timeout_seconds=5) as socket:
+                deadline = time.monotonic() + min(30, max(1, max_seconds))
+                yield ': connected\nretry: 2500\n\n'
+                while not self.stop.is_set() and time.monotonic() < deadline:
+                    if self._record(run_id)['status'] not in ('queued', 'running', 'uncertain'):
+                        yield 'event: finished\ndata: ' + json.dumps({'status': self._record(run_id)['status']}) + '\n\n'
+                        return
+                    try:
+                        raw = socket.receive_text(timeout=2)
+                    except queue.Empty:
+                        yield ': keepalive\n\n'
+                        continue
+                    except WebSocketInvalidTypeReceived:
+                        continue  # Binary previews are deliberately unsupported.
+                    try:
+                        event = _progress_event(json.loads(raw), source['prompt_id'])
+                    except (ValueError, TypeError):
+                        continue
+                    if event:
+                        yield 'data: ' + json.dumps(event, allow_nan=False, separators=(',', ':')) + '\n\n'
+        except (httpx.HTTPError, WebSocketDisconnect, WebSocketNetworkError, WebSocketUpgradeError, OSError):
+            yield 'event: unavailable\ndata: {"message":"Live progress is temporarily unavailable. Rendering continues."}\n\n'
+        finally:
+            if client is not None:
+                client.close()
+            observer.release()
 
     def _admit(self, request_id, request_digest, project, *, parent=None, kind='generate', seed=None, prompt=''):
         ident = _id(request_id)

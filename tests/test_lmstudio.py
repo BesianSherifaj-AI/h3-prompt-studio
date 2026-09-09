@@ -212,7 +212,14 @@ def test_invalid_json_has_only_one_retry_and_no_unvalidated_return():
     with pytest.raises(LMStudioError) as failure:
         client.complete_json("local-vision", "System", "User", SCHEMA)
     assert failure.value.code == "invalid_model_output"
-    assert client.last_completion_info is None
+    assert client.last_completion_info['locally_validated'] is False
+    assert failure.value.diagnostics['attempts'] == 2
+    assert failure.value.diagnostics['attempt_records'][0]['validation_keyword'] == 'additionalProperties'
+    posts = [body for _, path, body in calls if path == '/v1/chat/completions']
+    assert 'Additional properties' in posts[-1]['messages'][-1]['content']
+    assert posts[-1]['messages'][-2]['role'] == 'assistant'
+    failure.value.diagnostics['attempt_records'][0]['error'] = 'changed externally'
+    assert client.last_completion_info['attempt_records'][0]['error'] != 'changed externally'
 
 
 def test_schema_unsupported_fallback_is_explicit_and_still_validated():

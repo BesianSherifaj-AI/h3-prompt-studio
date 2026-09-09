@@ -305,7 +305,7 @@ def test_restart_switch_to_larger_model_verifies_then_releases_own_small_model(r
         calls.append(('free', url))
         return SimpleNamespace(raise_for_status=lambda: None)
     monkeypatch.setattr(manager.get_client(), 'unload_model', unload)
-    monkeypatch.setattr(manager.get_client(), 'load_model', load)
+    monkeypatch.setattr(manager.get_client(), 'load_owned_model', load)
     monkeypatch.setattr(resources.httpx, 'post', release_h3)
     monkeypatch.setattr(resources.time, 'sleep', lambda *args: None)
     monkeypatch.setattr(resources, 'gpu_snapshot', lambda: {'used_mib': 1024, 'free_mib': 23000})

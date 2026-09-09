@@ -122,7 +122,7 @@ def _port(schema, kind, name, expected):
     return matches[0]
 
 
-def _reference_image_prefix(schema):
+def _reference_image_prefix(schema, media_type='IMAGE'):
     task = schema.get('MMH3Create', {}).get('input', {}).get('required', {}).get('task')
     choice = next((item for item in _choices(task) if isinstance(item, dict) and item.get('key') == 'References to video'), None)
     if not choice:
@@ -137,10 +137,10 @@ def _reference_image_prefix(schema):
             fields = template.get('input', {})
             child = list(fields.get('required', {}).values()) + list(fields.get('optional', {}).values())
             prefix = template.get('prefix', options.get('prefix'))
-            if len(child) == 1 and child[0][0] == 'IMAGE' and isinstance(prefix, str):
+            if len(child) == 1 and child[0][0] == media_type and isinstance(prefix, str):
                 matches.append('task.' + name + '.' + prefix)
     if len(matches) != 1:
-        raise MMH3TransferError('The MMH3 reference-image inputs changed. Refresh the installed node schema before sending.')
+        raise MMH3TransferError(f'The MMH3 reference-{media_type.lower()} inputs changed. Refresh the installed node schema before sending.')
     return matches[0]
 
 
@@ -307,6 +307,14 @@ def apply_mmh3(graph, config, project, settings, schema):
         for name, value in old.items():
             if name.startswith('ref_images.ref_image_'):
                 packet_inputs[image_prefix + name.rsplit('_', 1)[-1]] = copy.deepcopy(value)
+            elif name.startswith('ref_videos.ref_video_'):
+                components = work.get(value[0], {})
+                video_link = components.get('inputs', {}).get('video')
+                if components.get('class_type') != 'GetVideoComponents' or not video_link:
+                    raise MMH3TransferError('Reference video must preserve its native VIDEO source for saved-state continuation.')
+                packet_inputs[_reference_image_prefix(schema, 'VIDEO') + name.rsplit('_', 1)[-1]] = copy.deepcopy(video_link)
+            elif name.startswith('ref_audios.ref_audio_'):
+                packet_inputs[_reference_image_prefix(schema, 'AUDIO') + name.rsplit('_', 1)[-1]] = copy.deepcopy(value)
     else:
         for name in ('first_frame', 'last_frame'):
             if name in old:

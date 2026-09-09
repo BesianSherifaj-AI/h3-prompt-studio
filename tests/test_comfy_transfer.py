@@ -245,7 +245,7 @@ def test_video_audio_never_silently_dropped(library, schema):
     for media in ('audio', 'video'):
         project = make_project([{**library[1][0], 'media_type': media, 'role': 'reference_' + media}])
         client = FakeComfy(schema)
-        with pytest.raises(TransferError, match='currently supports photos'):
+        with pytest.raises(TransferError, match='duration could not be measured|no audio stream|no video stream|reference range within the source file'):
             build_transfer(project, 'prompt', {}, lambda a: library[0][a['id']], client=client)
         assert not client.calls
 

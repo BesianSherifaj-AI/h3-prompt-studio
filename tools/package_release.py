@@ -24,13 +24,18 @@ ROOT_FILES = (
     'frontend/tsconfig.json', 'frontend/vite.config.ts', 'frontend/vitest.config.ts',
     'comfy_extension/__init__.py', 'comfy_extension/README.md',
     'tools/package_release.py', 'scripts/package_studio.py',
+    'VERIFICATION_V1.2.md', 'AUDIO_SETUP.md', 'UPSCALE_SETUP.md', 'requirements-audio.txt',
+    'tools/browser_game_smoke.mjs',
+    'tools/browser_scene_continuity_smoke.mjs',
 )
 # A folder is included only for these source or reviewed demo file types.
 # Runtime directories and ad hoc workflow/export directories are never roots.
 TREES = {
     'backend': {'.py'},
+    'docs': {'.md', '.json'},
     'frontend/src': {'.ts', '.tsx', '.css', '.svg'},
     'tests': {'.py'},
+    'scripts': {'.py'},
     'comfy_extension/web': {'.js', '.mjs', '.css'},
     'comfy_extension/tests': {'.mjs'},
     'system-prompts': {'.txt', '.md'},
@@ -44,7 +49,7 @@ EXCLUDED_PARTS = {
     'research', 'attachments', 'private', 'credentials', 'secrets', 'backups',
 }
 REQUIRED = {
-    'README.md', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'Setup.ps1', 'Launch.ps1',
+    'README.md', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE', 'Setup.ps1', 'Launch.ps1',
     'requirements.txt', 'requirements.lock.txt', 'backend/app.py',
     'frontend/package.json', 'frontend/package-lock.json', 'dist/index.html',
     'licenses/react-LICENSE.txt', 'licenses/react-dom-LICENSE.txt',

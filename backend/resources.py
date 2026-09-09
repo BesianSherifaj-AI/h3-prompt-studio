@@ -5,11 +5,13 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from .lmstudio import RESIDENT_PREFIX
+from .lmstudio import RESIDENT_PREFIX, ASSISTANT_PREFIX
 from .projects import atomic_json
 try:
     import psutil
@@ -71,6 +73,8 @@ class ResourceManager:
         self.ai_idle_memory_mib = None
         self.baseline_instance_id = None
         self.last_error = None
+        self.pending_load = None
+        self.last_batch = None
         # None preserves a warm H3 session on first use. The first image job
         # always releases unknown Comfy weights; subsequent family switches are
         # explicit. 'empty' means a verified release during an AI hand-off.
@@ -84,6 +88,9 @@ class ResourceManager:
                 # This is only a candidate. Never restore ownership or a
                 # previous process's VRAM baseline without live inventory.
                 self.exclusive_ownership = self._saved_ownership(state.get('exclusive_instance'))
+                candidate = state.get('pending_load')
+                if isinstance(candidate, dict) and isinstance(candidate.get('instance_id'), str) and candidate['instance_id'].startswith(ASSISTANT_PREFIX):
+                    self.pending_load = candidate
             except (OSError, ValueError, AttributeError):
                 # An unreadable marker cannot establish that H3 is still warm.
                 self.comfy_kind = 'unknown'
@@ -120,8 +127,10 @@ class ResourceManager:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
             # Both fields share one marker: changing ownership must never erase
             # the family of a potentially accepted ComfyUI queue submission.
-            atomic_json(self.state_path, {'comfy_kind': self.comfy_kind,
-                                         'exclusive_instance': self.exclusive_ownership})
+            state = {'comfy_kind': self.comfy_kind, 'exclusive_instance': self.exclusive_ownership}
+            if self.pending_load is not None:
+                state['pending_load'] = self.pending_load
+            atomic_json(self.state_path, state)
 
     def _set_comfy_kind(self, kind):
         self.comfy_kind = kind
@@ -233,6 +242,17 @@ class ResourceManager:
         self._restore_exclusive(client, loaded)
         self._adopt_previous_resident(client, loaded)
         instance_id = lambda item: item.get('id', item.get('instance_id'))
+        if self.pending_load is not None:
+            pending = self.pending_load
+            found = [m for m in loaded if instance_id(m) == pending['instance_id']
+                     and m.get('model_key', m.get('model')) == pending.get('model')]
+            if len(found) == 1 and pending.get('endpoint') == self._client_endpoint(client):
+                self.instance_id, self.model_key = pending['instance_id'], pending['model']
+                self._remember_exclusive(client)
+                self.pending_load = None
+                self._save_state()
+            else:
+                raise ResourceError('A previous assistant load has an uncertain response. Check its named instance in LM Studio before retrying; no duplicate load was started.')
         if self.instance_id and self.model_key != model:
             self.stage = 'unloading previous AI model'
             if any(instance_id(item) == self.instance_id for item in loaded):
@@ -244,12 +264,15 @@ class ResourceManager:
             raise ResourceError('Another LM Studio model is loaded. Unload it in LM Studio, then retry with the selected model.')
         if len(matching) > 1:
             raise ResourceError('Multiple instances of the selected LM Studio model are loaded. Keep one instance before preparing AI.')
+        if matching and (self.instance_id != instance_id(matching[0]) or self.model_key != model):
+            self._forget_instance()
+            raise ResourceError('The selected model is loaded outside this Studio session. Unload that external instance in LM Studio to let Studio prepare its own assistant; it was left unchanged.')
         owned_baseline = bool(matching and self.model_key == model
                               and instance_id(matching[0]) == self.instance_id == self.baseline_instance_id
                               and self.ai_idle_memory_mib is not None)
         if online and matching and not owned_baseline:
-            # An adopted model's total VRAM may include H3. Re-establish ownership
-            # once instead of treating unknown global usage as an AI baseline.
+            # This exact instance is already ours, but a restarted process has
+            # no trustworthy VRAM baseline. Re-establish only our own baseline.
             self.stage = 're-establishing the selected AI memory baseline'
             client.unload_model(instance_id(matching[0]))
             self._forget_instance()
@@ -257,7 +280,14 @@ class ResourceManager:
             if loaded:
                 raise ResourceError('LM Studio still has a model loaded; the selected AI hand-off could not be verified.')
             matching = []
-        if online:
+        needs_release = bool(online)
+        if online and owned_baseline and self.comfy_kind == 'empty':
+            current_memory = gpu_snapshot()
+            if current_memory and current_memory['used_mib'] < self.ai_idle_memory_mib + 1024:
+                # Adjacent actor/director calls can reuse the verified assistant
+                # lease baseline without another deferred Comfy /free roundtrip.
+                needs_release = False
+        if online and needs_release:
             self.stage = 'releasing H3 memory'
             for item in online:
                 response = httpx.post(item['url'] + '/free', json={'unload_models': True, 'free_memory': True}, timeout=8, trust_env=False)
@@ -299,8 +329,17 @@ class ResourceManager:
             memory = gpu_snapshot()
             if memory and memory['used_mib'] >= 8192:
                 raise ResourceError('GPU memory is occupied by another process. Release it before loading the selected AI model; no model was loaded.')
-            result = client.load_model(model, context_length=self.get_settings()['context_length'])
+            owned_loader = getattr(client, 'load_owned_model', None)
+            if callable(owned_loader):
+                self.pending_load = {'instance_id': ASSISTANT_PREFIX + uuid.uuid4().hex,
+                                     'model': model, 'endpoint': self._client_endpoint(client)}
+                self._save_state()
+                result = owned_loader(model, context_length=self.get_settings()['context_length'],
+                                      instance_id=self.pending_load['instance_id'])
+            else:
+                result = client.load_model(model, context_length=self.get_settings()['context_length'])
             self.instance_id = result['instance_id']
+            self.pending_load = None
             baseline = gpu_snapshot()
             if baseline is not None and memory is not None:
                 self.ai_idle_memory_mib = baseline['used_mib']
@@ -391,6 +430,62 @@ class ResourceManager:
         except Exception as exc:
             self.last_error = str(exc)
             self.stage = 'needs attention'
+            raise
+        finally:
+            self.lock.release()
+
+    def run_ai_batch(self, model, operations, *, concurrency=1, cancel_event=None):
+        """Run independent callbacks under one family lease, draining on failure.
+
+        Each callback receives (exact_instance_id, shared_cancel_event). Do not
+        put dependent actor replies/director stages in the same batch. The
+        ThreadPool waits for accepted callbacks before releasing model memory.
+        """
+        if type(concurrency) is not int or concurrency not in (1, 2, 4):
+            raise ResourceError('Assistant concurrency must be 1, 2 or 4.')
+        if not isinstance(operations, (list, tuple)) or not 1 <= len(operations) <= 16 or not all(callable(x) for x in operations):
+            raise ResourceError('Use one to sixteen independent assistant operations.')
+        if not self.lock.acquire(blocking=False):
+            raise ResourceError('Another AI or GPU hand-off is in progress. Wait for it to finish.')
+        stopped = cancel_event if cancel_event is not None else threading.Event()
+        started = time.perf_counter()
+        try:
+            if stopped.is_set():
+                raise ResourceError('The assistant batch was cancelled before it started.')
+            prepared = self._prepare_ai(model)
+            exact_id = prepared['instance_id']
+            inventory = self.get_client().loaded_instances()
+            entry = next((x for x in inventory if x.get('id', x.get('instance_id')) == exact_id), None)
+            reported = (entry or {}).get('config', {}).get('parallel', 1)
+            supported = reported if type(reported) is int and reported >= 1 else 1
+            workers = min(concurrency, supported, len(operations))
+            self.stage = f'AI is working · {workers} concurrent request' + ('s' if workers != 1 else '')
+            def execute(operation):
+                if stopped.is_set():
+                    raise ResourceError('The assistant batch was cancelled.')
+                return operation(exact_id, stopped)
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='h3-assistant') as pool:
+                futures = [pool.submit(execute, operation) for operation in operations]
+                results = [None] * len(futures)
+                failure = None
+                by_future = {future: index for index, future in enumerate(futures)}
+                for future in as_completed(futures):
+                    try:
+                        results[by_future[future]] = future.result()
+                    except Exception as exc:
+                        stopped.set()
+                        failure = failure or exc
+                if failure is not None:
+                    raise failure
+            if stopped.is_set():
+                raise ResourceError('The assistant batch was cancelled; its results were not applied.')
+            self.last_batch = {'requested_concurrency': concurrency, 'actual_concurrency': workers,
+                               'reported_parallel': supported, 'requests': len(operations),
+                               'elapsed_seconds': time.perf_counter() - started, 'instance_id': exact_id}
+            self.stage, self.last_error = 'AI ready', None
+            return results
+        except Exception as exc:
+            self.stage, self.last_error = 'needs attention', str(exc)
             raise
         finally:
             self.lock.release()

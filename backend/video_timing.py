@@ -3,8 +3,9 @@ import math
 
 
 def frame_budget(duration, settings):
-    if type(duration) not in (int, float) or not math.isfinite(duration) or int(duration) != duration or not 4 <= duration <= 15:
-        raise ValueError('Choose a whole clip length from 4 to 15 seconds.')
+    minimum = 3 if settings.get('experimental_preview') is True else 4
+    if type(duration) not in (int, float) or not math.isfinite(duration) or int(duration) != duration or not minimum <= duration <= 15:
+        raise ValueError(f'Choose a whole clip length from {minimum} to 15 seconds. Three-second clips require experimental preview.')
     basis = settings.get('duration_basis', 'total')
     if basis not in ('total', 'new_footage'):
         raise ValueError('Unknown video duration basis.')

@@ -2,6 +2,7 @@ import { newShot, retime, uid } from "./model";
 import type { Asset, Project, Subject } from "./model";
 import { ensurePromptTags } from "./tags";
 import { matchRecipeLoraToMode } from "./recipeLoras";
+import { pruneSceneActors } from "./sceneContinuityState";
 
 type Person = Subject & {
   simple_person?: boolean;
@@ -93,6 +94,7 @@ function pruneAutomatic(p: Project): void {
     shot.offscreen_subject_ids = shot.offscreen_subject_ids.filter(
       (id) => !removed.has(id),
     );
+    pruneSceneActors(p, shot.id);
   }
 }
 
@@ -481,6 +483,7 @@ export function simpleInstructions(p: Project): string {
       ? 'Use the shortest concrete scene directions that retain every requested action, reference and exact line.'
       : 'Stay close to the user’s meaning. Clarify their idea without inventing new actions, characters, dialogue or extra camera moves.');
   lines.push('Keep user-selected camera settings and cuts exactly as supplied in director_locks. An @tag is a named project reference; retain it as written when needed. Never invent a tag.');
+  lines.push('Keep authored scene_contract directions exactly: actor start, action or hold, ending, object identity and counts, environment and background activity. Keep each scene action to one coherent beat; use structured scene continuity for detailed staging rather than compressing away constraints. Only physically visible people belong in scene_contract.actors.');
   if(p.simple?.continuation) lines.push('This is a new continuation clip. Start from the previous ending, develop only the next requested action, and do not replay earlier dialogue or actions. Use local times starting at zero. Continuation context: '+JSON.stringify(p.simple.continuation));
   for (const person of people) {
     const action = p.simple?.person_actions?.[person.id];

@@ -17,4 +17,6 @@ External runtime projects:
 
 Model filenames and project names identify compatible configurations. They are not grants to redistribute a checkpoint. Consult the original model card and the base model's license before using or distributing models or outputs. Reference-photo and demonstration-media rights are separate from source-code rights; review the accompanying example provenance before reusing them.
 
-The repository owner has not yet selected a license for the original application source. No open-source license grant is implied by this notice or by public source availability.
+Original application code is licensed under the MIT license in LICENSE. This grant does not relicense the separately installed runtimes, models, dependencies or demonstration media.
+
+Optional local transcription uses faster-whisper (MIT) and its separately installed CTranslate2/ONNX dependencies. See requirements-audio.txt and AUDIO_SETUP.md. Speech model weights are downloaded separately and retain their own terms.

@@ -33,6 +33,7 @@ RESOLUTIONS = {
     '0.3': (736, 416), '0.5': (960, 544),
     '0.7': (1152, 640), '1.0': (1344, 768),
 }
+EXPERIMENTAL_RESOLUTIONS = {'0.2': (608, 320)}
 MODE_LABELS = {'ref2va': 'Reference photos', 'i2va': 'First frame only',
                'fl2va': 'First + last frame', 'l2va': 'Last frame only', 't2va': 'Text only'}
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
@@ -50,6 +51,9 @@ def transfer_options():
         'steps': [4, 8, 16], 'aspect_ratios': ['16:9', '9:16', '1:1', '4:3', '3:4'],
         'modes': [{'value': key, 'label': label} for key, label in MODE_LABELS.items()],
         'min_duration': 4, 'max_duration': 15, 'fps': 24,
+        'experimental_min_duration': 3,
+        'experimental_resolutions': [{'value': key, 'label': f'{key} MP · experimental', 'width': w, 'height': h}
+                                    for key, (w, h) in EXPERIMENTAL_RESOLUTIONS.items()],
         'text_encoder': HERETIC,
         'default_loras': {mode: [{'name': REF_LORA if mode == 'ref2va' else FL_LORA, 'strength': 1.0, 'enabled': True}]
                           for mode in MODE_LABELS},
@@ -63,16 +67,18 @@ def _settings(project, settings):
     if mode not in MODE_LABELS:
         raise TransferError('Choose a supported H3 mode before sending to ComfyUI.')
     duration = project.get('duration')
-    if type(duration) not in (int, float) or not math.isfinite(duration) or int(duration) != duration or not 4 <= duration <= 15:
+    minimum = 3 if settings.get('experimental_preview') is True else 4
+    if type(duration) not in (int, float) or not math.isfinite(duration) or int(duration) != duration or not minimum <= duration <= 15:
         raise TransferError('Each H3 clip must be 4–15 whole seconds. Continue with another clip for a longer film.')
     resolution = str(settings.get('resolution', '0.3'))
     resolution = '1.0' if resolution == '1' else resolution
-    if resolution not in RESOLUTIONS:
+    resolutions = {**RESOLUTIONS, **(EXPERIMENTAL_RESOLUTIONS if settings.get('experimental_preview') is True else {})}
+    if resolution not in resolutions:
         raise TransferError('Choose 0.3, 0.5, 0.7 or 1.0 MP for the ComfyUI output.')
     aspect = settings.get('aspect_ratio', project.get('aspect_ratio', '16:9'))
     if aspect not in transfer_options()['aspect_ratios']:
         raise TransferError('Choose landscape, portrait, square, 4:3 or 3:4 for the output shape.')
-    width, height = RESOLUTIONS[resolution]
+    width, height = resolutions[resolution]
     if aspect == '9:16':
         width, height = height, width
     elif aspect != '16:9':
@@ -106,7 +112,8 @@ def _settings(project, settings):
             'lora': REF_LORA if mode == 'ref2va' else FL_LORA,
             'lora_training_steps': 8 if mode == 'ref2va' else 4,
             'shift_video': 12.0 if mode == 'ref2va' else 6.0, 'shift_audio': 3.0,
-            'attention': 'H3 SLA · Kitchen · 85% sparsity', 'reference_image_size': 'match'}
+            'attention': 'H3 SLA · Kitchen · 85% sparsity', 'reference_image_size': 'match',
+            'experimental_preview': resolution in EXPERIMENTAL_RESOLUTIONS or duration < 4}
 
 
 def _active_images(project, mode):
@@ -114,15 +121,18 @@ def _active_images(project, mode):
     if not isinstance(assets, list) or any(not isinstance(a, dict) for a in assets):
         raise TransferError('The photo list is invalid. Reopen the saved project and try again.')
     active = [a for a in assets if a.get('enabled', True) and a.get('role') != 'context']
-    if any(a.get('media_type') != 'image' for a in active):
-        raise TransferError('Direct ComfyUI transfer currently supports photos. Set video/audio references to Prompt inspiration only, or use an existing Comfy workflow for those inputs.')
     ids = [a.get('id') for a in active]
     if any(not isinstance(key, str) or not key for key in ids) or len(ids) != len(set(ids)):
         raise TransferError('Each active photo needs a unique library ID. Add the affected photo again.')
     if mode == 'ref2va':
-        if not 1 <= len(active) <= 9 or any(a.get('role') != 'reference_image' for a in active):
-            raise TransferError('Reference photos needs 1–9 reference images. Put other photos in Prompt inspiration only.')
-        return active
+        roles = {'reference_image': ('image', 9), 'reference_video': ('video', 3), 'reference_audio': ('audio', 3)}
+        if not 1 <= len(active) <= 12 or any(a.get('role') not in roles or a.get('media_type') != roles[a['role']][0] for a in active):
+            raise TransferError('Reference mode needs 1–12 correctly assigned images, videos or audio files.')
+        if any(sum(a.get('role') == role for a in active) > limit for role, (_, limit) in roles.items()):
+            raise TransferError('Reference mode supports at most 9 images, 3 videos and 3 standalone audio files.')
+        return [a for role in roles for a in active if a['role'] == role]
+    if any(a.get('media_type') != 'image' for a in active):
+        raise TransferError('Audio and video conditioning require Reference mode on the installed native H3 route.')
     needed = {'i2va': ['first_frame'], 'fl2va': ['first_frame', 'last_frame'],
               'l2va': ['last_frame'], 't2va': []}[mode]
     if sorted(a.get('role', '') for a in active) != sorted(needed):
@@ -213,6 +223,16 @@ def _read_image(asset, resolver):
         raise TransferError(f'The photo {asset.get("name", "Reference")} changed in the library. Reopen or replace it before sending.')
     return {'asset': asset, 'data': data, 'mime': mime, 'extension': ext,
             'sha256': digest, 'dimensions': dimensions}
+
+
+def _read_reference(asset, resolver):
+    if asset.get('media_type') == 'image':
+        return _read_image(asset, resolver)
+    from .audio_tools import AudioToolError, prepare_reference
+    try:
+        return prepare_reference(resolver(asset), asset)
+    except (AudioToolError, OSError, ValueError) as exc:
+        raise TransferError(str(exc)) from exc
 
 
 def _template(mode, template_dir=None):
@@ -350,7 +370,7 @@ def _validate_graph(graph, schema, image_names):
                 continue
             choices = [v['key'] if isinstance(v, dict) else v for v in _choices(spec)]
             if dtype in ('COMBO', 'COMFY_DYNAMICCOMBO_V3') and value not in choices:
-                if not (kind == 'LoadImage' and name == 'image' and value in image_names):
+                if not ((kind, name) in (('LoadImage', 'image'), ('LoadAudio', 'audio'), ('LoadVideo', 'file')) and value in image_names):
                     raise TransferError(f'ComfyUI does not have the required {name}: {value}. Select the H3 Desktop installation used for the tested workflows.')
             if not _widget(spec):
                 raise TransferError(f'{kind}.{name} must be connected to its source node.')
@@ -540,16 +560,19 @@ def build_transfer(project, compiled_prompt, settings, asset_path_resolver, *, c
     config = _settings(project, settings)
     loras = _lora_selections(settings, config['mode'])
     assets = _active_images(project, config['mode'])
-    images = [_read_image(asset, asset_path_resolver) for asset in assets]
+    images = [_read_reference(asset, asset_path_resolver) for asset in assets]
+    for role in ('reference_video', 'reference_audio'):
+        if sum(image.get('duration', 0) for image in images if image['asset']['role'] == role) > 15:
+            raise TransferError(f'Combined {role} ranges must fit within 15 seconds.')
     transfer_id = str(uuid.uuid4())
     subfolder = 'h3_prompt_studio/transfers/' + transfer_id
     for index, image in enumerate(images, 1):
-        image['filename'] = f'picture-{index:02d}-{image["sha256"][:12]}' + image['extension']
+        image['filename'] = f'{image["asset"]["media_type"]}-{index:02d}-{image["sha256"][:12]}' + image['extension']
         image['input_name'] = subfolder + '/' + image['filename']
     graph, template_name = _template(config['mode'], template_dir)
     graph = copy.deepcopy(graph)
     # No template/demo photos survive this transfer, including unused loaders.
-    for ident in [i for i, n in graph.items() if n['class_type'] == 'LoadImage']:
+    for ident in [i for i, n in graph.items() if n['class_type'] in ('LoadImage', 'LoadAudio', 'LoadVideo', 'GetVideoComponents')]:
         del graph[ident]
     conditioning = [(i, n) for i, n in graph.items() if n['class_type'] in ('MiniMaxH3ReferenceToVideo', 'MiniMaxH3ImageToVideo')]
     if len(conditioning) != 1:
@@ -564,20 +587,43 @@ def build_transfer(project, compiled_prompt, settings, asset_path_resolver, *, c
         cond['inputs']['ref_image_size'] = 'match'
     next_id = max(int(i) for i in graph) + 1
     reference_map = []
-    for index, image in enumerate(images):
-        ident = str(next_id + index)
+    counts = {'image': 0, 'video': 0, 'audio': 0}
+    audio_ordinal = 0
+    for image in images:
+        ident = str(next_id)
+        next_id += 1
         asset = image['asset']
-        label = f'<Picture {index + 1}> · {asset.get("name", "Photo")}'
+        kind = asset['media_type']
+        index = counts[kind]
+        counts[kind] += 1
+        if kind == 'audio':
+            audio_ordinal += 1
+        token = f'<{dict(image="Picture", video="Video", audio="Audio")[kind]} {audio_ordinal if kind == "audio" else index + 1}>'
+        label = token + ' · ' + asset.get('name', 'Reference')
         if asset.get('prompt_tag'):
             label += ' · @' + asset['prompt_tag']
-        graph[ident] = {'class_type': 'LoadImage', 'inputs': {'image': image['input_name']},
+        loader, field = {'image': ('LoadImage', 'image'), 'audio': ('LoadAudio', 'audio'), 'video': ('LoadVideo', 'file')}[kind]
+        graph[ident] = {'class_type': loader, 'inputs': {field: image['input_name']},
                         '_meta': {'title': label, 'benchmark_group': 'Inputs'}}
-        input_slot = f'ref_images.ref_image_{index}' if config['mode'] == 'ref2va' else asset['role']
-        cond['inputs'][input_slot] = [ident, 0]
+        source_id, source_port = ident, 0
+        if kind == 'video':
+            source_id = str(next_id)
+            next_id += 1
+            graph[source_id] = {'class_type': 'GetVideoComponents', 'inputs': {'video': [ident, 0]},
+                                '_meta': {'title': label + ' · frames and selected soundtrack', 'benchmark_group': 'Inputs'}}
+        input_slot = f'ref_{kind}s.ref_{kind}_{index}' if config['mode'] == 'ref2va' else asset['role']
+        cond['inputs'][input_slot] = [source_id, source_port]
+        if kind == 'video' and image.get('audio_enabled'):
+            audio_ordinal += 1
+            cond['inputs'][f'ref_video_audios.ref_video_audio_{index}'] = [source_id, 1]
         reference_map.append({'asset_id': asset['id'], 'name': asset.get('name', ''), 'tag': asset.get('prompt_tag', ''),
-                              'token': f'<Picture {index + 1}>', 'role': asset['role'], 'semantic_role': asset.get('semantic_role', 'other'),
-                              'input_slot': input_slot, 'node_id': ident, 'comfy_image': image['input_name'],
-                              'sha256': image['sha256'], 'bytes': len(image['data']), 'dimensions': image['dimensions']})
+                              'token': token, 'role': asset['role'], 'media_type': kind, 'semantic_role': asset.get('semantic_role', 'other'),
+                              'input_slot': input_slot, 'node_id': source_id, 'output_port': source_port, 'loader_node_id': ident,
+                              'comfy_image': image['input_name'] if kind == 'image' else None, 'comfy_file': image['input_name'],
+                              'sha256': image['sha256'], 'source_sha256': image.get('source_sha256', image['sha256']),
+                              'bytes': len(image['data']), 'dimensions': image['dimensions'],
+                              **{key: image[key] for key in ('duration', 'clip_start_seconds', 'clip_end_seconds', 'fps', 'audio_enabled') if key in image},
+                              **({'soundtrack_token': f'<Audio {audio_ordinal}>'} if kind == 'video' and image.get('audio_enabled') else {})})
     title_slug = re.sub(r'[^a-zA-Z0-9_-]+', '_', project.get('title', 'film')).strip('_')[:60] or 'film'
     prefix = f'h3_prompt_studio/{title_slug}/{transfer_id[:8]}'
     for node in graph.values():
@@ -612,10 +658,14 @@ def build_transfer(project, compiled_prompt, settings, asset_path_resolver, *, c
             image_target_id = media_metadata.get('mmh3', {}).get('reference_packet_node_id')
         image_inputs = graph.get(image_target_id, {}).get('inputs', {})
         for reference in reference_map:
-            sockets = [name for name, value in image_inputs.items() if value == [reference['node_id'], 0]]
+            link_id = reference['node_id']
+            if cond_id not in graph and reference['media_type'] == 'video':
+                link_id = reference['loader_node_id']
+            sockets = [name for name, value in image_inputs.items() if value == [link_id, reference['output_port']]]
             if len(sockets) != 1:
                 raise TransferError('The final workflow image connections could not be verified. No images were uploaded.')
             reference['input_slot'] = sockets[0]
+            reference['node_id'] = link_id
             reference['conditioning_input_node_id'] = image_target_id
         _materialize_ui_defaults(graph, schema)
         # All types/models/settings/links are checked before the first upload.
@@ -648,7 +698,8 @@ def build_transfer(project, compiled_prompt, settings, asset_path_resolver, *, c
     manifest = {**{key: value for key, value in config.items() if not key.startswith('_')}, 'transfer_id': transfer_id, 'project_id': project.get('id'),
                 'template': template_name, 'comfy_url': base, 'conditioning_node_id': cond_id,
                 'conditioning_input_node_id': image_target_id,
-                'text_encoder': HERETIC, 'images': reference_map, 'output_prefix': prefix,
+                'text_encoder': HERETIC, 'images': [r for r in reference_map if r['media_type'] == 'image'],
+                'references': reference_map, 'media_bytes_verified': True, 'output_prefix': prefix,
                 'prompt_sha256': hashlib.sha256(compiled_prompt.encode('utf-8')).hexdigest(),
                 'image_bytes_verified': True, 'queued': False,
                 'duration_note': f'{config["duration"]}s requested → {config["frames"]} frames / {config["actual_duration"]:.3f}s at 24 fps on the H3 frame grid.',
