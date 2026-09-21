@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import GameStudio, {
   GamePlanEditor,
   gameMemoryText,
+  gameTranscript,
   gameProjectWithUploads,
   gameReferenceIssues,
   gameReferenceOwner,
@@ -171,6 +172,35 @@ beforeEach(() => {
 });
 
 describe("separate Game screen", () => {
+  it("makes saved scenes and refresh reachable without entering history", () => {
+    const value = savedStory();
+    value.jobs = value.clips = [video("latest")];
+    value.turns = value.turns.slice(-1);
+    vi.mocked(useStorySession).mockReturnValue(session(value));
+    const html = render();
+    expect(html).toMatch(/<nav class="game-view-tabs"[^>]*>[\s\S]*?Scenes <span>1<\/span>[\s\S]*?<\/nav>/);
+    expect(html).toContain('aria-label="Refresh saved game"');
+    expect(html).toContain("Game saved locally");
+    expect(html).toContain('aria-label="Saved takes"');
+    // Older saved runs may have a playable URL without the newer download_url field.
+    expect(html).toMatch(/<a href="\/api\/videos\/latest\/scene" download="">Save scene<\/a>/);
+  });
+  it("exports a readable transcript without presenting a failed plan as an observed result", () => {
+    const value = savedStory();
+    value.turns[0].observation = { observed_state: "The envelope remains sealed." };
+    value.turns[1].status = "failed";
+    value.turns[1].error = "The renderer disconnected.";
+    value.turns[1].plan = { ...plan, action: "The envelope opens." };
+    const text = gameTranscript(value);
+    expect(text).toContain("You play: Arin");
+    expect(text).toContain("Your move: I open the note.");
+    expect(text).toContain("Elira: Who sent it?");
+    expect(text).toContain("Planned action: The envelope opens.");
+    expect(text).toContain("Observed result: The envelope remains sealed.");
+    expect(text).not.toContain("Observed result: The envelope opens.");
+    expect(text).toContain("Issue: The renderer disconnected.");
+    expect(text).toContain("Current story memory");
+  });
   it.each([undefined, null, {}, { observed_state: "" }, { observed_state: "  " }, { observed_state: 42 }])("keeps visible-result acceptance disabled without a usable inspection: %j", (observation) => {
     const value = savedStory();
     value.turns.push({ id: "inspection", request_id: "inspection-request", status: "inspection_failed", message: "Open the note.", created_at: 3, plan, observation });

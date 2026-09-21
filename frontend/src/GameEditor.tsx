@@ -12,13 +12,14 @@ import { PIXEL_STYLE } from "./storyTypes";
 import { GameImageSettings } from "./GameImageSettings";
 
 type Props = { value: StoryConfiguration; onChange: (next: StoryConfiguration) => void; onSave: () => void; onClose: () => void; onStopApply?: () => void;
-  dirty: boolean; saving: boolean; busy: boolean; onUploadFiles?: (files: File[]) => Promise<Asset[]>; modelPicker?: ReactNode; generators: ImageGeneratorModel[]; generatorsLoading?: boolean; generatorsChecked?: boolean; generatorErrors?: string[]; onRefreshGenerators?: () => void; initialTab?: string };
+  dirty: boolean; saving: boolean; busy: boolean; setup?: boolean; onUploadFiles?: (files: File[]) => Promise<Asset[]>; modelPicker?: ReactNode; generators: ImageGeneratorModel[]; generatorsLoading?: boolean; generatorsChecked?: boolean; generatorErrors?: string[]; onRefreshGenerators?: () => void; initialTab?: string };
 const tabs = [["cast", "Characters"], ["photos", "Photos & sound"], ["world", "World & behavior"], ["scene", "Next scene"], ["render", "Rendering"]];
-export default function GameEditor({ value, onChange, onSave, onClose, onStopApply, dirty, saving, busy, onUploadFiles, modelPicker, generators, generatorsLoading, generatorsChecked, generatorErrors, onRefreshGenerators, initialTab }: Props) {
+export default function GameEditor({ value, onChange, onSave, onClose, onStopApply, dirty, saving, busy, setup, onUploadFiles, modelPicker, generators, generatorsLoading, generatorsChecked, generatorErrors, onRefreshGenerators, initialTab }: Props) {
   const [tab, setTab] = useState(initialTab || "cast"), [error, setError] = useState(""), [uploading, setUploading] = useState(false);
   const [undo, setUndo] = useState<StoryConfiguration | null>(null), [catalog, setCatalog] = useState<any>(null);
   const [transcribing, setTranscribing] = useState("");
   const input = useRef<HTMLInputElement>(null), replacement = useRef(""), close = useRef<HTMLButtonElement>(null);
+  const chooseFiles = (replaceId = "") => { replacement.current = replaceId; if (input.current) { input.current.multiple = !replaceId; input.current.click(); } };
   const latest = useRef(value); latest.current = value;
   useEffect(() => { close.current?.focus(); }, []);
   useEffect(() => { if (value.player_name.trim() && !value.world.characters.some(c => c.id === value.player_character_id)) onChange(ensurePlayer(value)); }, [value.player_name, value.player_character_id]);
@@ -50,13 +51,17 @@ export default function GameEditor({ value, onChange, onSave, onClose, onStopApp
   const labelText = (label: string, val: string, setter: (text: string) => void, rows = 3) => <label>{label}<textarea rows={rows} value={val} onChange={e => setter(e.target.value)} /></label>;
   return <aside className="game-editor" aria-label="Game editor" onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
     <header><div><span className="game-eyebrow">YOUR GAME, YOUR DIRECTION</span><h2>Edit game</h2></div><button ref={close} className="icon-button" aria-label="Close game editor" onClick={onClose}><X size={20}/></button></header>
-    <nav className="game-editor-tabs" aria-label="Game editor sections">{tabs.map(([id, title]) => <button key={id} aria-pressed={tab === id} onClick={() => setTab(id)}>{title}</button>)}</nav>
-    <div className="game-editor-scroll">
+    <nav className="game-editor-tabs" role="tablist" aria-label="Game editor sections">{tabs.map(([id, title], index) => <button key={id} id={`game-editor-tab-${id}`} role="tab" aria-selected={tab === id} aria-controls="game-editor-panel" tabIndex={tab === id ? 0 : -1} onClick={() => setTab(id)} onKeyDown={e => {
+      const target = e.key === "ArrowRight" ? (index + 1) % tabs.length : e.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : -1;
+      if (target < 0) return; e.preventDefault(); setTab(tabs[target][0]); document.getElementById(`game-editor-tab-${tabs[target][0]}`)?.focus();
+    }}>{title}</button>)}</nav>
+    <div className="game-editor-scroll" id="game-editor-panel" role="tabpanel" aria-labelledby={`game-editor-tab-${tab}`} tabIndex={0}>
       {busy && <p className="game-editor-notice">This turn keeps its saved settings. Your changes apply to the next turn.</p>}
       {error && <p role="alert" className="game-alert">{error}</p>}
       {undo && <button className="quiet" onClick={() => { onChange(undo); setUndo(null); }}><RotateCcw size={16}/> Undo last removal or replacement</button>}
       {tab === "cast" && <section>
         <h3>Who is in your story?</h3><p className="game-help">You control one character. The assistant plays the others using their own behavior and knowledge.</p>
+        {!value.world.characters.length && <p className="game-empty-note">Add a character below, give them a name, then choose them under “I play”. Photos are optional.</p>}
         <label>I play<select value={value.player_character_id} onChange={e => change(c => { c.player_character_id = e.target.value; c.player_name = c.world.characters.find(a => a.id === e.target.value)?.name || ""; c.world.characters.forEach(a => { a.control = a.id === e.target.value ? "player" : "npc"; }); })}><option value="">Choose your character…</option>{value.world.characters.map(c => <option key={c.id} value={c.id}>{c.name || "Unnamed character"}</option>)}</select></label>
         {value.world.characters.map(char => <details key={char.id} className="game-editor-card" open><summary>{char.name || "New character"}{char.id === value.player_character_id ? " · You" : " · AI role"}</summary>
           <label>Name<input value={char.name} onChange={e => setChar(char.id, { name: e.target.value })}/></label>
@@ -73,7 +78,7 @@ export default function GameEditor({ value, onChange, onSave, onClose, onStopApp
         <button onClick={() => change(c => { const subject = { id: uid(), name: "", description: "", asset_ids: [] }; c.project.subjects.push(subject); c.world.characters.push(characterFromSubject(subject)); })}><Plus size={16}/> Add character</button>
       </section>}
       {tab === "photos" && <section>
-        <div className="game-section-title"><h3>Reusable photos & sound</h3><button disabled={uploading || !onUploadFiles} onClick={() => { replacement.current = ""; input.current?.click(); }}><ImagePlus size={16}/>{uploading ? "Uploading…" : "Add media"}</button></div>
+        <div className="game-section-title"><h3>Reusable photos & sound</h3><button disabled={uploading || !onUploadFiles} onClick={() => chooseFiles()}><ImagePlus size={16}/>{uploading ? "Uploading…" : "Add media"}</button></div>
         <input ref={input} type="file" accept="image/*,audio/*,video/*" multiple={!replacement.current} hidden onChange={e => void upload(e.target.files)}/>
         <p className="game-help">New uploads start in your library. Assign their purpose, then connect only what the next scene needs. X disconnects a reference; the original stays saved.</p>
         {!value.project.assets.length && <p className="game-empty-note">Add a face, outfit, location, object, style image, or sound.</p>}
@@ -97,7 +102,7 @@ export default function GameEditor({ value, onChange, onSave, onClose, onStopApp
           </>}
           <label>Stable tag<input value={asset.prompt_tag || ""} onChange={e => onChange(assignGameAsset(value, asset.id, { prompt_tag: e.target.value.replace(/^@/, "").toLowerCase().replace(/[_ ]/g, "-") }))}/><small>Use @tag in your direction. Letters, numbers and hyphens, such as observatory-key.</small></label>
           {labelText(asset.media_type === "audio" ? "Description / exact transcript" : "What should the assistant retain?", asset.description || "", text => onChange(assignGameAsset(value, asset.id, { description: text })), 2)}
-          <div className="game-button-row"><button className="quiet" disabled={uploading || !onUploadFiles} onClick={() => { replacement.current = asset.id; input.current?.click(); }}>Replace file</button><button className="quiet" onClick={() => remove(c => { c.project.assets = c.project.assets.filter(a => a.id !== asset.id); c.project.subjects.forEach(s => { s.asset_ids = s.asset_ids.filter(id => id !== asset.id); }); for (const item of [...c.world.characters, ...c.world.locations, ...c.world.entities]) item.asset_ids = item.asset_ids.filter(id => id !== asset.id); c.project.soundtrack_tracks = (c.project.soundtrack_tracks || []).filter((track: any) => track.asset_id !== asset.id); })}>Remove from library</button></div>
+          <div className="game-button-row"><button className="quiet" disabled={uploading || !onUploadFiles} onClick={() => chooseFiles(asset.id)}>Replace file</button><button className="quiet" onClick={() => remove(c => { c.project.assets = c.project.assets.filter(a => a.id !== asset.id); c.project.subjects.forEach(s => { s.asset_ids = s.asset_ids.filter(id => id !== asset.id); }); for (const item of [...c.world.characters, ...c.world.locations, ...c.world.entities]) item.asset_ids = item.asset_ids.filter(id => id !== asset.id); c.project.soundtrack_tracks = (c.project.soundtrack_tracks || []).filter((track: any) => track.asset_id !== asset.id); })}>Remove from library</button></div>
         </article>)}
       </section>}
       {tab === "world" && <section>
@@ -150,6 +155,6 @@ export default function GameEditor({ value, onChange, onSave, onClose, onStopApp
         <GameImageSettings settings={value.settings} generators={generators} loading={generatorsLoading} checked={generatorsChecked} errors={generatorErrors} onRefresh={onRefreshGenerators} onChange={setSetting}/>
       </section>}
     </div>
-    <footer><span role="status">{saving ? "Saving…" : dirty ? "Unsaved edits · also saved before Play" : "All changes saved"}</span><button className="primary" disabled={saving || uploading} onClick={onSave}><Check size={16}/> Save changes</button>{busy && dirty && onStopApply && <button disabled={saving || uploading} onClick={onStopApply}>Stop current turn & apply changes</button>}</footer>
+    <footer><span role="status">{saving ? "Saving…" : setup ? "Your setup is kept as you edit. Start the game when you are ready." : dirty ? "Unsaved edits · also saved before Play" : "All changes saved"}</span><button className="quiet" onClick={onClose}>Close editor</button><button className="primary" disabled={saving || uploading || (!setup && !dirty)} onClick={onSave}><Check size={16}/> {setup ? "Use this setup" : "Save changes"}</button>{busy && dirty && onStopApply && <button disabled={saving || uploading} onClick={onStopApply}>Stop current turn & apply changes</button>}</footer>
   </aside>;
 }

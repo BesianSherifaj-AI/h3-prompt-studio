@@ -110,6 +110,9 @@ def test_new_studio_prop_with_a_different_identity_remains_possible():
 
 def test_production_fast_director_receives_current_object_registry(rig):
     project, world = scene()
+    # This test starts with an established player; appearance setup deliberately
+    # uses creative planning instead of the mechanics/director fast path.
+    world['characters'][0]['description'] = 'Short dark hair and a blue coat.'
     world['entities'][0]['state'] = {}  # No custom mechanics condition on this fast target.
     session = rig.manager.create({'request_id': uid(), 'project': project, 'world': world, 'mode': 'game',
         'player_name': 'Alex', 'player_character_id': 'player', 'settings': {'duration': 3, 'fast_actions': True}})

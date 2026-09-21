@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.0 — Separate Studio and Game workspaces
+
+- Added direct `/studio` and `/game` navigation with browser Back and Forward support and independent workspace selections.
+- Separated Studio projects from Game sessions and their resume choices. Switching to a game preserves the Studio draft; an explicit **Play from here** action still starts a game from a Studio ending.
+- Added a searchable Studio project library with create, open, duplicate, import and export actions, and save status that reflects the latest save request.
+- Added Game **Scenes** navigation for the video player, accepted story playback, take history and film export, including on narrow screens.
+- Kept shared connection settings and help accessible from both workspaces, with clearer labels and accessible navigation states.
+- Added a clear saved-video playback error with **Retry playback** and **Open Connections**, and exposed failures from video actions instead of leaving controls without feedback.
+- Loaded Game as a separate bundle on first use while retaining its state when switching back to Studio.
+- Preserved validated assistant context sizes from 1,024 to 262,144 tokens, with explicit larger choices in the GUI. Stage output ceilings remain bounded; increasing input context does not increase the response budget.
+- See [workspace validation](docs/WORKSPACE_SEPARATION_VALIDATION.md) for release-source test counts, browser coverage and the boundary between mocked checks and live GPU validation.
+
 ## 1.4.1 — Remember the player from the start
 
 - Establish missing player appearance during the existing opening planning call, before the first render. Accepted openings save that same description for later movement. Authored descriptions and explicitly assigned character photos remain authoritative; imported scenes are not arbitrarily relabelled.

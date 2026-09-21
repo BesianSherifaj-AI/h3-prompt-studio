@@ -9,7 +9,8 @@ const require = createRequire(path.join(root, 'frontend/package.json'));
 const { chromium, expect } = require('@playwright/test');
 const playerPicker = process.argv.includes('--player-picker');
 const playerPickerRecovery = process.argv.includes('--player-picker-recovery');
-const sceneRecovery = process.argv.includes('--scene-recovery') || playerPicker || playerPickerRecovery;
+const workspaceScenes = process.argv.includes('--workspace-scenes');
+const sceneRecovery = process.argv.includes('--scene-recovery') || playerPicker || playerPickerRecovery || workspaceScenes;
 const project = { schema_version: 1, id: 'smoke-project', title: 'Pixel street', mode: 't2va', duration: 3,
   aspect_ratio: '16:9', profile: 'director', authoring_mode: 'assisted', story: { text: 'I am on a pixel art city street.', locked: false },
   style: {}, assets: [], subjects: [{ id: 'player', name: 'Alex', description: 'Pixel adventurer', asset_ids: [] }],
@@ -27,6 +28,7 @@ const story = { id: '11111111-1111-4111-8111-111111111111', title: 'Pixel street
     characters: [person('player', 'Alex'), person('mara', 'Mara'), person('guard', 'Fallen guard', { defeated: true }), { ...person('remote', 'Remote NPC'), location_id: 'alley' }],
     entities: [entity('key', 'Brass key', { holder_id: 'player' }), entity('coat', 'Blue coat', { worn_by_id: 'player' }), entity('coin', 'Silver coin'), entity('door', 'Oak door', { kind: 'door' })] } };
 const requests = [], errors = [], mutationPaths = [];
+let mediaReads = 0;
 let loseAcknowledgement = false;
 let generatorChecks = 0, generatorOffline = true;
 const sceneRequests = [];
@@ -37,6 +39,12 @@ if (sceneRecovery) {
   story.active_run_id = 'scene-old'; story.clips = [sceneVideo('scene-old')]; story.jobs = [...story.clips];
   story.turns = [{ id: 'opening', request_id: 'opening', status: 'succeeded', run_id: 'scene-old', message: 'Start on the street.', created_at: 1, video: story.clips[0], observation: { observed_state: 'People and shops line a pixel street.' } }];
   story.world = { ...story.world, current_location_id: null, locations: [], characters: [{ ...person('player', 'Alex'), description: '', location_id: null }], entities: [] };
+}
+if (workspaceScenes) {
+  sceneInspected = true;
+  const next = sceneVideo('scene-new');
+  story.clips.push(next); story.jobs = [...story.clips, sceneVideo('alternate')]; story.active_run_id = next.id;
+  story.turns.push({ id: 'second-scene', request_id: 'second-scene', status: 'succeeded', run_id: next.id, message: 'Inspect the square.', created_at: 2, video: next });
 }
 const failedMove = { id: 'legacy-failed', request_id: 'legacy-request', status: 'failed', branch_id: 'main', parent_run_id: 'scene-old', created_at: 2,
   message: 'I attempt to move forward a small distance, at slow speed. Show continuous movement.',
@@ -79,7 +87,7 @@ function catalog() {
 const server = createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url, 'http://localhost').pathname;
-    const relative = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
+    const relative = ['/', '/studio', '/game'].includes(pathname.replace(/\/$/, '') || '/') ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
     const filename = path.resolve(root, 'dist', relative);
     if (!filename.startsWith(path.join(root, 'dist') + path.sep)) throw new Error('Invalid path');
     const data = await readFile(filename);
@@ -92,7 +100,7 @@ const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1360, height: 980 } });
   page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(id => { localStorage.setItem('h3-game:selected-story', id); localStorage.setItem('h3-workspace-mode', 'game'); }, story.id);
+  await page.addInitScript(({ id, workspaceScenes }) => { if (!workspaceScenes) localStorage.setItem('h3-game:selected-story', id); localStorage.setItem('h3-workspace-mode', workspaceScenes ? 'studio' : 'game'); }, { id: story.id, workspaceScenes });
   if (playerPickerRecovery) await page.addInitScript(({ id, first, later }) => localStorage.setItem(`h3-game:move-queue:${id}`, JSON.stringify({ branch: 'main', paused: true, error: 'Old move failed.', items: [{ id: first.request_id, message: first.message, intent: first.intent, readyAt: 0, submitted: true }, later] })), { id: story.id, first: failedMove, later: laterMove });
   await page.route('**/api/**', async route => {
     const request = route.request(), pathname = new URL(request.url()).pathname.replace(/^\/api/, '');
@@ -149,11 +157,73 @@ try {
     if (pathname === '/compile') return json({ valid: true, prompt: 'Mock preview', issues: [], references: [], timeline: [] });
     if (pathname === '/projects') return json(request.method() === 'POST' ? request.postDataJSON() : []);
     if (pathname === '/video/runs') return json({ runs: [] });
+    if (pathname.startsWith('/mock-video/')) { mediaReads++; return route.fulfill({ status: 502, contentType: 'application/json', body: '{"detail":"ComfyUI is unavailable"}' }); }
     if (pathname.startsWith('/mock-ending/')) return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="608" height="320"><rect width="608" height="320" fill="#263c35"/><text x="28" y="55" fill="#fff" font-size="22">Synthetic saved ending fixture</text><rect x="100" y="130" width="75" height="130" fill="#9971d5"/><circle cx="138" cy="108" r="25" fill="#edc394"/></svg>' });
     return json({});
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/?game=${story.id}`);
-  if (playerPickerRecovery) {
+  if (workspaceScenes) {
+    const workspaceNav = page.getByRole('navigation', { name: 'Workspace mode' });
+    const views = page.getByRole('navigation', { name: 'Game views' });
+    await expect(workspaceNav.getByRole('link', { name: /Game/ })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByLabel('Saved game', { exact: true })).toHaveValue(story.id);
+    await views.getByRole('button', { name: /Scenes/ }).click();
+    await expect(page.getByRole('heading', { name: 'Your scenes & exports' })).toBeVisible();
+    await expect(page.getByText('This saved clip could not load.', { exact: true })).toBeVisible();
+    const readsBeforeRetry = mediaReads;
+    await page.getByRole('button', { name: 'Retry playback', exact: true }).click();
+    await expect.poll(() => mediaReads).toBeGreaterThan(readsBeforeRetry);
+    await expect(page.getByLabel('Game video')).toHaveAttribute('src', '/api/mock-video/scene-new/scene');
+    const takes = page.getByLabel('Saved takes');
+    await expect(takes).toBeVisible();
+    await expect(takes.getByRole('button')).toHaveCount(3);
+    await takes.getByRole('button').first().click();
+    await expect(page.getByLabel('Game video')).toHaveAttribute('src', '/api/mock-video/scene-old/scene');
+    await page.getByRole('button', { name: /Play whole story/ }).click();
+    await expect(page.getByRole('button', { name: 'Previous scene', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Next scene', exact: true }).click();
+    await expect(page.getByLabel('Game video')).toHaveAttribute('src', '/api/mock-video/scene-new/scene');
+    await expect(page.getByRole('button', { name: 'Next scene', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Previous scene', exact: true }).click();
+    await expect(page.getByRole('link', { name: 'Save whole film', exact: true })).toHaveAttribute('href', `/api/stories/${story.id}/video`);
+    const downloaded = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export transcript', exact: true }).click();
+    const download = await downloaded;
+    expect(await readFile(await download.path(), 'utf8')).toContain('Inspect the square.');
+    await mkdir(path.join(root, 'test-results'), { recursive: true });
+    await page.screenshot({ path: path.join(root, 'test-results/frontend-workspace-scenes-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(takes).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Save whole film', exact: true })).toBeVisible();
+    await expect(page.getByText('More tools', { exact: true })).toBeVisible();
+    await views.getByRole('button', { name: /History/ }).click();
+    await expect(page.getByLabel('Game video')).toBeHidden();
+    await page.getByRole('button', { name: 'Watch', exact: true }).first().click();
+    await expect(views.getByRole('button', { name: /Scenes/ })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('Game video')).toBeVisible();
+    await expect(page.getByLabel('Game video')).toHaveAttribute('src', '/api/mock-video/scene-old/scene');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: path.join(root, 'test-results/frontend-workspace-scenes-mobile.png'), fullPage: true });
+    await views.getByRole('button', { name: 'Play', exact: true }).click();
+    const visibleTarget = page.getByRole('button', { name: 'Person in purple · Left side of the street', exact: true });
+    await expect(visibleTarget).toBeVisible();
+    await expect(visibleTarget.locator('strong')).toBeVisible();
+    await workspaceNav.getByRole('link', { name: /Studio/ }).click();
+    await expect(page.locator('.simple-studio')).toBeVisible();
+    await expect(page.locator('.game-studio')).toBeHidden();
+    await workspaceNav.getByRole('link', { name: /Game/ }).click();
+    await expect(page.getByLabel('Saved game', { exact: true })).toHaveValue(story.id);
+    await page.goBack();
+    await expect(workspaceNav.getByRole('link', { name: /Studio/ })).toHaveAttribute('aria-current', 'page');
+    await page.goForward();
+    await expect(workspaceNav.getByRole('link', { name: /Game/ })).toHaveAttribute('aria-current', 'page');
+    await page.reload();
+    await expect(page.getByLabel('Saved game', { exact: true })).toHaveValue(story.id);
+    expect(requests).toHaveLength(0); expect(sceneRequests).toHaveLength(0);
+    expect(mutationPaths.filter(path => path.startsWith('/stories'))).toEqual([]);
+    expect(errors).toEqual([]);
+    console.log(JSON.stringify({ passed: true, scenario: 'workspace-scenes', legacyGameLinkRestored: true, filmNavigation: true, transcriptDownload: true, unavailableMediaRetry: true, mobileTargetNames: true, mobileHistoryWatch: true, browserNavigation: true, storyMutations: 0, pageErrors: errors }, null, 2));
+  } else if (playerPickerRecovery) {
     const dialog = page.getByRole('dialog', { name: 'Who are you playing?' });
     await page.getByRole('button', { name: 'Choose character & continue', exact: true }).click();
     await expect(dialog).toBeVisible();
@@ -297,7 +367,7 @@ try {
   await expect(page.getByLabel('Interact with')).toHaveValue('');
   if (requests.length) throw new Error('Opening a game submitted an unsolicited move.');
   await page.getByRole('button', { name: 'Game settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Rendering', exact: true }).click();
+  await page.getByRole('tab', { name: 'Rendering', exact: true }).click();
   await expect(page.getByLabel('Create extra reference images')).not.toBeChecked();
   await expect(page.getByRole('combobox', { name: 'Image generator', exact: true })).toHaveValue('saved-unavailable-model');
   await expect(page.getByRole('region', { name: 'Extra reference images' })).toContainText('does not confirm missing model files');
@@ -312,13 +382,13 @@ try {
   await page.getByLabel('Create extra reference images').check();
   await expect(page.getByLabel('Quick item and movement actions')).toBeChecked();
   await page.getByLabel('Quick item and movement actions').uncheck();
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await page.locator('.game-editor').getByRole('button', { name: 'Save changes', exact: true }).click();
   await expect.poll(() => story.settings.fast_actions).toBe(false);
   await expect.poll(() => story.settings.generate_references).toBe(true);
   expect(story.settings.image_model).toBe('saved-unavailable-model');
   await page.getByRole('button', { name: 'Close game editor', exact: true }).click();
   await page.getByRole('button', { name: 'Game settings', exact: true }).click();
-  await page.getByRole('button', { name: 'Rendering', exact: true }).click();
+  await page.getByRole('tab', { name: 'Rendering', exact: true }).click();
   await expect(page.getByLabel('Quick item and movement actions')).not.toBeChecked();
   await expect(page.getByLabel('Create extra reference images')).toBeChecked();
   await expect(page.getByRole('combobox', { name: 'Image generator', exact: true })).toHaveValue('saved-unavailable-model');

@@ -31,8 +31,16 @@ def shot(duration=5):
             'performance': '', 'final_state': '', 'visible_subject_ids': [], 'offscreen_subject_ids': [],
             'dialogue': [], 'sound': '', 'transition': 'continuous'}
 
-def new_project():
-    return {'schema_version': 1, 'id': uid(), 'title': 'Untitled film', 'mode': 'ref2va',
+def project_workspace(value):
+    if value not in ('studio', 'game'):
+        raise ValueError('Choose Studio or Game as the workspace.')
+    return value
+
+
+def new_project(workspace='studio'):
+    workspace = project_workspace(workspace)
+    return {'schema_version': 1, 'id': uid(), 'workspace': workspace,
+            'title': 'Untitled game' if workspace == 'game' else 'Untitled film', 'mode': 'ref2va',
             'duration': 5, 'aspect_ratio': '16:9', 'profile': 'director', 'authoring_mode': 'assisted',
             'story': {'text': '', 'locked': True},
             'style': {'genre': 'cinematic', 'vibe': '', 'lighting': '', 'color': '', 'notes': ''},
@@ -54,6 +62,8 @@ def check_project(project):
     if not isinstance(project, dict) or type(project.get('schema_version')) is not int or project['schema_version'] != 1:
         raise ValueError('This is not a version 1 H3 Prompt Studio project.')
     safe_id(project.get('id'))
+    if 'workspace' in project:
+        project_workspace(project['workspace'])
     try:
         encoded = json.dumps(project, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError, OverflowError, RecursionError) as exc:

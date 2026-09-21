@@ -16,7 +16,7 @@ function project(assets: Asset[]): Project {
     subjects: [], shots: [newShot(5)], soundscape: "", music: "", custom_instructions: "" };
 }
 
-function renderStudio(p: Project) {
+function renderStudio(p: Project, overrides: Partial<SimpleStudioProps> = {}) {
   const noop = () => {}, asyncNoop = async () => {};
   const props: SimpleStudioProps = { project: p, update: noop, checkpointUpdate: noop,
     onRestore: noop, onReplacePhoto: asyncNoop, onAddFiles: asyncNoop, onGenerate: noop,
@@ -25,7 +25,7 @@ function renderStudio(p: Project) {
     onAdvanced: noop, onProjects: noop, onNew: noop, onConnections: noop, onFiles: noop,
     onUndo: noop, canUndo: false, connectionOnline: false, onSendToComfy: noop,
     canReturn: false, onContinue: noop, comfyPanel:<div>Video fixture</div>, settingsPanel:<div>Render settings fixture</div> };
-  return renderToStaticMarkup(<SimpleStudio {...props} />);
+  return renderToStaticMarkup(<SimpleStudio {...props} {...overrides} />);
 }
 function renderCount(p: Project) {
   const html = renderStudio(p);
@@ -75,5 +75,19 @@ describe('Simple editor workspace', () => {
   });
   it('starts a project without photos on the Photos tab', () => {
     expect(renderStudio(project([]))).toContain('id="simple-tab-photos" type="button" role="tab" aria-selected="true"');
+  });
+});
+
+
+describe('Studio save feedback', () => {
+  it('reports failed saves and provides a recovery action instead of claiming success', () => {
+    const html=renderStudio(project([]), {savedStatus:'Not saved',onSaveProject:()=>{}});
+    expect(html).toContain('Not saved');expect(html).toContain('Retry save');
+    expect(html).not.toContain('Saved automatically');
+  });
+  it('exposes a text-first path for empty projects and disables save while saving', () => {
+    const html=renderStudio(project([]), {savedStatus:'Saving…',onSaveProject:()=>{}});
+    expect(html).toContain('Write your idea');
+    expect(html).toMatch(/disabled="">Save now/);
   });
 });

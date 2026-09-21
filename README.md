@@ -2,9 +2,9 @@
 
 A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
 
-Version **1.4.1** establishes your player's appearance before the first scene and remembers it during play. Older games with an unidentified player get a simple picture-based choice when you press Move; picking a person continues that move. Basic arrows prepare movement without language-model inference, starting from the current saved frame and using compatible saved destinations for returns. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
+Version **1.5.0** gives **Studio** and **Game** their own addresses, projects and navigation. Open `/studio` to direct videos or `/game` to play a saved story. Switch workspaces without replacing your Studio draft, use the browser's Back and Forward buttons, and find playback and film export in Game's **Scenes** view on desktop or mobile. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
 
-**[Game scene and movement guide](docs/GAME_SCENE_MOVEMENT.md)** · **[Scene continuity](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
+**[Game scene and movement guide](docs/GAME_SCENE_MOVEMENT.md)** · **[Scene continuity](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Workspace validation](docs/WORKSPACE_SEPARATION_VALIDATION.md)** · **[Scene validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
 
 The v1.3.0 [Coin Safety Inspector demonstration](demo/scene-continuity/README.md) exercises a seated bystander and a single prop across a continuous sequence. The demo record separates authored direction, generated video and visual review. The model can still make mistakes; prompt instructions are not a guarantee of physical consistency.
 
@@ -22,6 +22,9 @@ The showreel combines clearly labeled captures of the working app with real gene
 
 ## What you can do
 
+- Keep Studio projects separate from Game sessions, with independent resume choices and direct links to each workspace.
+- Search your Studio project library, duplicate a project, import a portable backup, or export your work with its reference images. Save status reports whether your latest changes were saved.
+- Recover unavailable saved videos with **Retry playback** and **Open Connections**. The player explains when the original ComfyUI server or video is unavailable.
 - Assign faces, clothes, props, places, palettes, and styles to named characters. Reorder or replace images while keeping their tags and assignments.
 - Write exact dialogue by speaker. Give each scene its own duration, framing, camera movement, transition, and ending.
 - Direct each visible character's starting pose, action or hold, and ending. Track important props by stable identity, quantity, appearance and placement. Opening the continuity editor and inventory requires no model call.
@@ -59,7 +62,7 @@ The application also uses ordinary Python and Node tooling on other platforms, b
 
 ## Use Studio
 
-1. Add photos and name each person. Use **Clothes → Worn by** and **Object → Starts with** to make ownership explicit.
+1. Open **Studio** at [localhost:8766/studio](http://127.0.0.1:8766/studio). Create a project or find one in the searchable project library. Add photos and name each person. Use **Clothes → Worn by** and **Object → Starts with** to make ownership explicit.
 2. Enter a short action. Use **Scenes & spoken words** to add cuts, camera choices, and exact speech.
 3. Select **Generate video**. The assistant prepares the prompt if needed, then H3 renders. Review the result in **Video**.
 4. Select **Try another take** for another version, or **Continue from this ending** for the next event. Choose an unchanged suggestion to render it, or write your own direction for the assistant to develop into actions and dialogue.
@@ -69,12 +72,14 @@ The 0.3 MP preset is 736 × 416 in landscape. Quick drafts use a compatible four
 
 ## Play a story in Game
 
-1. Open **Game**, enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. **Create extra reference images** is off by default; enable it when you want the assistant to request separate reference images. That option requires an available image generator and adds a generation step. Existing references remain usable with it off.
+1. Open **Game** at [localhost:8766/game](http://127.0.0.1:8766/game), resume a saved game or enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. **Create extra reference images** is off by default; enable it when you want the assistant to request separate reference images. That option requires an available image generator and adds a generation step. Existing references remain usable with it off.
 2. New games default to **2D pixel art / 0.2 MP / three seconds / eight steps**. Landscape is 608 × 320; a fresh clip has 73 frames (3.04 seconds). Change style, quality, duration and viewpoint freely in the editor. Existing games retain their saved settings. Turn on **Review before rendering** to inspect the response before rendering.
 3. Write a move such as `I look at the note and ask what it means.` Put exact spoken words in double quotes, for example `I say "Who sent this?"`. A response that changes quoted player speech is rejected before rendering.
 4. Your player is established during the opening and remembered. If an older game has no saved player appearance, pressing Move opens **Who are you playing?** with the current picture and automatically finds people. Pick one to continue, or describe your character instead. **In this frame** provides other visible targets; visible objects are separate from saved inventory.
 5. Basic directional arrows prepare movement directly from an accepted ending without a language-model call. Other item actions, dialogue, combat and situations governed by custom rules retain their appropriate planning path. Creative endings are inspected; basic movement endings are marked **not inspected**, with earlier positions shown as stale. Review the footage and refresh the scene inventory when needed.
-6. Watch **Latest scene** or **Whole story**, and save the active branch as a film. A reroll replaces the current take within that turn; it does not append the same event twice. Compatible saved views can guide a return to an earlier position without restoring old inventory or character state.
+6. Open **Scenes** to watch **Latest scene** or **Whole story**, inspect previous takes, and save the active branch as a film. This view is available on narrow screens too. A reroll replaces the current take within that turn; it does not append the same event twice. Compatible saved views can guide a return to an earlier position without restoring old inventory or character state.
+
+The workspace switcher and the browser's Back and Forward controls move between Studio and Game. Each workspace keeps its own selection. **Connections** and **Help** are shared, so service setup and usage guidance stay available from either workspace. Game's interface loads as a separate bundle when first opened; returning to Studio preserves the mounted game's state.
 
 The vision assistant distinguishes intended actions from what it sees in the final frame and records uncertainties. It cannot verify speech or lip sync from an image. Object ownership, handoffs and character consistency can still drift; review the video before building a long story on a mistaken result.
 
@@ -159,7 +164,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.4.1 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.5.0 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.

@@ -213,6 +213,15 @@ def test_mutations_require_session_token(server, headers):
     assert client.post("/api/projects/new", headers=headers).status_code == 403
 
 
+def test_settings_accept_high_context_length(server):
+    module, client, _ = server
+    response = client.post("/api/settings", headers=auth(module), json={"context_length": 262144})
+    assert response.status_code == 200
+    assert response.json()["context_length"] == 262144
+    response = client.post("/api/settings", headers=auth(module), json={"context_length": 100})
+    assert response.status_code == 400
+
+
 @pytest.mark.parametrize("headers", [{"Host": "evil.example"}, {"Origin": "https://evil.example"}, {"Origin": "http://127.0.0.1:9999"}])
 def test_host_and_origin_boundary(server, headers):
     module, client, _ = server

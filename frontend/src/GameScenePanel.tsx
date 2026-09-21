@@ -19,6 +19,9 @@ export function observedSceneText(story: Story, runId?: string) {
   const observation = turn?.observation as { observed_state?: unknown } | undefined;
   return typeof observation?.observed_state === "string" ? observation.observed_state : "";
 }
+export function sceneTargetName(target: SceneTarget): string {
+  return target.label?.trim() || target.description?.trim() || ({ person: "Visible person", door: "Visible door", object: "Visible object" }[target.kind] || "Visible target");
+}
 
 export function GameScenePanel({ story, viewedRunId, scene, loading, disabled, binding, inspecting, onAction, onBind, onInspect }: {
   story: Story; viewedRunId?: string; scene?: SceneCatalog; loading?: boolean; disabled: boolean;
@@ -44,15 +47,15 @@ export function GameScenePanel({ story, viewedRunId, scene, loading, disabled, b
     {current?.setting && <p>{current.setting}</p>}
     {loading && <p role="status">Reading saved scene details…</p>}
     {targets.length > 0 ? <>
-      <div className="game-scene-targets" aria-label="People and objects in the ending">{targets.map(item => <button type="button" key={item.id} aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
-        <strong>{item.label}{item.known_id === story.player_character_id ? " · You" : ""}</strong>
+      <div className="game-scene-targets" aria-label="People and objects in the ending">{targets.map(item => <button type="button" key={item.id} aria-label={`${sceneTargetName(item)}${item.known_id === story.player_character_id ? " · You" : ""} · ${item.position || "Position not established"}`} aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
+        <strong>{sceneTargetName(item)}{item.known_id === story.player_character_id ? " · You" : ""}</strong>
         <span>{stale ? "Previously: " : ""}{item.position || "Position not established"}</span>
         <small>{item.identity_status === "known" ? "Established in the story" : "Visible · identity not established"}</small>
       </button>)}</div>
       {!target && <p>Select a person or object to see its available actions.</p>}
       {target && <div className="game-scene-selected" aria-label="Selected visible target">
-        <strong>{target.label}</strong><p>{target.description}</p>
-        <div className="game-scene-actions">{target.actions.map((action, index) => <button type="button" key={index} disabled={disabled || !canAct || action.enabled === false || !action.intent} title={stale ? "Inspect this ending to refresh visible positions." : !canAct ? "Review and accept this ending before interacting with its people or objects." : action.reason || ""} onClick={() => onAction(`I ${action.kind === "talk" ? "talk to" : action.kind === "move" ? "move toward" : "examine"} ${target.label}.`, action.intent)}>{action.label}</button>)}
+        <strong>{sceneTargetName(target)}</strong><p>{target.description}</p>
+        <div className="game-scene-actions">{target.actions.map((action, index) => <button type="button" key={index} disabled={disabled || !canAct || action.enabled === false || !action.intent} title={stale ? "Inspect this ending to refresh visible positions." : !canAct ? "Review and accept this ending before interacting with its people or objects." : action.reason || ""} onClick={() => onAction(`I ${action.kind === "talk" ? "talk to" : action.kind === "move" ? "move toward" : "examine"} ${sceneTargetName(target)}.`, action.intent)}>{action.label}</button>)}
           {!stale && target.kind === "person" && (!target.known_id || target.known_id === story.player_character_id) && onBind && <button type="button" disabled={disabled || !canAct || binding} title="Identify this visible person as your player character. This does not create a video." onClick={() => current && onBind(current, target)}>{binding ? "Saving identity…" : "This is me"}</button>}
         </div>
       </div>}

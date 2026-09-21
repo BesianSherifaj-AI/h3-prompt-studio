@@ -9,7 +9,7 @@ export const emptyWorld = (): GameWorld => ({ schema_version: 1, current_locatio
 export function blankGameProject(): Project {
   const shot = newShot(DEFAULT_STORY_SETTINGS.duration);
   shot.camera = { framing: "", movement: "", height: "", speed: "", focus: "" };
-  return { schema_version: 1, id: uid(), title: "New game", mode: "t2va", duration: DEFAULT_STORY_SETTINGS.duration,
+  return { schema_version: 1, id: uid(), workspace: "game", title: "New game", mode: "t2va", duration: DEFAULT_STORY_SETTINGS.duration,
     aspect_ratio: "16:9", profile: "director", authoring_mode: "assisted", story: { text: "", locked: false },
     style: { notes: DEFAULT_STORY_SETTINGS.style || "" }, assets: [], subjects: [], shots: [shot], soundscape: "", music: "", custom_instructions: "",
     comfy_render: { resolution: "0.2", experimental_preview: true, steps: 8, quality: "fast", save_mmh3: true } };

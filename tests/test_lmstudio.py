@@ -89,6 +89,25 @@ def test_transport_native_load_and_exact_instance_unload():
     assert requests[1].get_header("Authorization") == "Bearer test-token"
 
 
+def test_load_model_accepts_262k_context():
+    client, calls = client_with_replies({"instance_id": "wide", "status": "loaded"})
+    assert client.load_model("local-vision", context_length=262_144)["instance_id"] == "wide"
+    assert calls[1][1] == "/api/v1/models/load"
+    assert calls[1][2]["context_length"] == 262_144
+
+
+def test_load_model_rejects_context_beyond_262k():
+    client, _ = client_with_replies({"instance_id": "ignored", "status": "loaded"})
+    with pytest.raises(LMStudioError, match="Context length must be between"):
+        client.load_model("local-vision", context_length=262_145)
+
+
+def test_load_owned_model_rejects_context_beyond_262k():
+    client = LMStudioClient(api_key="token")
+    with pytest.raises(LMStudioError, match="Choose a supported loaded context length"):
+        client.load_owned_model("local-vision", context_length=262_145)
+
+
 def test_read_only_discovery_normalizes_capability_and_load_state():
     client, calls = client_with_replies()
     assert client.models()[0]["id"] == "local-vision"

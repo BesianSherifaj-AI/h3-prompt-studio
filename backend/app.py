@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from .projects import new_project, safe_id, atomic_json, check_project, merge_plan, merge_assist, ALLOWED_SHOT_FIELDS
+from .projects import new_project, project_workspace, safe_id, atomic_json, check_project, merge_plan, merge_assist, ALLOWED_SHOT_FIELDS
 from .resources import ResourceManager, ResourceError, local_url, gpu_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,10 +41,11 @@ MOTION_LAB = None
 VIDEO_FILE_LOCKS = {}
 DEFAULT_SETTINGS = {'lm_url': 'http://127.0.0.1:1234/v1', 'model': '', 'context_length': 8192,
                     'comfy_urls': ['http://127.0.0.1:8188', 'http://127.0.0.1:8000', 'http://127.0.0.1:8010'], 'persona': 'universal', 'last_project': '',
-                    'ai_memory_mode': 'exclusive'}
+                    'last_game_project': '', 'ai_memory_mode': 'exclusive'}
 SETTINGS = {**DEFAULT_SETTINGS}
 if (DATA / 'settings.json').exists():
     SETTINGS.update(json.loads((DATA / 'settings.json').read_text(encoding='utf-8')))
+MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS = 1024, 262_144
 
 @lru_cache(maxsize=4)
 def _assistant_client(base_url):
@@ -58,7 +59,7 @@ def client():
     return _assistant_client(SETTINGS['lm_url'])
 
 RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client, state_path=DATA / 'resource_state.json')
-app = FastAPI(title='H3 Prompt Studio', version='1.4.1', docs_url='/api/docs')
+app = FastAPI(title='H3 Prompt Studio', version='1.5.0', docs_url='/api/docs')
 BRIDGE_PORTS = ('8188', '8000', '8010')
 LOCAL_ORIGINS = [f'http://{host}:{port}' for host in ('127.0.0.1', 'localhost') for port in (8766, 8188, 8010, 8000)]
 app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'PATCH'], allow_headers=['Content-Type', 'X-H3-Bridge', 'X-H3-Token'])
@@ -112,12 +113,31 @@ def load_project(project_id):
         raise HTTPException(404, 'Project not found.')
     return check_project(json.loads(path.read_text(encoding='utf-8')))
 
-def list_projects():
+def workspace_for_project(project):
+    # Generated turns from older releases had a story link but no workspace.
+    # Inspect that durable metadata without starting workers or rewriting files.
+    story_id = project.get('story_session_id')
+    if story_id:
+        try:
+            story_path = DATA / 'stories' / (safe_id(story_id) + '.json')
+            story = json.loads(story_path.read_text(encoding='utf-8'))
+            if story.get('mode') in ('studio', 'game'):
+                return story['mode']
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    return project.get('workspace', 'studio')
+
+
+def list_projects(workspace='studio'):
+    project_workspace(workspace)
     values = []
     for path in (DATA / 'projects').glob('*.json'):
         try:
             value = check_project(json.loads(path.read_text(encoding='utf-8')))
-            values.append({'id': value['id'], 'title': value['title'], 'mode': value['mode'], 'duration': value['duration'], 'updated': path.stat().st_mtime})
+            if workspace_for_project(value) != workspace:
+                continue
+            values.append({'id': value['id'], 'title': value['title'], 'mode': value['mode'],
+                           'workspace': workspace, 'duration': value['duration'], 'updated': path.stat().st_mtime})
         except (ValueError, KeyError):
             continue
     return sorted(values, key=lambda item: item['updated'], reverse=True)
@@ -134,18 +154,24 @@ def save_project(project):
                 history.parent.mkdir(parents=True, exist_ok=True)
                 history.write_bytes(previous)
         atomic_json(path, project)
-        SETTINGS['last_project'] = project['id']
+        key = 'last_game_project' if workspace_for_project(project) == 'game' else 'last_project'
+        SETTINGS[key] = project['id']
         atomic_json(DATA / 'settings.json', SETTINGS)
     return {'saved': True, 'id': project['id']}
 
 @app.get('/api/bootstrap')
 def bootstrap():
     from .prompts import PERSONAS
-    projects = list_projects()
-    last = SETTINGS.get('last_project')
-    project = load_project(last) if last and any(p['id'] == last for p in projects) else new_project()
-    return {'version': app.version, 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': SETTINGS,
-            'project': project, 'projects': projects, 'personas': PERSONAS}
+    with STATE_LOCK:
+        projects = list_projects()
+        last = SETTINGS.get('last_project')
+        project = load_project(last) if last and any(p['id'] == last for p in projects) else (load_project(projects[0]['id']) if projects else new_project())
+        game_projects = list_projects('game')
+        last_game = SETTINGS.get('last_game_project')
+        game_project = load_project(last_game) if last_game and any(p['id'] == last_game for p in game_projects) else new_project('game')
+        settings = copy.deepcopy(SETTINGS)
+    return {'version': app.version, 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': settings,
+            'project': project, 'projects': projects, 'game_project': game_project, 'personas': PERSONAS}
 
 def output_locations():
     # Only these application-owned locations can be opened; never accept a path
@@ -196,14 +222,14 @@ def open_files(body: dict):
     return {'opened': True, 'id': body['id'], 'title': title}
 
 @app.post('/api/projects/new')
-def create_project():
-    project = new_project()
+def create_project(workspace: str = 'studio'):
+    project = new_project(workspace)
     save_project(project)
     return project
 
 @app.get('/api/projects')
-def projects_index():
-    return list_projects()
+def projects_index(workspace: str = 'studio'):
+    return list_projects(workspace)
 
 @app.get('/api/projects/{project_id}')
 def project_get(project_id: str):
@@ -293,15 +319,16 @@ def library_update_version(record_id: str, body: dict):
 def save_settings(body: dict):
     if RESOURCES.lock.locked():
         raise ResourceError('Wait for AI to finish before changing its connection.')
-    allowed = {k: body[k] for k in DEFAULT_SETTINGS if k in body and k != 'last_project'}
+    allowed = {k: body[k] for k in DEFAULT_SETTINGS if k in body and k not in ('last_project', 'last_game_project')}
     if 'lm_url' in allowed:
         allowed['lm_url'] = local_url(allowed['lm_url'])
     if 'comfy_urls' in allowed:
         if not isinstance(allowed['comfy_urls'], list) or not 1 <= len(allowed['comfy_urls']) <= 4:
             raise ValueError('Choose one to four local ComfyUI instances.')
         allowed['comfy_urls'] = [local_url(u) for u in allowed['comfy_urls']]
-    if allowed.get('context_length', 8192) not in (4096, 8192, 12288, 16384):
-        raise ValueError('Choose a supported context length.')
+    context_length = allowed.get('context_length', 8192)
+    if type(context_length) is not int or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
+        raise ValueError(f'Choose a context length between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens.')
     if 'model' in allowed and (not isinstance(allowed['model'], str) or len(allowed['model']) > 500 or (allowed['model'] and not allowed['model'].strip())):
         raise ValueError('Choose a valid installed LM Studio model.')
     if allowed.get('ai_memory_mode', 'exclusive') not in ('exclusive', 'resident_small'):
@@ -311,9 +338,10 @@ def save_settings(body: dict):
         from .lmstudio import LMStudioClient
         LMStudioClient(base_url=proposed['lm_url']).resident_model_info(proposed['model'])
         allowed['context_length'] = 4096
-    SETTINGS.update(allowed)
-    atomic_json(DATA / 'settings.json', SETTINGS)
-    return SETTINGS
+    with STATE_LOCK:
+        SETTINGS.update(allowed)
+        atomic_json(DATA / 'settings.json', SETTINGS)
+        return copy.deepcopy(SETTINGS)
 
 @app.get('/api/connections')
 def connections():
@@ -622,8 +650,10 @@ def asset_run_retry(run_id: str, body: dict):
     return asset_manager().retry(safe_id(run_id), safe_id(body.get('request_id')))
 
 @app.get('/api/stories')
-def stories_list():
-    return {'stories': story_manager().list()}
+def stories_list(mode: str | None = None):
+    if mode is not None:
+        project_workspace(mode)
+    return {'stories': [story for story in story_manager().list() if mode is None or story['mode'] == mode]}
 
 @app.post('/api/stories')
 def story_create(body: dict):
@@ -1040,6 +1070,7 @@ def assist(body: dict):
 @app.get('/api/projects/{project_id}/export')
 def export_project(project_id: str):
     project = load_project(project_id)
+    project['workspace'] = workspace_for_project(project)
     destination = DATA / 'exports' / f'{safe_id(project_id)}.h3studio.zip'
     with zipfile.ZipFile(destination, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('project.json', json.dumps(project, ensure_ascii=False, indent=2))
@@ -1052,7 +1083,19 @@ def export_project(project_id: str):
     return FileResponse(destination, filename=(project['title'][:80] or 'H3 project') + '.h3studio.zip')
 
 @app.post('/api/projects/import')
-async def import_project(file: UploadFile = File(...)):
+async def import_project(file: UploadFile = File(...), workspace: str | None = None):
+    if workspace is not None:
+        project_workspace(workspace)
+
+    def save_import(project):
+        project['workspace'] = workspace or workspace_for_project(project)
+        project['id'] = str(uuid.uuid4())
+        # A portable import is an independent copy, never another editor for
+        # the original story session and its current branch.
+        project.pop('story_session_id', None)
+        save_project(project)
+        return project
+
     data = await file.read(128 * 1024 * 1024 + 1)
     if len(data) > 128 * 1024 * 1024:
         raise ValueError('Portable project is larger than 128 MB.')
@@ -1062,9 +1105,7 @@ async def import_project(file: UploadFile = File(...)):
             actual = asset_meta(asset['id'])
             if asset['media_type'] != actual['media_type']:
                 raise ValueError('A reference media type does not match its stored file.')
-        project['id'] = str(uuid.uuid4())
-        save_project(project)
-        return project
+        return save_import(project)
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         if sum(i.file_size for i in archive.infolist()) > 512 * 1024 * 1024:
             raise ValueError('Expanded project archive is too large.')
@@ -1083,9 +1124,7 @@ async def import_project(file: UploadFile = File(...)):
             asset.update({k: imported[k] for k in ('id', 'filename', 'sha256', 'width', 'height', 'duration', 'mime')})
         for subject in project['subjects']:
             subject['asset_ids'] = [id_map.get(a, a) for a in subject.get('asset_ids', [])]
-        project['id'] = str(uuid.uuid4())
-        save_project(project)
-        return project
+        return save_import(project)
 
 @app.get('/{path:path}')
 def frontend(path: str):

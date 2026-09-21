@@ -11,6 +11,14 @@ const scene = (): SceneCatalog => ({ run_id: "accepted", branch_id: "branch", co
   { id: "person-left", kind: "person", known_id: null, label: "Person in purple", description: "Purple shirt and glasses", position: "Left side of the cobblestone street", identity_status: "unidentified", actions: [{ kind: "talk", label: "Talk", enabled: true, intent: { kind: "scene_target", scene_run_id: "accepted", candidate_id: "person-left", action: "talk" } }] },
 ] });
 describe("saved ending grounding", () => {
+  it("keeps scene targets named for assistive controls even with an empty legacy label", () => {
+    const catalog = scene();
+    catalog.targets[0].label = "";
+    catalog.targets[0].description = "";
+    const html = renderToStaticMarkup(<GameScenePanel story={story()} viewedRunId="accepted" scene={catalog} disabled={false} onAction={vi.fn()}/>);
+    expect(html).toContain('aria-label="Visible person · Left side of the cobblestone street"');
+    expect(html).toContain('<strong>Visible person</strong>');
+  });
   it("shows the viewed clip's actual observation, never the previous accepted clip's text", () => {
     expect(observedSceneText(story(), "new-result")).toBe("Three people stand beside the shops.");
     const html = renderToStaticMarkup(<GameScenePanel story={story()} viewedRunId="new-result" scene={scene()} disabled={false} onAction={vi.fn()}/>);

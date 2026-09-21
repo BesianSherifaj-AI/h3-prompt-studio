@@ -10,6 +10,7 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  Download,
   Film,
   Gamepad2,
   GitBranch,
@@ -20,6 +21,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Save,
   Send,
   Settings2,
   Shuffle,
@@ -59,7 +61,7 @@ import { GameSoundtrack, GameVoiceInput } from "./GameAudio";
 import { focusGameInventory, GameActions, GameReceipt, GameStages, isInventoryCommand } from "./GameControls";
 import { movementNeedsPlayerChoice, playerIdentityFailure } from "./gamePlayerRecovery";
 import { blankGameProject, configurationFromStory, emptyWorld, ensurePlayer, prepareGameConfiguration } from "./gameConfiguration";
-import { api } from "./api";
+import { api, downloadText } from "./api";
 import type { GameGuide, GameIntent, StoryConfiguration } from "./storyTypes";
 import "./GameStudio.css";
 
@@ -69,6 +71,7 @@ export type GameStudioProps = {
   onAddFiles?: (files: File[]) => Promise<void>;
   onUploadFiles?: (files: File[]) => Promise<Asset[]>;
   onStudio: () => void;
+  onConnections?: () => void;
   initialSourceRunId?: string;
   initialSourceKey?: string | number;
 };
@@ -297,6 +300,22 @@ export function gameMemoryText(value: unknown): string {
     .filter((v) => typeof v === "string")
     .join(" · ");
 }
+export function gameTranscript(story: Story): string {
+  const lines = [story.title || "Untitled game", `You play: ${story.player_name || "Your character"}`, story.premise, ""];
+  story.turns.forEach((turn, index) => {
+    lines.push(`Turn ${index + 1} · ${storyTurnLabel(turn)}`, `Your move: ${turn.message}`);
+    if (turn.plan?.setting) lines.push(`Setting: ${turn.plan.setting}`);
+    if (turn.plan?.action) lines.push(`Planned action: ${turn.plan.action}`);
+    for (const line of turn.plan?.dialogue || []) lines.push(`${line.speaker}: ${line.text}`);
+    const observed = gameMemoryText(turn.observation);
+    if (observed) lines.push(`Observed result: ${observed}`);
+    if (turn.error) lines.push(`Issue: ${turn.error}`);
+    lines.push("");
+  });
+  const memory = gameMemoryText(story.observed_state);
+  if (memory) lines.push("Current story memory", memory);
+  return lines.join("\n").trim() + "\n";
+}
 
 export function GamePlanEditor({
   plan,
@@ -491,6 +510,7 @@ export default function GameStudio({
   onAddFiles,
   onUploadFiles,
   onStudio,
+  onConnections,
   initialSourceRunId,
   initialSourceKey,
 }: GameStudioProps) {
@@ -520,7 +540,7 @@ export default function GameStudio({
   const [editingGuideId, setEditingGuideId] = useState<string | null>(null);
   const [motionProject, setMotionProject] = useState<Project | null>(null);
   const conversationNearEnd = useRef(true);
-  const [playView, setPlayView] = useState<"play" | "history">("play");
+  const [playView, setPlayView] = useState<"play" | "scenes" | "history">("play");
   const [settingsOpen, setSettingsOpen] = useState(false),
     [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState(""),
@@ -546,6 +566,7 @@ export default function GameStudio({
     replaceTarget = useRef("");
   const [playingFilm, setPlayingFilm] = useState(false),
     [filmIndex, setFilmIndex] = useState(0);
+  const [playbackError, setPlaybackError] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null),
     playerVideo = useRef<HTMLVideoElement>(null),
     moveFeedback = useRef<HTMLDivElement>(null),
@@ -553,6 +574,12 @@ export default function GameStudio({
     conversationEnd = useRef<HTMLDivElement>(null);
   const settingsClose = useRef<HTMLButtonElement>(null),
     actionLock = useRef(false);
+  const openView = (view: "play" | "scenes" | "history") => {
+    if (view === "history") playerVideo.current?.pause();
+    if (view === "play") { setPlayingFilm(false); setPreview(null); }
+    setPlayView(view);
+    setSettingsOpen(false);
+  };
   const lastTurn = story?.turns?.at(-1),
     activeTurn = [...(story?.turns || [])].reverse().find(storyTurnPending);
   const [playerPickerRequest, setPlayerPickerRequest] = useState<{
@@ -589,6 +616,7 @@ export default function GameStudio({
   const selectedVideo = playingFilm
     ? playlist[filmIndex] || currentVideo
     : videos.find((clip) => clip.id === preview?.id) || (activeTurn && ["observing", "inspection_failed", "awaiting_acceptance"].includes(activeTurn.status) ? videos.find(clip => clip.id === activeTurn.run_id) : undefined) || currentVideo;
+  useEffect(() => setPlaybackError(false), [selectedVideo?.id, selectedVideo?.scene_video_url, selectedVideo?.video_url]);
   const choices = storyChoices(story),
     displayedChoices = choices.length ? choices : STARTER_MOVES;
   const setupProject =
@@ -677,6 +705,7 @@ export default function GameStudio({
     setEditing(null);
     setPlayingFilm(false);
     setFilmIndex(0);
+    setPlayView("play");
     // Polling does not replace unsaved settings or edited responses.
   }, [story?.id]);
   useEffect(() => {
@@ -917,7 +946,7 @@ export default function GameStudio({
             <Gamepad2 size={23} />
           </span>
           <div>
-            <span className="game-eyebrow">H3 PROMPT STUDIO / GAME</span>
+            <span className="game-eyebrow">GAME · INTERACTIVE STORIES</span>
             <h1>{story?.title || "Your story. Your next move."}</h1>
           </div>
         </div>
@@ -968,6 +997,11 @@ export default function GameStudio({
         </span>
         {story && <button className="quiet" onClick={() => { setEditorTab("photos"); setSettingsOpen(true); }}><ImagePlus size={16}/> Add photo / sound</button>}
         {story && <button className="quiet" onClick={() => { setEditorTab("render"); setSettingsOpen(true); }}>{config.settings.resolution} MP · {config.settings.steps} steps · {String(config.settings.aspect_ratio || config.project.aspect_ratio)}{editorDirty ? " · unsaved changes" : ""}</button>}
+        {story && <div className="game-save-controls">
+          <span role="status">{editorDirty ? "Settings have unsaved changes" : "Game saved locally"}</span>
+          {editorDirty && <button disabled={submitting || !!pendingTicket} onClick={() => void perform(saveConfiguration)}><Save size={15}/> {submitting ? "Saving…" : "Save changes"}</button>}
+          <button className="quiet" disabled={loading || submitting} aria-label="Refresh saved game" title="Check the saved game and connection" onClick={() => void perform(() => session.refresh())}><RefreshCw size={15}/> Refresh</button>
+        </div>}
         {story && <details className="game-session-tools"><summary>More tools</summary><button className="quiet" onClick={() => changeConfiguration({ ...config, settings: { ...config.settings, experimental_preview: true, resolution: "0.2", duration: 3, steps: 8, style: PIXEL_STYLE } })}>Pixel preview · 0.2 MP</button><button className="quiet" onClick={() => setMotionProject(prepareGameConfiguration(config).project)}>Compare motion prompts</button></details>}
       </div>
       {(localError || session.error) && (
@@ -1447,10 +1481,15 @@ export default function GameStudio({
       {story && (
         <>
           <nav className="game-view-tabs" aria-label="Game views">
-            <button aria-pressed={playView === "play" && !settingsOpen} onClick={() => { setPlayView("play"); setSettingsOpen(false); }}><Play size={17}/> Play</button>
+            <button aria-pressed={playView === "play" && !settingsOpen} onClick={() => openView("play")}><Play size={17}/> Play</button>
+            <button aria-pressed={playView === "scenes" && !settingsOpen} onClick={() => openView("scenes")}><Film size={17}/> Scenes <span>{videos.length}</span></button>
+            <button aria-pressed={playView === "history" && !settingsOpen} onClick={() => openView("history")}><MessageSquare size={17}/> History <span>{story.turns.length}</span></button>
             <button aria-pressed={settingsOpen} onClick={() => setSettingsOpen(true)}><Settings2 size={17}/> Edit</button>
-            <button aria-pressed={playView === "history" && !settingsOpen} onClick={() => { setPlayView("history"); setSettingsOpen(false); }}><MessageSquare size={17}/> History <span>{story.turns.length}</span></button>
           </nav>
+          {playView === "scenes" && <div className="game-library-heading">
+            <div><h2>Your scenes &amp; exports</h2><p>Replay saved takes, download your film, or continue from an earlier ending.</p></div>
+            <button onClick={() => downloadText(`${story.title || "game"}-transcript.txt`, gameTranscript(story))}><Download size={16}/> Export transcript</button>
+          </div>}
           <section className={`game-play-layout view-${playView}`}>
 
             <div className="game-stage">
@@ -1507,6 +1546,8 @@ export default function GameStudio({
                       selectedVideo.scene_video_url || selectedVideo.video_url
                     }
                     autoPlay={playingFilm}
+                    onLoadedData={() => setPlaybackError(false)}
+                    onError={() => setPlaybackError(true)}
                     onEnded={() => {
                       if (playingFilm && filmIndex + 1 < playlist.length)
                         setFilmIndex((index) => index + 1);
@@ -1528,13 +1569,21 @@ export default function GameStudio({
                     </p>
                   </div>
                 )}
+                {playbackError && selectedVideo?.video_url && <div className="game-playback-error" role="alert">
+                  <strong>This saved clip could not load.</strong>
+                  <p>Check Connections and start the ComfyUI instance that rendered it, then retry. Your game and current ending are still saved.</p>
+                  <div><button onClick={() => { setPlaybackError(false); playerVideo.current?.load(); }}><RefreshCw size={15}/> Retry playback</button>{onConnections && <button className="quiet" onClick={onConnections}>Open Connections</button>}</div>
+                </div>}
               </div>
-              <GameActions key={story.id} story={story} viewedRunId={selectedVideo?.id} disabled={false} onRefreshStory={() => session.refresh()} onAction={send}
-                playerPickerRequest={playerPickerRequest || undefined} onPlayerPickerHandled={finishPlayerPicker} onBeforePlayerPicker={saveConfiguration}/>
+              <div hidden={playView === "scenes"}>
+                <GameActions key={story.id} story={story} viewedRunId={selectedVideo?.id} disabled={false} onRefreshStory={() => session.refresh()} onAction={send}
+                  playerPickerRequest={playerPickerRequest || undefined} onPlayerPickerHandled={finishPlayerPicker} onBeforePlayerPicker={saveConfiguration}/>
+              </div>
               </div>
               {selectedVideo?.video_url && <div className="game-current-video-actions"><span>{activeTurn?.run_id === selectedVideo.id ? "New result" : preview || playingFilm ? "Selected take" : "Accepted ending"} · replay to watch the movement</span><button type="button" onClick={() => { const video = playerVideo.current; if (video) { video.currentTime = 0; void video.play().catch(error => setLocalError(`Playback could not start: ${error.message}`)); } }}><Play size={15}/> Replay this scene</button></div>}
             <form
               className="game-composer"
+              hidden={playView === "scenes"}
               onSubmit={(event) => {
                 event.preventDefault();
                 submitComposer();
@@ -1581,7 +1630,7 @@ export default function GameStudio({
                     : "A choice joins the queue. Edit or remove it during the 3-second window before it starts."}
               </p>
             </form>
-              <GameActionQueue controls={moveQueue} busy={busy} story={story} onCheck={() => void perform(() => session.resumePending())}/>
+              {(playView !== "scenes" || moveQueue.queue.items.length > 0) && <GameActionQueue controls={moveQueue} busy={busy} story={story} onCheck={() => void perform(() => session.resumePending())}/>}
               {lastTurn && !playerIdentityFailure(lastTurn) && ["failed", "uncertain", "awaiting_assistant"].includes(lastTurn.status) && <div className="game-attention-link" role="status"><span>{lastTurn.error || storyTurnLabel(lastTurn)}</span><div className="game-attention-actions">{lastTurn.status === "failed" && !lastTurn.plan && !lastTurn.run_id && <button className="primary" disabled={submitting || !!pendingTicket} onClick={() => takeAction(lastTurn, "retry")}><RefreshCw size={15}/> Retry AI response</button>}<button className="quiet" onClick={() => setPlayView("history")}>Review details</button></div></div>}
               {selectedVideo && (
                 <div className="game-player-meta">
@@ -1598,11 +1647,11 @@ export default function GameStudio({
                   {selectedVideo.seed !== undefined && (
                     <span>Seed {selectedVideo.seed}</span>
                   )}
-                  {selectedVideo.download_url && (
+                  {selectedVideo.video_url && (
                     <a
                       href={
                         selectedVideo.scene_video_url ||
-                        selectedVideo.download_url
+                        selectedVideo.download_url || selectedVideo.video_url
                       }
                       download
                     >
@@ -1665,7 +1714,13 @@ export default function GameStudio({
                   </a>
                 </div>
               )}
-              {videos.length > 1 && (
+              {playingFilm && <div className="game-playlist-controls" aria-label="Story playback controls">
+                <button disabled={filmIndex === 0} onClick={() => setFilmIndex(index => Math.max(0, index - 1))}><ArrowLeft size={16}/> Previous scene</button>
+                <span role="status">Scene {filmIndex + 1} of {playlist.length}</span>
+                <button disabled={filmIndex >= playlist.length - 1} onClick={() => setFilmIndex(index => Math.min(playlist.length - 1, index + 1))}>Next scene <ArrowRight size={16}/></button>
+              </div>}
+              {playView === "scenes" && !videos.length && <div className="game-scenes-empty"><p>No finished scenes yet. Play your first move, or check History if a turn needs attention.</p><button onClick={() => setPlayView("play")}><Play size={16}/> Return to Play</button><button className="quiet" onClick={() => setPlayView("history")}>Review History</button></div>}
+              {videos.length > 0 && (
                 <div className="game-take-strip" aria-label="Saved takes">
                   {videos.map((video, index) => (
                     <button
@@ -1708,6 +1763,7 @@ export default function GameStudio({
                         void perform(async () => {
                           await session.branch(preview.id);
                           setPreview(null);
+                          setPlayView("play");
                         })
                       }
                     >
@@ -1882,6 +1938,7 @@ export default function GameStudio({
                                 className="quiet"
                                 onClick={() => {
                                   setPlayingFilm(false);
+                                  setPlayView("scenes");
                                   setPreview(
                                     turn.video ||
                                       videos.find(
@@ -1982,7 +2039,8 @@ export default function GameStudio({
 
       {motionProject && <MotionLab project={motionProject} onClose={() => setMotionProject(null)}/>}
       {settingsOpen && !pendingCreation && <GameEditor key={`${story?.id || setupBase.id}:${story?.active_branch_id || "setup"}`} value={config} onChange={changeConfiguration}
-        onSave={() => void perform(saveConfiguration)} onClose={() => setSettingsOpen(false)}
+        onSave={() => void perform(async () => { await saveConfiguration(); if (!story) setSettingsOpen(false); })} onClose={() => setSettingsOpen(false)}
+        setup={!story}
         dirty={editorDirty || !story} saving={submitting} busy={!!activeTurn}
         onUploadFiles={onUploadFiles} modelPicker={modelPicker} generators={session.generators}
         generatorsLoading={session.generatorsLoading} generatorsChecked={session.generatorsChecked} generatorErrors={session.generatorErrors} onRefreshGenerators={session.refreshGenerators}

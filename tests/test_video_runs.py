@@ -309,8 +309,13 @@ def test_restart_preserves_idempotency_and_recovers_without_submission(rig):
     assert 'processing' not in record and 'refreshing' not in record
 
 
-def test_explicit_continuation_binds_exact_finished_take_and_chain(rig):
+@pytest.mark.parametrize('workspace', ['studio', 'game', None])
+def test_explicit_continuation_binds_exact_finished_take_and_chain(rig, workspace):
     manager, project, server, _, _ = rig
+    if workspace is None:
+        project.pop('workspace', None)
+    else:
+        project['workspace'] = workspace
     first = complete(rig)
     follow = manager.snapshot(first['id'])
     follow['comfy_render']['continuation_source'] = 'wrong-file.mmh3'
@@ -333,6 +338,7 @@ def test_explicit_continuation_binds_exact_finished_take_and_chain(rig):
     server.finish()
     manager.refresh(variant['id'])
     assert [entry['run']['id'] for entry in manager._chain(variant['id'])] == [first['id'], variant['id']]
+    assert all(manager.snapshot(job['id']).get('workspace') == workspace for job in (first, next_job, variant))
 
 
 def test_lost_response_can_recover_completed_own_reserved_uuid_without_queue_match(rig):

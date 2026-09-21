@@ -502,6 +502,7 @@ def test_imported_game_clones_supplied_cast_and_references_without_changing_stud
     assert first['plan']['transition'] == 'cut' and first.get('transition_reason')
     prepared = rig.videos.snapshot(first['run_id'])
     assert prepared['id'] != original['id'] and prepared['story_session_id'] == session['id']
+    assert prepared['workspace'] == 'game' and original['workspace'] == 'studio'
     assert prepared['subjects'] == supplied['subjects']
     assert prepared['assets'] == supplied['assets']
     assert 'continuation_source' not in prepared['comfy_render']
@@ -522,6 +523,17 @@ def test_imported_game_clones_supplied_cast_and_references_without_changing_stud
     assert rig.videos.submissions[-1][3] == first['run_id']
     assert supplied == supplied_before
     assert rig.project == rig.saved[original['id']] == rig.videos.snapshot(opening['id']) == original
+
+
+@pytest.mark.parametrize('mode', ['studio', 'game'])
+def test_rendered_story_project_uses_session_workspace_even_with_an_imported_source(rig, mode):
+    rig.project['workspace'] = 'studio' if mode == 'game' else 'game'
+    source = copy.deepcopy(rig.project)
+    session = story(rig, mode=mode)
+    turn = render(rig, session)
+    assert turn['status'] == 'succeeded', turn.get('error')
+    assert rig.videos.snapshot(turn['run_id'])['workspace'] == mode
+    assert rig.project == source
 
 
 @pytest.mark.parametrize('extra', [None, 'context', 'disabled'])

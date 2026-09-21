@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useId } from "react";
+import React, { useEffect, useRef, useState, useId, lazy, Suspense } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -65,7 +65,9 @@ import ContinuationLinkReview from './ContinuationLinkReview';
 import VideoWorkspace, { type VideoJob, type ContinuationSuggestions } from './VideoWorkspace';
 import { useVideoRuns } from './useVideoRuns';
 import { useStudioStoryLinks, studioLinkDefinitive } from './useStudioStoryLinks';
-import GameStudio from './GameStudio';
+const GameStudio = lazy(() => import('./GameStudio'));
+import WorkspaceNavigation from './WorkspaceNavigation';
+import { useWorkspaceRoute } from './workspaceRoutes';
 import { ContinuationPlanner } from './TimelinePlanner';
 import './WorkspaceModes.css';
 import { completedVideoStory } from './videoStory';
@@ -189,12 +191,33 @@ function IconButton({
   );
 }
 function Modal({ title, subtitle, onClose, children, wide = false }: any) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(onClose); closeRef.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]') || []).filter(el => el.getClientRects().length > 0);
+    (focusable()[0] || dialog)?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); }
+      if (event.key !== 'Tab') return;
+      const elements = focusable();
+      if (!elements.length) { event.preventDefault(); dialog?.focus(); return; }
+      const first = elements[0], last = elements[elements.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    dialog?.addEventListener('keydown', onKey);
+    return () => { dialog?.removeEventListener('keydown', onKey); if (previous?.isConnected) previous.focus(); };
+  }, []);
   return (
     <div
       className="modal-backdrop"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <section
+        ref={dialogRef}
+        tabIndex={-1}
         className={"modal " + (wide ? "wide" : "")}
         role="dialog"
         aria-modal="true"
@@ -214,7 +237,10 @@ function Modal({ title, subtitle, onClose, children, wide = false }: any) {
 }
 
 export default function App() {
-  const [workspaceMode, setWorkspaceMode] = useState<'studio'|'game'>(()=>{try{return new URLSearchParams(window.location.search).has('game') || localStorage.getItem('h3-workspace-mode')==='game'?'game':'studio';}catch{return 'studio';}});
+  const [workspaceMode, setWorkspaceMode] = useWorkspaceRoute();
+  const [gameVisited, setGameVisited] = useState(workspaceMode === 'game');
+  const [projectSearch, setProjectSearch] = useState('');
+  const [libraryLoading, setLibraryLoading] = useState(false);
   const [gameSource, setGameSource] = useState<string|undefined>();
   const [gameSourceKey, setGameSourceKey] = useState(0);
   const [studioStoryId,setStudioStoryId] = useState('');
@@ -271,7 +297,7 @@ export default function App() {
     if(studioStoryIdRef.current===story.id){studioStoryRevision.current++;setStudioStory(story);}
     setError(current=>current.startsWith('Your video is saved. Reconnecting its story link')?'':current);
   },setError);
-  useEffect(()=>{try{localStorage.setItem('h3-workspace-mode',workspaceMode);}catch{/* Optional storage. */}},[workspaceMode]);
+  useEffect(()=>{if(workspaceMode==='game')setGameVisited(true);setModal('');window.scrollTo({top:0});},[workspaceMode]);
   useEffect(()=>{
     if(!p)return;
     let storyId=p.story_session_id || '';
@@ -359,7 +385,7 @@ export default function App() {
     try { localStorage.setItem("h3-studio-view", view); } catch { /* Private browsing can disable storage. */ }
   }, [view]);
   useEffect(() => {
-    api("/bootstrap")
+    api("/bootstrap?workspace=studio")
       .then((data) => {
         setToken(data.token);
         ensurePromptTags(data.project);
@@ -485,6 +511,7 @@ export default function App() {
     await saveNow();
     const next=structuredClone(source);
     next.id=uid(); next.title=(source.title || 'Saved setup')+' · copy';
+    next.workspace='studio'; delete next.story_session_id;
     delete next.simple_generation;
     ensurePromptTags(next);
     bridgeProject.current=''; bridgeSnapshot.current=null;
@@ -539,8 +566,26 @@ export default function App() {
   const saveNow = async () => {
     clearTimeout(saveTimer.current);
     // Finish an earlier autosave before setting the next active project.
-    if(projectRef.current) return queueProjectSave(projectRef.current);
+    if(projectRef.current) {
+      const snapshot=projectRef.current; setSaved('Saving…');
+      try { const result=await queueProjectSave(snapshot); if(projectRef.current===snapshot)setSaved('Saved locally'); return result; }
+      catch(e) { if(projectRef.current===snapshot)setSaved('Not saved'); throw e; }
+    }
   };
+  const openProjects = async () => {
+    setModal('projects'); setProjectSearch(''); setLibraryLoading(true); setError('');
+    try { await saveNow(); setProjects(await api('/projects?workspace=studio')); }
+    catch(e) { setError((e as Error).message); }
+    finally { setLibraryLoading(false); }
+  };
+  const duplicateProject = () => run('Duplicating project',async()=>{
+    await saveNow();
+    const next=structuredClone(p);next.id=uid();next.title=(p.title||'Untitled film')+' · copy';next.workspace='studio';
+    delete next.story_session_id;delete next.simple_generation;
+    await queueProjectSave(next);setP(next);setSimpleResult(null);setProposal(null);setModal('');
+    bridgeProject.current='';bridgeSnapshot.current=null;
+    toast('Opened a separate copy. Your original project is saved.');
+  });
   const loadProject = async (id: string) => {
     await saveNow();
     const next = await api("/projects/" + id);
@@ -1053,12 +1098,13 @@ export default function App() {
   return (
     <div
       className={
-        "studio " + (view === "simple" ? "simple-view " : "") + (showAI ? "ai-open " : "") + (showRefs ? "refs-open" : "")
+        "studio " + (workspaceMode === "game" ? "workspace-game-active " : "") + (view === "simple" ? "simple-view " : "") + (showAI ? "ai-open " : "") + (showRefs ? "refs-open" : "")
       }
     >
-      <nav className="workspace-mode-bar" aria-label="Workspace mode"><strong>H3 Prompt Studio</strong><div><button aria-pressed={workspaceMode==='studio'} onClick={()=>setWorkspaceMode('studio')}>Studio</button><button aria-pressed={workspaceMode==='game'} onClick={()=>setWorkspaceMode('game')}>Game</button></div><span>{workspaceMode==='studio'?'Direct your scenes':'Play a character. Let the story respond.'}</span></nav>
-      <div className="workspace-pane" hidden={workspaceMode!=='game'}><GameStudio project={p} modelPicker={promptModelPicker} onAddFiles={addFiles} onUploadFiles={async files=>{const assets:Asset[]=[];for(const file of files){const form=new FormData();form.append('file',file);assets.push(await api('/assets',undefined,form));}return assets;}} onStudio={()=>setWorkspaceMode('studio')} initialSourceRunId={gameSource} initialSourceKey={gameSourceKey}/></div>
-      <div className="workspace-pane" hidden={workspaceMode!=='studio'}>
+      <WorkspaceNavigation mode={workspaceMode} onNavigate={setWorkspaceMode}
+        onConnections={()=>{void refresh();setModal('connections');}} onHelp={()=>setModal('help')}/>
+      <div id="game-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='game'}>{(gameVisited || workspaceMode==='game') && <Suspense fallback={<div className="boot" role="status">Opening Game…</div>}><GameStudio project={p} modelPicker={promptModelPicker} onUploadFiles={async files=>{const assets:Asset[]=[];for(const file of files){const form=new FormData();form.append('file',file);assets.push(await api('/assets',undefined,form));}return assets;}} onConnections={()=>{void refresh();setModal('connections');}} onStudio={()=>setWorkspaceMode('studio')} initialSourceRunId={gameSource} initialSourceKey={gameSourceKey}/></Suspense>}</div>
+      <div id="studio-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='studio'}>
       {view === "simple" && <SimpleStudio
         project={p} update={update} checkpointUpdate={checkpointUpdate} onRestore={restoreLibraryCopy} onReplacePhoto={replaceReference} onAddFiles={(files) => addFiles(files)} onGenerate={()=>generateSimplePrompt()} onBuild={()=>generateSimplePrompt(false)}
         busy={busy} renderBusy={videos.active} progress={connection.stage && connection.stage !== "idle" ? connection.stage : busy}
@@ -1066,14 +1112,14 @@ export default function App() {
         referenceMap={compiled.references}
         onCopy={copyPrompt} onSave={() => compiled.valid && downloadText("h3-prompt.txt", compiled.prompt)}
         onAdvanced={() => { setView("advanced"); setError(""); }}
-        onProjects={() => { api("/projects").then(setProjects); setModal("projects"); }}
+        onProjects={()=>void openProjects()} savedStatus={saved} onSaveProject={()=>void run("Saving project",saveNow)}
         onNew={createNew} onConnections={() => { refresh(); setModal("connections"); }} onFiles={() => setModal("files")}
         onUndo={() => { if (history.length) { setP(history[history.length - 1]); setHistory((h) => h.slice(0, -1)); setSimpleResult(null); } }}
         canUndo={history.length > 0} connectionOnline={!!connection.lm?.online} onSendToComfy={sendToComfy} canReturn={canReturn}
         onContinue={continueProject}
         modelPicker={promptModelPicker}
         comfyPanel={<><VideoWorkspace project={p} promptReady={simpleResultFresh} busy={busy||videos.submitting} jobs={videos.jobs} currentJob={videos.currentJob}
-          storyId={studioStoryId||undefined} activeEndpointId={studioStory?.id===studioStoryId?studioStory.active_run_id:undefined} storyClips={studioStory?.id===studioStoryId?studioStory.clips:undefined} onBranch={branchVideo} onPlayGame={playGame}
+          storyId={studioStoryId||undefined} activeEndpointId={studioStory?.id===studioStoryId?studioStory.active_run_id:undefined} storyClips={studioStory?.id===studioStoryId?studioStory.clips:undefined} onBranch={branchVideo} onPlayGame={playGame} onConnections={()=>{void refresh();setModal('connections');}}
           onSelectJob={videos.onSelectJob} onGenerate={generateVideo} onReroll={rerollVideo} onContinue={continueVideo} onSuggest={suggestVideo} onCombine={combineVideo} onResolve={resolveVideo} onUpdateTake={videos.updateMetadata}
           />{videos.error&&<p className="comfy-error" role="alert">{videos.error}</p>}</>}
         settingsPanel={<ComfyPanel project={p} prompt={compiled.prompt} ready={simpleResultFresh} busy={!!busy||videos.active}
@@ -1149,8 +1195,7 @@ export default function App() {
           <button
             className="quiet"
             onClick={() => {
-              api("/projects").then(setProjects);
-              setModal("projects");
+              void openProjects();
             }}
           >
             <FolderOpen size={15} /> Projects
@@ -2581,7 +2626,7 @@ export default function App() {
       </div>
       </>}
       </div>
-      {view === "simple" && bridgeImport && <div className="banner bridge-banner">
+      {workspaceMode === "studio" && view === "simple" && bridgeImport && <div className="banner bridge-banner">
         <span>ComfyUI sent photos and a prompt. Open them as a new project?</span>
         <button onClick={applyBridgeImport} disabled={!!busy}>Open from ComfyUI</button>
         <button onClick={() => { bridgePending.current?.reject(new Error("Import dismissed.")); bridgePending.current = null; setBridgeImport(null); }}>Dismiss</button>
@@ -2590,6 +2635,13 @@ export default function App() {
         onClose={closeContinuationReview}
         onRetry={()=>{if(continuationReview.link)void loadContinuationReview(continuationReview.link);}}
         onCreate={confirmLinkedContinuation} />}
+      {modal === 'help' && <Modal title="Your creative workspace" subtitle="Studio for directing. Game for playing." onClose={()=>setModal('')}>
+        <div className="workspace-help">
+          <article><h3>Studio · Create a film</h3><ol><li>Add references in Photos, or start with a written idea.</li><li>Write your scene in Story &amp; Dialogue; choose its length and quality in Settings.</li><li>Generate, compare takes, then continue from the accepted ending.</li></ol><p>Projects save locally. Saved projects includes search, duplicate, import and export with images.</p><button onClick={()=>{setWorkspaceMode('studio');setModal('');}}>Open Studio</button></article>
+          <article><h3>Game · Play a character</h3><ol><li>Start a new game or select one of your saved stories.</li><li>Describe a move, speak, or use the movement and interaction controls.</li><li>Use Scenes to replay or save your story; History shows what happened.</li></ol><p>Game keeps its own cast, settings and saves. Use Play from here on a Studio take to deliberately start a game from it.</p><button onClick={()=>{setWorkspaceMode('game');setModal('');}}>Open Game</button></article>
+          <article><h3>Local services &amp; keyboard</h3><p>LM Studio writes and inspects scenes. ComfyUI renders them. Check Connections when either service is unavailable. GPU work starts when you request generation.</p><p>Use Tab to move through controls, arrow keys within editor tabs, and Escape to close dialogs. Browser Back and Forward switch workspaces.</p><button onClick={()=>{void refresh();setModal('connections');}}>Check connections</button></article>
+        </div>
+      </Modal>}
       {modal === "tools" && (
         <Modal
           wide
@@ -2661,6 +2713,8 @@ export default function App() {
               <RefreshCw size={13} /> Refresh
             </button>
           </div>
+          {error && <p className="project-modal-error" role="alert">{error}</p>}
+          {notice && <p role="status">{notice}</p>}
           <Input
             label="LM Studio endpoint"
             value={settings.lm_url}
@@ -2689,8 +2743,17 @@ export default function App() {
               [8192, "8,192 tokens · recommended for small models"],
               [12288, "12,288 tokens"],
               [16384, "16,384 tokens"],
+              [32768, "32,768 tokens"],
+              [65536, "65,536 tokens"],
+              [131072, "131,072 tokens"],
+              [262144, "262,144 tokens"],
             ]}
           />
+          <p className="callout">
+            This setting controls context input size only. Assistant output remains
+            bounded by the stage output ceilings (for example 4,096 tokens on
+            several planning calls).
+          </p>
           <Area
             label="ComfyUI instances (one local URL per line)"
             value={(settings.comfy_urls || []).join("\n")}
@@ -2775,31 +2838,30 @@ export default function App() {
       )}
       {modal === "projects" && (
         <Modal
-          title="Your projects"
-          subtitle="Saved on this computer, including references and exact dialogue."
+          title="Studio projects"
+          subtitle="Your films and scene drafts. Saved games are in the Game workspace."
           onClose={() => setModal("")}
         >
           <button className="quiet" onClick={() => setModal("files")}>
             <FolderOpen size={14} /> Files & outputs
           </button>
-          <div className="project-list">
-            {projects.map((item) => (
-              <button key={item.id} onClick={() => loadProject(item.id)}>
+          <label className="field project-library-search"><span>Find a project</span><input type="search" value={projectSearch} onChange={event=>setProjectSearch(event.target.value)} placeholder="Search by name or video mode"/></label>
+          {error && <p className="project-modal-error" role="alert">{error} <button onClick={()=>void openProjects()}>Try again</button></p>}
+          <p className="project-library-count" role="status">{libraryLoading?'Loading Studio projects…':`${projects.length} Studio project${projects.length===1?'':'s'} · saved locally`}</p>
+          <div className="project-list" aria-busy={libraryLoading}>
+            {projects.filter(item=>`${item.title} ${item.mode}`.toLowerCase().includes(projectSearch.toLowerCase())).map((item) => (
+              <button key={item.id} disabled={!!busy || libraryLoading} aria-current={item.id===p.id ? true : undefined} onClick={() => void run('Opening project',()=>loadProject(item.id))}>
                 <Clapperboard size={17} />
                 <span>
                   <strong>{item.title}</strong>
                   <small>
-                    {item.mode.toUpperCase()} · {item.duration}s
+                    {String(item.mode || "").toUpperCase()} · {item.duration}s {item.id===p.id ? " · Current project" : ""}
                   </small>
                 </span>
                 <ArrowUpRight size={14} />
               </button>
             ))}
-            {!projects.length && (
-              <p className="help">
-                Your first project will appear here as you edit.
-              </p>
-            )}
+            {!libraryLoading && !projects.filter(item=>`${item.title} ${item.mode}`.toLowerCase().includes(projectSearch.toLowerCase())).length && <p className="help">{projectSearch?'No projects match this search. Try another name.':'Your first Studio project will appear here as you edit.'}</p>}
           </div>
           <input
             ref={projectInput}
@@ -2813,23 +2875,25 @@ export default function App() {
                   const form = new FormData();
                   form.append("file", file);
                   await saveNow();
-                  const next = await api("/projects/import", undefined, form);
-                  setP(next);
+                  const next = await api("/projects/import?workspace=studio", undefined, form);
+                  next.workspace='studio';delete next.story_session_id;
+                  await queueProjectSave(next);setP(next);
                   setSelectedShot(next.shots[0]?.id);
-                  setModal("");
-                  toast("Project imported.");
+                  setSelectedAsset(next.assets[0]?.id || '');setModal("");
+                  toast("Project imported into Studio.");
                 });
               e.target.value = "";
             }}
           />
           <div className="modal-actions">
-            <button className="primary" onClick={createNew}>
+            <button className="primary" onClick={createNew} disabled={!!busy || libraryLoading}>
               <Plus size={14} /> New project
             </button>
-            <button onClick={() => projectInput.current?.click()}>
+            <button disabled={!!busy || libraryLoading} onClick={() => projectInput.current?.click()}>
               <Upload size={14} /> Import project
             </button>
-            <button
+            <button disabled={!!busy || libraryLoading} onClick={duplicateProject}><Copy size={14}/> Duplicate current</button>
+            <button disabled={!!busy || libraryLoading}
               onClick={() =>
                 run("Exporting project", async () => {
                   await saveNow();

@@ -53,6 +53,7 @@ export type VideoWorkspaceProps = {
   storyClips?: VideoJob[];
   onBranch?: (job: VideoJob) => void | Promise<void>;
   onPlayGame?: (job: VideoJob) => void | Promise<void>;
+  onConnections?: () => void;
   onSelectJob: (job: VideoJob) => void;
   onGenerate: (renderPreset?: ContinuationRenderPreset) => void | Promise<void>;
   onReroll: (job: VideoJob) => void | Promise<void>;
@@ -163,7 +164,7 @@ export function videoWorkspaceState(projectId: string, jobs: VideoJob[] = [], se
     canCombine: !!playable && !working && continuationChain && current?.operation !== "combine" };
 }
 
-export default function VideoWorkspace({ project, promptReady, busy, jobs, currentJob, storyId, activeEndpointId, storyClips, onBranch, onPlayGame, onSelectJob, onGenerate, onReroll, onContinue, onSuggest, onCombine, onResolve, onUpdateTake, advanced }: VideoWorkspaceProps) {
+export default function VideoWorkspace({ project, promptReady, busy, jobs, currentJob, storyId, activeEndpointId, storyClips, onBranch, onPlayGame, onConnections, onSelectJob, onGenerate, onReroll, onContinue, onSuggest, onCombine, onResolve, onUpdateTake, advanced }: VideoWorkspaceProps) {
   const id = useId();
   const [continuing, setContinuing] = useState(false), [idea, setIdea] = useState(""), [length, setLength] = useState(5);
   const [renderPreset, setRenderPreset] = useState<ContinuationRenderPreset>("inherit");
@@ -179,6 +180,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
   const [selectedIdea, setSelectedIdea] = useState('');
   const [playback, setPlayback] = useState<'scene' | 'story'>('scene'), [playlistIndex, setPlaylistIndex] = useState(0);
   const [mediaLength, setMediaLength] = useState<{id:string;seconds:number}|null>(null);
+  const [mediaError, setMediaError] = useState(false), [mediaAttempt, setMediaAttempt] = useState(0);
   const autoplayNext = useRef(false), directionRef = useRef<HTMLTextAreaElement>(null);
   const suggestionRevision = useRef(0);
   const suggestionInFlight = useRef<number | null>(null);
@@ -188,6 +190,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
   const playlist = storyPlaylist(storyClips, storyId);
   const playing = playback === 'story' ? playlist[Math.min(playlistIndex, Math.max(0, playlist.length - 1))] : current;
   const playingUrl = sceneVideoUrl(playing);
+  useEffect(() => { setMediaError(false); }, [playingUrl]);
   const endingUrl = source?.ending_image_url || (draftScope === `${source?.project_id}:${source?.id}` ? suggested?.ending_image_url : undefined);
   const sourceProjectId = source?.project_id || project.id;
   const status = pending || current;
@@ -289,7 +292,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
     </div>}
     {playback === 'story' && playing && <p className="video-workspace-help" role="status">Scene {Math.min(playlistIndex + 1, playlist.length)} of {playlist.length} · {videoTakeTitle(playing)}. Plays the accepted clips in order.</p>}
     <div className={`video-workspace-preview ${playing?.status === 'succeeded' && playingUrl ? "has-video" : ""}`}>
-      {playing?.status === 'succeeded' && playingUrl ? <video key={`${playing.id}:${playingUrl}`} src={playingUrl} controls playsInline preload="metadata" aria-label="Selected video"
+      {playing?.status === 'succeeded' && playingUrl ? <video key={`${playing.id}:${playingUrl}:${mediaAttempt}`} src={playingUrl} controls playsInline preload="metadata" aria-label="Selected video" onError={()=>setMediaError(true)} onLoadedData={()=>setMediaError(false)}
         onEnded={() => {if(playback === 'story' && playlistIndex < playlist.length - 1) {autoplayNext.current = true; setPlaylistIndex(index => index + 1);} else autoplayNext.current = false;}}
         onLoadedMetadata={event => {if(Number.isFinite(event.currentTarget.duration))setMediaLength({id:playing.id,seconds:event.currentTarget.duration});if(autoplayNext.current) {autoplayNext.current = false; void event.currentTarget.play().catch(() => {});}}} /> :
         <div className="video-workspace-empty">
@@ -376,6 +379,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
       </div>
       {measuredTime && <span className="video-workspace-elapsed"><Clock3 size={12} aria-hidden="true" /> {measuredTime}</span>}
     </div>}
+    {mediaError && <div className="video-workspace-error" role="alert"><p>This saved video could not be loaded. Start its original ComfyUI server and check Connections, then retry playback.</p><button type="button" onClick={()=>{setMediaError(false);setMediaAttempt(value=>value+1);}}>Retry playback</button>{onConnections && <button type="button" onClick={onConnections}>Open Connections</button>}</div>}
     {(actionError || current?.error || pending?.error) && <p className="video-workspace-error" role="alert">{actionError || pending?.error || current?.error}</p>}
     {current?.warning && <p className="video-workspace-help" role="status">{current.warning}</p>}
     {status?.status==='uncertain' && onResolve && <div className="video-workspace-combine"><button type="button" disabled={!!busy||submitting} onClick={async()=>{

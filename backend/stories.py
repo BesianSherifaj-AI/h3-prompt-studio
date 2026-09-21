@@ -1194,7 +1194,7 @@ class StoryManager(StoryStateMixin):
             project = project_from_world(project, story['world'])
         project.update(id=turn.get('project_id') or ident(), title=story['title'][:100] + f' · Turn {len(story["turns"])}',
                        duration=turn['duration'], authoring_mode='full', story={'text': plan['action'], 'locked': True},
-                       story_session_id=story['id'], profile='custom',
+                       story_session_id=story['id'], workspace=story['mode'], profile='custom',
                        custom_instructions=story_author_instructions(source.get('custom_instructions', '')) + '\nOnly the new action happens now. Do not repeat old speech or completed events. No subtitles or text overlays.')
         project.pop('simple_generation', None)
         world = story.get('world') or {}

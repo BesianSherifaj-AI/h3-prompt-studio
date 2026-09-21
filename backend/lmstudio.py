@@ -39,6 +39,8 @@ class LMStudioError(RuntimeError):
 RESIDENT_PREFIX = "h3-studio-resident-"
 ASSISTANT_PREFIX = "h3-studio-assistant-"
 RESIDENT_MAX_BYTES = 1_500_000_000
+MIN_CONTEXT_TOKENS = 1024
+MAX_CONTEXT_TOKENS = 262_144
 
 
 def resident_cpu_profile():
@@ -295,8 +297,8 @@ class LMStudioClient:
     def load_model(self, model, context_length=8192, *, offload_kv_cache_to_gpu=None):
         if not isinstance(model, str) or not model or len(model) > 512:
             raise LMStudioError("Select a valid local model", code="invalid_model")
-        if isinstance(context_length, bool) or not isinstance(context_length, int) or not 1024 <= context_length <= 32768:
-            raise LMStudioError("Context length must be between 1024 and 32768 tokens", code="invalid_request")
+        if isinstance(context_length, bool) or not isinstance(context_length, int) or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
+            raise LMStudioError(f"Context length must be between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens", code="invalid_request")
         if not any(m["key"] == model for m in self.native_models()):
             raise LMStudioError("The selected model is not in the local model inventory", code="invalid_model")
         if offload_kv_cache_to_gpu is not None and type(offload_kv_cache_to_gpu) is not bool:
@@ -316,8 +318,8 @@ class LMStudioClient:
         chooses its own instance ID; ownership is established by its response,
         never by claiming an already-loaded matching model.
         """
-        if type(context_length) is not int or not 1024 <= context_length <= 32768:
-            raise LMStudioError('Choose a supported loaded context length.', code='invalid_request')
+        if type(context_length) is not int or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
+            raise LMStudioError(f'Choose a supported loaded context length between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens.', code='invalid_request')
         instance_id = instance_id or ASSISTANT_PREFIX + uuid.uuid4().hex
         if not isinstance(instance_id, str) or not instance_id.startswith(ASSISTANT_PREFIX):
             raise LMStudioError('An owned assistant instance needs its app-generated identifier.', code='invalid_request')

@@ -4,6 +4,8 @@
 @media(max-width:600px){.game-editor{inset:8px;width:auto;max-width:calc(100vw - 16px)}.game-editor-scroll{padding:4px 12px 18px}.game-editor .game-field-row{grid-template-columns:repeat(2,minmax(0,1fr))}.game-editor .model-settings-grid{grid-template-columns:1fr}.game-editor .scene-director-main{grid-template-columns:1fr}}
 
 /* The editor has one bounded scroll area; its header and save controls stay reachable. */
+.game-editor-tabs button[aria-selected=true]{background:#bbebcf;color:#193628;border-color:#bbebcf}
+.game-editor-tabs button:focus-visible{outline:2px solid #bbebcf;outline-offset:2px}
 .game-editor{z-index:120;top:76px;bottom:12px;max-height:calc(100dvh - 88px);overflow:hidden}
 .game-editor>header,.game-editor>footer{flex:0 0 auto}
 .game-editor-scroll{flex:1 1 0;overflow-y:scroll;overflow-x:hidden;min-height:0;touch-action:pan-y;scrollbar-width:auto;scrollbar-color:#91bba2 #102018}

@@ -74,6 +74,8 @@ export type SimpleStudioProps = {
   modelPicker?: React.ReactNode;
   comfyPanel?: React.ReactNode;
   settingsPanel?: React.ReactNode;
+  savedStatus?: string;
+  onSaveProject?: () => void;
 };
 
 const PHOTO_TYPES = [
@@ -121,6 +123,7 @@ export default function SimpleStudio(props: SimpleStudioProps) {
   useEffect(() => {
     setShowScenes(p.shots.length > 1 || p.shots.some((s) => s.dialogue.length > 0));
     setPreview(null);
+    setEditorTab(p.assets.length ? 'story' : 'photos');
   }, [p.id]);
   useEffect(()=>{if(p.shots.length>1)setShowScenes(true);},[p.shots.length]);
   const images = p.assets.filter((a) => a.media_type === "image");
@@ -177,8 +180,8 @@ export default function SimpleStudio(props: SimpleStudioProps) {
             <Video size={19} />
           </span>
           <div>
-            <strong>H3 Prompt Studio</strong>
-            <span>Simple mode</span>
+            <strong>Studio</strong>
+            <span>Scene &amp; film editor</span>
           </div>
         </div>
         <nav aria-label="Project tools">
@@ -235,7 +238,8 @@ export default function SimpleStudio(props: SimpleStudioProps) {
             }
             disabled={unavailable}
           />
-          <span>Saved automatically</span>
+          <span className={'workspace-status'+(props.savedStatus==='Not saved'?' is-error':'')} role="status" aria-live="polite">{props.savedStatus || 'Saved automatically'}</span>
+          {props.onSaveProject && <button className="simple-quiet" onClick={props.onSaveProject} disabled={unavailable || props.savedStatus==='Saving…'}>{props.savedStatus==='Not saved'?'Retry save':'Save now'}</button>}
         </div>
 
         <div className="simple-workspace-layout">
@@ -270,6 +274,7 @@ export default function SimpleStudio(props: SimpleStudioProps) {
                 : `${videoImages.length} photo${videoImages.length === 1 ? "" : "s"} in use`}
             </span>
           </div>
+          {!images.length && <div className="simple-empty-next"><span>Prefer to start with words? Describe a scene and add photos later.</span><button type="button" onClick={()=>{setEditorTab('story');requestAnimationFrame(()=>storyRef.current?.focus());}}>Write your idea <ArrowRight size={15}/></button></div>}
           <div
             className={"simple-dropzone " + (dragging ? "is-dragging" : "")}
             onDragOver={(e) => {

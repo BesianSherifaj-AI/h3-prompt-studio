@@ -1116,3 +1116,50 @@
 @media(max-width:1150px){.game-video-control-row{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:760px){.game-turn-feedback{padding:10px}.game-review-actions>button{flex:1;min-width:120px}.game-current-video-actions{align-items:flex-start}.game-current-video-actions>span{max-width:55%}}
 .game-feedback-anchor{scroll-margin-top:135px}
+
+/* Scenes stays reachable at every screen size, including when History hides the player. */
+.game-save-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.game-save-controls>span{color:var(--game-muted);font-size:12px}
+.game-save-controls button{display:inline-flex;align-items:center;gap:6px}
+.game-library-heading{display:flex;justify-content:space-between;align-items:center;gap:18px;margin:20px 0 16px}
+.game-library-heading h2{font-size:22px;margin:0 0 6px}
+.game-library-heading p{margin:0;color:var(--game-muted);font-size:14px}
+.game-library-heading>button{display:inline-flex;align-items:center;gap:8px;flex-shrink:0;min-height:44px}
+.game-stage [hidden]{display:none!important}
+.game-studio .game-play-layout.view-scenes{grid-template-columns:minmax(0,1fr)}
+.view-scenes .game-video-control-row{grid-template-columns:minmax(0,1fr)}
+.game-studio .view-scenes .game-player{height:clamp(230px,54dvh,620px);max-height:620px}
+.view-scenes .game-stage .game-film-actions,.view-scenes .game-stage .game-take-strip{display:flex}
+.view-scenes .game-stage .game-memory{display:block}
+.game-playlist-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:12px 0;padding:12px;background:var(--game-soft);border:1px solid var(--game-line);border-radius:12px}
+.game-playlist-controls>button{display:inline-flex;align-items:center;gap:6px;min-height:44px}
+.game-playlist-controls>span{font-size:13px;color:var(--game-muted)}
+.game-scenes-empty{padding:18px;background:var(--game-soft);border:1px dashed var(--game-line);border-radius:12px}
+.game-scenes-empty p{margin-top:0;color:var(--game-muted)}
+.game-scenes-empty>button{display:inline-flex;align-items:center;gap:6px;margin:4px 8px 0 0}
+.game-top-actions>button:first-child{display:inline-flex;align-items:center;gap:6px}
+.game-studio .game-view-tabs>button[aria-pressed=true],.game-studio .game-view-tabs>button[aria-pressed=true]:hover{background:#bcebd0;color:#163021;border-color:#bcebd0}
+.game-player{position:relative}
+.game-playback-error{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:18px;text-align:center;background:#15231fee;overflow:auto;font-size:14px}
+.game-playback-error p{max-width:460px;margin:0;color:#c1d1c8;font-size:13px;line-height:1.5}
+.game-playback-error>div{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.game-playback-error button{display:inline-flex;align-items:center;gap:6px;min-height:40px}
+.game-studio .game-scene-targets>button>strong{display:block;visibility:visible;color:var(--game-text);font-size:14px}
+@media(max-width:760px){
+  .game-playback-error{padding:10px;font-size:13px;gap:6px}
+  .game-playback-error p{font-size:12px}
+  .game-view-tabs{top:70px}
+  .game-studio.has-story .game-save-controls{grid-column:1/-1;justify-content:space-between;margin-left:0}
+  .game-session-tools:not([open]){display:block}
+  .game-session-tools>summary{min-height:40px;align-content:center}
+  .game-view-tabs>button{font-size:13px;padding:8px 4px;gap:4px}
+  .game-view-tabs>button>svg{display:none}
+  .game-library-heading{align-items:flex-start;flex-direction:column;gap:10px;margin:16px 0 12px}
+  .game-library-heading h2{font-size:20px}
+  .game-studio .view-scenes .game-player{height:clamp(210px,40dvh,420px);max-height:420px}
+  .game-playlist-controls{gap:8px;padding:8px}
+  .game-playlist-controls>button{font-size:12px;padding:8px}
+  .game-playlist-controls>span{order:-1;width:100%;text-align:center}
+}
+@media(min-width:761px){.game-view-tabs{top:76px}}
+@media(max-width:480px){.game-view-tabs{top:64px}}

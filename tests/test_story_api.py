@@ -178,6 +178,16 @@ def test_create_and_turn_routes_preserve_request_receipts_and_hide_private_worki
     assert len(rig.videos.queues) == 1
 
 
+def test_story_index_filters_by_workspace_without_rendering(api_rig):
+    rig = api_rig
+    game = create_session(rig)
+    studio = create_session(rig, mode='studio')
+    assert [s['id'] for s in rig.http.get('/api/stories?mode=game').json()['stories']] == [game['id']]
+    assert [s['id'] for s in rig.http.get('/api/stories?mode=studio').json()['stories']] == [studio['id']]
+    assert len(rig.http.get('/api/stories').json()['stories']) == 2
+    assert not rig.videos.queues
+
+
 def test_studio_continuation_uses_the_selected_snapshot_actual_ending_and_completed_lineage(api_rig):
     rig = api_rig
     opening = add_run(rig)

@@ -87,6 +87,9 @@ def test_unconstrained_supported_button_still_requires_its_selected_effect():
 
 def test_story_orchestrator_routes_a_guided_typed_action_through_creative_planning(rig, monkeypatch):
     project, world = key_scene()
+    # Test the authored gameplay constraint with an already defined player;
+    # the opening-appearance schema has its own dedicated contract tests.
+    world['characters'][0]['description'] = 'Short dark hair and a blue coat.'
     guide = {'id': uid(), 'scope': 'persistent', 'text': 'The cursed key cannot be taken before the ritual.', 'enabled': True}
     session = rig.manager.create({'request_id': uid(), 'project': project, 'world': world, 'mode': 'game',
                                   'player_name': 'Alex', 'player_character_id': 'player', 'guides': [guide]})

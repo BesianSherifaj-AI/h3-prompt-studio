@@ -26,7 +26,7 @@ const requests = [], errors = [], forbidden = [];
 const server = createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url, 'http://localhost').pathname;
-    const filename = path.resolve(root, 'dist', pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, ''));
+    const filename = path.resolve(root, 'dist', ['/', '/studio', '/game'].includes(pathname.replace(/\/$/, '') || '/') ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, ''));
     if (!filename.startsWith(path.join(root, 'dist') + path.sep)) throw new Error('Invalid path');
     response.setHeader('Content-Type', filename.endsWith('.js') ? 'text/javascript' : filename.endsWith('.css') ? 'text/css' : 'text/html');
     response.end(await readFile(filename));
