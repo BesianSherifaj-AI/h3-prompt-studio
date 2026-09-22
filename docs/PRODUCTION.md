@@ -14,6 +14,20 @@ Projects and generated reference images remain available locally. Queued snapsho
 
 A completely rendered batch can export a joined film or a ZIP of separate MP4s. Export trims each generated clip to its authored duration; source footage is preserved. A film requires compatible video/audio dimensions and stream formats. ZIP works for mixed formats. Its manifest identifies every run and file. Exports are local and contain no automatic social-network upload.
 
+The latest successful export is saved with the batch as `latest_export` (`url`, `filename`, `kind`, `export_id`, `clip_count`). Production queue keeps its download link after refresh or restart, including exports created through the API. Each generated image has a **First frame** link; finished videos also provide a **Source project** download containing their rendered snapshot.
+
+### Crop cuts through the API
+
+An export request can include `edits`, with at most one crop per zero-based item index. For example:
+
+```json
+{"kind":"film","edits":[{"index":0,"cut_at":4,"crop":{"x":100,"y":40,"width":400,"height":240}}]}
+```
+
+The clip retains its full frame before `cut_at`, then cuts to that crop, scaled back to the source dimensions. A cut at zero crops the whole clip. Cut times snap to the nearest 24 fps frame and must leave at least one frame before the clip ends. Coordinates and sizes must be even integers within the source frame; dimensions must be positive. Source dimensions are checked before transcoding. This example requires a source large enough to contain its crop.
+
+Crop exports preserve the source audio and original media. Their manifest records the normalized edits, and changed edits produce a separate cached export. The Studio buttons export the unedited batch; custom crop cuts currently use the API, and their download appears in the same queue.
+
 Successful rendering proves that a file was generated, not that the intended action, dialogue, identity or continuity is correct. Review videos and sound before publication. A generated first frame is also fallible. Export labels retain that distinction.
 
 CPU/GPU choices and resource handoff follow the existing [assistant profiles](ASSISTANT_PROFILES.md). Production rendering does not silently choose a smaller assistant.
@@ -25,6 +39,6 @@ CPU/GPU choices and resource handoff follow the existing [assistant profiles](AS
 - `POST /api/production/{id}/cancel`: stop future work and owned current job.
 - `POST /api/production/{id}/items/{index}/retry`: reset a definite failed item.
 - `GET /api/production/{id}/playlist`: ordered receipts and video links.
-- `POST /api/production/{id}/export` with `kind: "film"` or `"clips"`: local export.
+- `POST /api/production/{id}/export` with `kind: "film"` or `"clips"` and optional `edits`: local export.
 
 All writes require the current session token and retain the app's loopback boundary. Batch state is in `data/production`; normalized media and exports are in `data/production_exports`.

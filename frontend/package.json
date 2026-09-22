@@ -1,6 +1,6 @@
 {
   "name": "h3-prompt-studio",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "type": "module",
   "scripts": {

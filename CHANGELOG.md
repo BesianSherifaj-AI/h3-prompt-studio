@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.1 — Crop exports and saved downloads
+
+- Production exports accept validated per-clip crop cuts, aligned to 24 fps, while preserving original footage and audio.
+- Edited exports record their crop settings in the manifest and use separate cached outputs.
+- The latest successful batch export remains available in Production queue after refresh or restart, including exports created through the API.
+- Generated first-frame links and finished-video source snapshots are available directly from the queue without preloading every image.
+
 ## 1.6.0 — Saved assistant profiles and production queues
 
 - Independent Studio/Game model, context and CPU/GPU settings, with verified loaded configuration and recovery.

@@ -61,7 +61,7 @@ def client():
     return _assistant_client(SETTINGS['lm_url'])
 
 RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client, state_path=DATA / 'resource_state.json')
-app = FastAPI(title='H3 Prompt Studio', version='1.6.0', docs_url='/api/docs')
+app = FastAPI(title='H3 Prompt Studio', version='1.6.1', docs_url='/api/docs')
 BRIDGE_PORTS = ('8188', '8000', '8010')
 LOCAL_ORIGINS = [f'http://{host}:{port}' for host in ('127.0.0.1', 'localhost') for port in (8766, 8188, 8010, 8000)]
 app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'PATCH'], allow_headers=['Content-Type', 'X-H3-Bridge', 'X-H3-Token'])
@@ -658,9 +658,13 @@ def production_playlist(batch_id: str):
 @app.post('/api/production/{batch_id}/export')
 def production_export(batch_id: str, body: dict):
     from .production_export import export_production
-    if set(body) - {'kind'}:
+    if set(body) - {'kind', 'edits'}:
         raise ValueError('Choose a film or individual clips export.')
-    return export_production(DATA, production_manager().get(batch_id), scene_video_path, body.get('kind', 'film'))
+    manager = production_manager()
+    result = export_production(DATA, manager.get(batch_id), scene_video_path,
+                               body.get('kind', 'film'), edits=body.get('edits'))
+    manager.remember_export(batch_id, result)
+    return result
 
 @app.get('/api/production/{batch_id}/exports/{export_id}/{filename}')
 def production_export_download(batch_id: str, export_id: str, filename: str):
