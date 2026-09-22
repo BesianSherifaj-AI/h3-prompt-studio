@@ -78,9 +78,11 @@ def _crop_filter(edit, dimensions):
             '[before][after]concat=n=2:v=1:a=0[edited]')
 
 
-def export_production(data: Path, batch: dict, video_path, kind='film', edits=None):
+def export_production(data: Path, batch: dict, video_path, kind='film', edits=None, normalize_audio=False):
     if kind not in ('film', 'clips'):
         raise ValueError('Choose a film or individual clips export.')
+    if type(normalize_audio) is not bool:
+        raise ValueError('normalize_audio must be true or false.')
     items = batch.get('items', [])
     if not items or len(items) > 100 or any(x.get('status') != 'succeeded' or not x.get('run_id') for x in items):
         raise ValueError('Every item must finish successfully before exporting this production.')
@@ -92,6 +94,7 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
         'clips': [(x['run_id'], x.get('project', {}).get('duration', x.get('duration')),
                    x.get('project', {}).get('title', x.get('title', 'Clip'))) for x in items],
         'edits': edits,
+        'normalize_audio': normalize_audio,
     }, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:20]
     folder = data / 'production_exports' / safe_id(batch['id']) / identity
     folder.mkdir(parents=True, exist_ok=True)
@@ -108,7 +111,8 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
                 if crop['x'] + crop['width'] > width or crop['y'] + crop['height'] > height:
                     raise ValueError(f'Crop for item {index} exceeds its {width}×{height} source frame.')
             files = []
-            manifest = {'name': batch.get('name', 'Production'), 'review_status': 'Generated; creative review required', 'edits': edits, 'clips': []}
+            manifest = {'name': batch.get('name', 'Production'), 'review_status': 'Generated; creative review required',
+                        'edits': edits, 'normalize_audio': normalize_audio, 'clips': []}
             for index, item in enumerate(items, 1):
                 source = sources[index - 1]
                 project = item.get('project', {})
@@ -119,8 +123,10 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
                     edit = edit_map.get(index - 1)
                     video_filter = (['-filter_complex', _crop_filter(edit, dimensions[index - 1]), '-map', '[edited]']
                                     if edit else ['-map', '0:v:0', '-vf', 'setsar=1'])
+                    audio_filter = ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11'] if normalize_audio else []
                     _run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', str(source),
                           '-t', str(duration), *video_filter, '-map', '0:a:0?', '-map_metadata', '-1',
+                          *audio_filter,
                           '-r', '24', '-c:v', 'libx264', '-crf', '17', '-preset', 'fast',
                           '-threads', '4', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
                           '-movflags', '+faststart', str(temp)])
@@ -158,7 +164,8 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
                 temp.replace(output)
     return {'id': batch['id'], 'export_id': identity, 'kind': kind, 'filename': output.name,
             'url': f'/api/production/{batch["id"]}/exports/{identity}/{output.name}',
-            'review_status': 'Generated; creative review required', 'clip_count': len(items), 'edits': edits}
+            'review_status': 'Generated; creative review required', 'clip_count': len(items), 'edits': edits,
+            'normalize_audio': normalize_audio}
 
 def export_file(data: Path, batch_id: str, export_id: str, filename: str):
     if not re.fullmatch(r'[0-9a-f]{20}', export_id) or filename not in ('film.mp4', 'clips.zip', 'manifest.json'):

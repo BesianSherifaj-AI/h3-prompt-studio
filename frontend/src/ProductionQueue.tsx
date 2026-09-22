@@ -10,10 +10,13 @@ export type ProductionItem = {
 export type ProductionBatch = {
   id: string; name: string; status: string; error?: string; items: ProductionItem[];
   completed: number; total: number; created_at?: number;
-  latest_export?: { url: string; filename: string; kind: 'film' | 'clips'; export_id: string; clip_count: number } | null;
+  latest_export?: { url: string; filename: string; kind: 'film' | 'clips'; export_id: string; clip_count: number; normalize_audio?: boolean } | null;
 };
 type SavedProject = { id: string; title: string };
 const TIMEOUT = { timeoutMs: 20_000 };
+export function productionExportOptions(kind: 'film' | 'clips', balanceAudio: boolean) {
+  return { kind, normalize_audio: kind === 'clips' && balanceAudio };
+}
 export function productionProgress(batch: ProductionBatch) {
   const total = Math.max(0, batch.total || batch.items?.length || 0);
   const completed = Math.min(total, Math.max(0, batch.completed || 0));
@@ -28,10 +31,11 @@ export function productionStatus(status: string) {
     preparing: 'Preparing', uncertain: 'Checking submission' } as Record<string, string>)[status] || status.replaceAll('_', ' ');
 }
 
-export function ProductionBatchView({ batch, pending = false, onAction, onRetry, onPreview, onOpenProject, onExport }: {
+export function ProductionBatchView({ batch, pending = false, onAction, onRetry, onPreview, onOpenProject, onExport, balanceAudio = true, onBalanceAudioChange }: {
   batch: ProductionBatch; pending?: boolean; onAction: (action: string) => void;
   onRetry: (index: number) => void; onPreview: (item: ProductionItem) => void; onOpenProject: (id: string) => void;
   onExport?: (kind: 'film' | 'clips') => void;
+  balanceAudio?: boolean; onBalanceAudioChange?: (value: boolean) => void;
 }) {
   const progress = productionProgress(batch), actions = productionActions(batch.status);
   return <section className="production-batch" aria-label={batch.name}>
@@ -44,6 +48,7 @@ export function ProductionBatchView({ batch, pending = false, onAction, onRetry,
         {batch.status === 'succeeded' && progress.completed === progress.total && progress.total > 0 && onExport && <>
           <button disabled={pending} onClick={() => onExport('film')}><Clapperboard size={15}/>Export film</button>
           <button disabled={pending} onClick={() => onExport('clips')}><Download size={15}/>Export clips ZIP</button>
+          {onBalanceAudioChange && <div className="production-audio"><label><input type="checkbox" checked={balanceAudio} disabled={pending} onChange={event => onBalanceAudioChange(event.target.checked)}/>Balance clip volume</label><small>Matches quiet and loud clips in the ZIP.</small></div>}
         </>}
       </div>
     </div>
@@ -63,7 +68,7 @@ export function ProductionBatchView({ batch, pending = false, onAction, onRetry,
     </li>)}</ol>
     {batch.latest_export?.url && <p className="production-export" role="status">
       <a href={batch.latest_export.url} download={batch.latest_export.filename} aria-label={`Download latest export: ${batch.latest_export.filename}`}><Download size={15}/>{batch.latest_export.filename}</a>
-      <small>Latest saved {batch.latest_export.kind === 'film' ? 'film' : 'clips'} export · {batch.latest_export.clip_count} clips. Review the video before publishing.</small>
+      <small>Latest saved {batch.latest_export.kind === 'film' ? 'film' : 'clips'} export · {batch.latest_export.clip_count} clips{batch.latest_export.normalize_audio ? ' · Balanced audio' : ''}. Review the video before publishing.</small>
     </p>}
     <p className="production-hint">Rendered videos remain takes for review. The queue does not accept Game actions or change story state.</p>
   </section>;
@@ -79,6 +84,7 @@ export default function ProductionQueue({ active, currentProjectId, currentProje
   const [name, setName] = useState(''), [search, setSearch] = useState(''), [error, setError] = useState('');
   const [pending, setPending] = useState(false), [preview, setPreview] = useState<ProductionItem | null>(null);
   const [pendingLabel, setPendingLabel] = useState('Saving queue changes…');
+  const [balanceAudio, setBalanceAudio] = useState(true);
   const refreshBusy = useRef(false), createRequest = useRef({ signature: '', id: '' });
   const activeId = useRef(selectedId); activeId.current = selectedId;
 
@@ -154,10 +160,11 @@ export default function ProductionQueue({ active, currentProjectId, currentProje
       {batches.length > 0 && <label className="production-picker">Saved batch<select value={selectedId} onChange={event => { setBatch(null); setPreview(null); setSelectedId(event.target.value); }}>
         {batches.map(item => <option key={item.id} value={item.id}>{item.name} · {productionStatus(item.status)}</option>)}</select></label>}
       {batch && batch.id === selectedId && <ProductionBatchView batch={batch} pending={pending}
+        balanceAudio={balanceAudio} onBalanceAudioChange={setBalanceAudio}
         onAction={action => void perform(async () => { await api(`/production/${batch.id}/${action}`, {}, undefined, undefined, TIMEOUT); })}
         onRetry={index => void perform(async () => { await api(`/production/${batch.id}/items/${index}/retry`, { request_id: crypto.randomUUID() }, undefined, undefined, TIMEOUT); })}
         onExport={kind => void perform(async () => {
-          const result = await api(`/production/${batch.id}/export`, { kind }, undefined, undefined, { timeoutMs: 600_000 });
+          const result = await api(`/production/${batch.id}/export`, productionExportOptions(kind, balanceAudio), undefined, undefined, { timeoutMs: 600_000 });
           setBatch(current => current?.id === batch.id ? { ...current, latest_export: { ...result, kind } } : current);
         }, 'Preparing your export. Large batches can take a few minutes…')}
         onPreview={setPreview} onOpenProject={id => void perform(() => onOpenProject(id))}/>}

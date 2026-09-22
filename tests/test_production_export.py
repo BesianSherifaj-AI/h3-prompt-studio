@@ -259,3 +259,70 @@ def test_real_reaction_cut_keeps_timing_audio_source_and_output_dimensions(tmp_p
     full_output = exports.export_file(tmp_path, value['id'], full_crop['export_id'], full_crop['filename'])
     full_video = next(s for s in probe(full_output)['streams'] if s['codec_type'] == 'video')
     assert (full_video['width'], full_video['height'], int(full_video['nb_frames'])) == (96, 160, 96)
+
+
+@pytest.mark.parametrize('value', [None, 0, 1, 'true', [], {}, float('nan'), float('inf')])
+def test_audio_normalization_requires_boolean_before_resolving_media(tmp_path, value):
+    with pytest.raises(ValueError, match='normalize_audio must be true or false'):
+        exports.export_production(tmp_path, batch(4), reject_lookup, normalize_audio=value)
+
+
+def test_audio_normalization_changes_cache_and_manifest_only_when_enabled(tmp_path, monkeypatch):
+    commands = []
+    def encode(args):
+        commands.append(args)
+        Path(args[-1]).write_bytes(b'media')
+    monkeypatch.setattr(exports, '_run', encode)
+    value = batch(4)
+    default = exports.export_production(tmp_path, value, lambda _: tmp_path / 'source.mp4', 'clips')
+    assert '-af' not in commands[0]
+    explicit_false = exports.export_production(tmp_path, value, reject_lookup, 'clips', normalize_audio=False)
+    assert explicit_false['export_id'] == default['export_id']
+    normalized = exports.export_production(tmp_path, value, lambda _: tmp_path / 'source.mp4', 'clips', normalize_audio=True)
+    assert normalized['export_id'] != default['export_id'] and normalized['normalize_audio'] is True
+    assert commands[1][commands[1].index('-af') + 1] == 'loudnorm=I=-16:TP=-1.5:LRA=11'
+    assert exports.export_production(tmp_path, value, reject_lookup, 'clips', normalize_audio=True)['export_id'] == normalized['export_id']
+    manifest = json.loads(exports.export_file(tmp_path, value['id'], normalized['export_id'], 'manifest.json').read_text())
+    assert manifest['normalize_audio'] is True
+    with zipfile.ZipFile(exports.export_file(tmp_path, value['id'], normalized['export_id'], 'clips.zip')) as archive:
+        assert json.loads(archive.read('manifest.json'))['normalize_audio'] is True
+
+
+def loudness(path):
+    result = subprocess.run(['ffmpeg', '-hide_banner', '-nostdin', '-i', str(path), '-map', '0:a:0',
+        '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-'],
+        capture_output=True, check=True)
+    text = result.stderr.decode('utf-8', errors='replace')
+    return json.JSONDecoder().raw_decode(text[text.rfind('{'):])[0]
+
+
+def test_real_quiet_audio_normalized_near_target_without_changing_source(tmp_path, synthetic_media):
+    source = tmp_path / 'quiet-original.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(synthetic_media[0]),
+                    '-af', 'volume=0.03', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', str(source)],
+                    check=True, capture_output=True)
+    before_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    before = loudness(source)
+    assert float(before['input_i']) < -40
+    value = batch(4)
+    result = exports.export_production(tmp_path, value, lambda _: source, normalize_audio=True)
+    output = exports.export_file(tmp_path, value['id'], result['export_id'], result['filename'])
+    after = loudness(output)
+    assert float(after['input_i']) == pytest.approx(-16, abs=1)
+    assert float(after['input_tp']) <= -1.1  # Allow at most 0.4 dB AAC encoding overshoot.
+    assert float(after['input_i']) - float(before['input_i']) > 20
+    info = probe(output)
+    video = next(s for s in info['streams'] if s['codec_type'] == 'video')
+    audio = next(s for s in info['streams'] if s['codec_type'] == 'audio')
+    assert int(video['nb_frames']) == 96 and audio['sample_rate'] == '48000'
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == before_hash
+
+
+def test_normalization_allows_a_video_with_no_audio(tmp_path, synthetic_media):
+    source = tmp_path / 'silent.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(synthetic_media[0]),
+                    '-an', '-c:v', 'copy', str(source)], capture_output=True, check=True)
+    value = batch(4)
+    result = exports.export_production(tmp_path, value, lambda _: source, normalize_audio=True)
+    output = exports.export_file(tmp_path, value['id'], result['export_id'], result['filename'])
+    assert not any(s['codec_type'] == 'audio' for s in probe(output)['streams'])

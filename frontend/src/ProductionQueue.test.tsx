@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import ProductionQueue, { ProductionBatchView, productionActions, productionProgress, productionStatus, type ProductionBatch } from './ProductionQueue';
+import ProductionQueue, { ProductionBatchView, productionActions, productionExportOptions, productionProgress, productionStatus, type ProductionBatch } from './ProductionQueue';
 
 const fixture: ProductionBatch = { id: 'batch-one', name: 'Six before sunrise', status: 'needs_attention', completed: 1, total: 3, items: [
   { index: 0, project_id: 'p1', title: 'Opening', status: 'succeeded', video_url: '/api/video/runs/r1/video', duration: 8 },
@@ -79,5 +79,20 @@ describe('Production queue progress and recovery', () => {
     expect(html).toContain('aria-label="Download latest export: sunrise-cropped.mp4"');
     expect(html).toContain('Latest saved film export · 18 clips');
     expect(render()).not.toContain('Download latest export');
+  });
+  it('balances clip ZIP audio when selected without changing film audio', () => {
+    expect(productionExportOptions('clips', true)).toEqual({ kind: 'clips', normalize_audio: true });
+    expect(productionExportOptions('clips', false)).toEqual({ kind: 'clips', normalize_audio: false });
+    expect(productionExportOptions('film', true)).toEqual({ kind: 'film', normalize_audio: false });
+    const props = { batch: { ...fixture, status: 'succeeded', completed: 3 }, onAction: noop, onRetry: noop, onPreview: noop, onOpenProject: noop, onExport: noop, onBalanceAudioChange: noop };
+    const html = renderToStaticMarkup(<ProductionBatchView {...props}/>);
+    expect(html).toContain('type="checkbox" checked=""/>Balance clip volume');
+    expect(html).toContain('Matches quiet and loud clips in the ZIP.');
+    expect(renderToStaticMarkup(<ProductionBatchView {...props} balanceAudio={false}/>)).not.toContain('checked=""');
+  });
+  it('labels saved exports using their actual audio settings', () => {
+    const saved = { url: '/exports/clips.zip', filename: 'clips.zip', kind: 'clips' as const, export_id: 'audio-export', clip_count: 3 };
+    expect(render({ ...fixture, latest_export: { ...saved, normalize_audio: true } })).toContain('Balanced audio');
+    expect(render({ ...fixture, latest_export: saved })).not.toContain('Balanced audio');
   });
 });
