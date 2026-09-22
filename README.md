@@ -168,7 +168,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.5.0 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.6.0 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.
