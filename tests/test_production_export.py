@@ -363,3 +363,83 @@ def test_silence_is_preserved_without_inventing_gain(monkeypatch, tmp_path):
     result = exports._finish_normalization([], tmp_path / 'output.mp4', 4,
         {'method': 'silent_source_preserved', 'input': {'input_i': None, 'input_tp': None}})
     assert result['method'] == 'silent_source_preserved' and result['warning']
+
+
+@pytest.mark.parametrize('points', [
+    {'in_point': -1}, {'out_point': 5}, {'in_point': 2, 'out_point': 2},
+    {'in_point': 3, 'out_point': 2}, {'in_point': True}, {'out_point': None},
+    {'in_point': float('nan')}, {'out_point': float('inf')},
+    {'in_point': 1, 'out_point': 1.001},
+])
+def test_invalid_trim_rejected_before_media_lookup(tmp_path, points):
+    with pytest.raises(ValueError):
+        exports.export_production(tmp_path, batch(4), reject_lookup, edits=[{'index': 0, **points}])
+
+
+def test_trim_cache_manifest_defaults_and_crop_timeline(tmp_path, monkeypatch):
+    commands = []
+    def encode(args):
+        commands.append(args)
+        Path(args[-1]).write_bytes(b'media')
+    monkeypatch.setattr(exports, '_run', encode)
+    monkeypatch.setattr(exports, '_source_dimensions', lambda _: (96, 160))
+    value = batch(4)
+    lookup = lambda _: tmp_path / 'source.mp4'
+    plain = exports.export_production(tmp_path, value, lookup, 'clips')
+    trimmed = exports.export_production(tmp_path, value, lookup, 'clips', [{'index': 0, 'in_point': 1.01, 'out_point': 2.99}])
+    assert trimmed['edits'] == [{'index': 0, 'in_point': 1, 'out_point': 3}]
+    assert trimmed['duration'] == 2 and plain['duration'] == 4
+    assert trimmed['export_id'] != plain['export_id']
+    cached = exports.export_production(tmp_path, value, reject_lookup, 'clips', [{'index': 0, 'in_point': 1, 'out_point': 3}])
+    assert cached['export_id'] == trimmed['export_id']
+    manifest = json.loads(exports.export_file(tmp_path, value['id'], trimmed['export_id'], 'manifest.json').read_text())
+    assert manifest['duration'] == 2
+    assert {k: manifest['clips'][0][k] for k in ('duration', 'source_duration', 'in_point', 'out_point')} == {
+        'duration': 2, 'source_duration': 4, 'in_point': 1, 'out_point': 3}
+    cropped = exports.export_production(tmp_path, value, lookup, 'clips', [{**edit(cut=2), 'in_point': 1, 'out_point': 3}])
+    command = commands[-1]
+    assert command.index('-ss') < command.index('-i') and command[command.index('-ss') + 1] == '1.0'
+    assert 'trim=end_frame=24' in command[command.index('-filter_complex') + 1]
+    assert cropped['edits'][0]['cut_at'] == 2  # Public crop time remains source-relative.
+    with pytest.raises(ValueError, match='source time'):
+        exports.export_production(tmp_path, value, reject_lookup, 'clips', [{**edit(cut=3), 'out_point': 3}])
+
+
+def test_real_trim_seeks_audio_and_video_and_normalizes_only_selected_range(tmp_path, synthetic_media):
+    import array
+    source = tmp_path / 'time-marked.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(synthetic_media[0]),
+        '-vf', "drawbox=x=0:y=0:w=iw:h=ih:color=blue:t=fill:enable='gte(t,2)'",
+        '-af', "volume=0:enable='lt(t,2)'", '-c:v', 'libx264', '-threads', '2',
+        '-c:a', 'aac', '-b:a', '192k', str(source)], check=True, capture_output=True)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    value = batch(4)
+    for normalized in (False, True):
+        result = exports.export_production(tmp_path, value, lambda _: source, 'clips',
+            edits=[{'index': 0, 'in_point': 2.25, 'out_point': 3.75}], normalize_audio=normalized)
+        output = exports.export_file(tmp_path, value['id'], result['export_id'], 'manifest.json').with_name('001.mp4')
+        info = probe(output)
+        video = next(s for s in info['streams'] if s['codec_type'] == 'video')
+        assert int(video['nb_frames']) == 36 and float(video['duration']) == pytest.approx(1.5, abs=1 / 240)
+        pixel = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-frames:v', '1',
+            '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], check=True, capture_output=True).stdout
+        assert pixel[2] > 200 and pixel[0] < 30  # Source region after 2s is blue.
+        samples = array.array('h', subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output),
+            '-map', '0:a:0', '-ac', '1', '-f', 's16le', '-'], check=True, capture_output=True).stdout)
+        assert sum(x*x for x in samples) / len(samples) > 1_000_000  # The discarded beginning is silent.
+        if normalized:
+            assert float(loudness(output)['input_i']) == pytest.approx(-16, abs=1)
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+
+
+def test_real_trimmed_film_total_and_crop_before_in_point(tmp_path, synthetic_media):
+    value = batch(4, 4)
+    sources = dict(zip((x['run_id'] for x in value['items']), synthetic_media))
+    result = exports.export_production(tmp_path, value, sources.__getitem__, edits=[
+        {**edit(cut=0), 'in_point': 1, 'out_point': 2.5},
+        {'index': 1, 'out_point': 2}])
+    output = exports.export_file(tmp_path, value['id'], result['export_id'], result['filename'])
+    video = next(s for s in probe(output)['streams'] if s['codec_type'] == 'video')
+    assert int(video['nb_frames']) == 84
+    assert float(video['duration']) == pytest.approx(3.5, abs=1 / 24)
+    assert result['duration'] == 3.5

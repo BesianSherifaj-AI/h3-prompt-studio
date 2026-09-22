@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import ProductionQueue, { ProductionBatchView, productionActions, productionExportOptions, productionProgress, productionStatus, type ProductionBatch } from './ProductionQueue';
+import ProductionQueue, { ProductionBatchView, productionActions, productionExportOptions, productionProgress, productionStatus, productionTrimEdits, type ProductionBatch } from './ProductionQueue';
 
 const fixture: ProductionBatch = { id: 'batch-one', name: 'Six before sunrise', status: 'needs_attention', completed: 1, total: 3, items: [
   { index: 0, project_id: 'p1', title: 'Opening', status: 'succeeded', video_url: '/api/video/runs/r1/video', duration: 8 },
@@ -94,5 +94,33 @@ describe('Production queue progress and recovery', () => {
     const saved = { url: '/exports/clips.zip', filename: 'clips.zip', kind: 'clips' as const, export_id: 'audio-export', clip_count: 3 };
     expect(render({ ...fixture, latest_export: { ...saved, normalize_audio: true } })).toContain('Balanced audio');
     expect(render({ ...fixture, latest_export: saved })).not.toContain('Balanced audio');
+  });
+  it('frame-aligns timing while retaining saved crops and untouched item edits', () => {
+    const crop = { index: 0, cut_at: 2, crop: { x: 0, y: 0, width: 100, height: 100 } };
+    const untouched = { index: 1, in_point: 1, out_point: 3 };
+    const edits = productionTrimEdits(fixture.items, { 0: { in_point: '1.01', out_point: '3.99' } }, [crop, untouched]);
+    expect(edits).toEqual([{ ...crop, in_point: 1, out_point: 4 }, untouched]);
+    expect(productionExportOptions('film', false, edits)).toEqual({ kind: 'film', normalize_audio: false, edits });
+    expect(productionTrimEdits(fixture.items, { 0: { in_point: '0', out_point: '8' } }, edits)).toEqual([crop, untouched]);
+  });
+  it('rejects blank, inverted, out-of-range and invisible crop timing', () => {
+    for (const [start, end] of [['', '4'], ['1', '1'], ['4', '2'], ['-1', '4'], ['0', '9'], ['NaN', '4'], ['1', '1.001']]) {
+      expect(() => productionTrimEdits(fixture.items, { 0: { in_point: start, out_point: end } })).toThrow();
+    }
+    expect(() => productionTrimEdits(fixture.items, { 0: { in_point: '0', out_point: '2' } }, [
+      { index: 0, cut_at: 2, crop: { x: 0, y: 0, width: 32, height: 32 } },
+    ])).toThrow('saved crop cut');
+  });
+  it('restores saved trim controls and explains source-time audio synchronization', () => {
+    const batch: ProductionBatch = { ...fixture, status: 'succeeded', completed: 1, total: 1, items: [fixture.items[0]],
+      latest_export: { url: '/film', filename: 'film.mp4', kind: 'film', export_id: 'trimmed', clip_count: 1,
+        duration: 2.5, edits: [{ index: 0, in_point: 1, out_point: 3.5 }] } };
+    const html = renderToStaticMarkup(<ProductionBatchView batch={batch} onAction={noop} onRetry={noop} onPreview={noop} onOpenProject={noop} onExport={noop}/>);
+    expect(html).toContain('Trim timing · 2.50s film');
+    expect(html).toContain('aria-label="In point for Opening"');
+    expect(html).toContain('value="3.5"');
+    expect(html).toContain('audio follows the same range');
+    expect(html).toContain('Cuts snap to 24 fps');
+    expect(html).toContain('Reset timing');
   });
 });

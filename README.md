@@ -24,6 +24,14 @@ The showreel combines clearly labeled captures of the working app with real gene
 
 Studio now includes **Production queue**. Queue saved projects, inspect individual receipts and videos, stop future work or explicitly resume after a restart. The API also supports optional Z-Image first frames, generated before the video phase to reduce model switching. Export a completed batch as a joined film or a ZIP of individually trimmed clips. Rendering success is separate from creative approval; review motion, identity and sound before publishing. See [production workflow](docs/PRODUCTION.md).
 
+In a completed batch, open **Trim timing** and set each take's **In** and **Out** points in original-video seconds. Export film or clips to save the selected ranges; video and audio follow the same cuts, aligned to 24 fps. The saved export records its timing and duration. Existing crop edits are retained, with crop cut times still relative to the original take. Source videos remain unchanged.
+
+## Create and edit keyframes
+
+Open **Studio → Photos → Create or edit a keyframe**. Choose an installed Z-Image model for a new image, or explicitly select **MageFlow · edit from references** and one to four existing project images. Preview the generated result before adding it as a first frame, last frame, or reference image. Image requests retain their identifiers across refresh; an uncertain submission is checked rather than automatically submitted again.
+
+Local Mage editing requires `mage_flow_edit_turbo_int8_convrot.safetensors`, `qwen3vl_4b_bf16.safetensors`, `mage_flow_vae_bf16.safetensors`, and ComfyUI's native `TextEncodeMageFlowEdit` node. Studio checks availability without downloading models. It uses the [official four-step Euler/simple recipe](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_mage_flow_edit_turbo_int8.json), CFG 1, with dimensions from 512 to 2048 in multiples of 16. Selected reference files are validated, copied into the job, and checked by SHA256 before submission. Generated identity, geometry, and motion still require visual review.
+
 ## What you can do
 
 - Keep Studio projects separate from Game sessions, with independent resume choices and direct links to each workspace.

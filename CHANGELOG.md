@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Local keyframe editing and export timing
+
+- Added Studio Photos controls for explicit local image generation and MageFlow editing with one to four selected image references. Preview results before assigning first-frame, last-frame, or reference roles.
+- Validate and freeze reference image bytes with SHA256 provenance; retain durable request recovery without repeating uncertain submissions.
+- Added non-destructive production In/Out controls and API trim fields. Video and audio use the same frame-aligned source range, including audio loudness measurements.
+- Retain compatible crop edits and record effective trim points and delivery durations in export manifests, cache identities, and saved download metadata.
+- Validation: 1,882 backend tests (including 136 focused export/API checks), 460 frontend tests, a production build, and mocked browser checks for keyframe request recovery. These checks do not certify generated creative quality.
+
 ## 1.6.1 — Crop exports and saved downloads
 
 - Production exports accept validated per-clip crop cuts, aligned to 24 fps, while preserving original footage and audio.

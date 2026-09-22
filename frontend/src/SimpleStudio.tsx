@@ -36,6 +36,7 @@ import "./SimpleStudio.css";
 import SceneDirector from './SceneDirector';
 import TemplateShelf from './TemplateShelf';
 import PhotoTools, { ReferenceInsert } from './PhotoTools';
+import KeyframeGenerator from './KeyframeGenerator';
 import IdeaBuilder from './IdeaBuilder';
 import { TimelinePlanner } from './TimelinePlanner';
 import { ensurePromptTags } from './tags';
@@ -321,6 +322,8 @@ export default function SimpleStudio(props: SimpleStudioProps) {
               {uploadError}
             </p>
           )}
+
+          <KeyframeGenerator key={p.id} project={p} update={props.checkpointUpdate} busy={unavailable || !!props.renderBusy}/>
 
           {p.mode === "ref2va" &&
             activeImages.some((a) =>

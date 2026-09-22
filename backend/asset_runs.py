@@ -1,4 +1,4 @@
-"""Durable, local Z-Image-Turbo jobs with at-most-once queue submission.
+"""Durable local image generation/editing with at-most-once queue submission.
 
 Only explicit submit/resume operations can start work. Polling and restart
 recovery look up the recorded prompt; a lost POST response is never retried.
@@ -29,6 +29,8 @@ class AssetRunError(ValueError):
 
 MODELS = ('z_image_turbo_bf16.safetensors', 'z_image_turbo_fp8_e4m3fn.safetensors')
 H3_FRAME_MODEL = 'h3-frame-fl2va-5f'
+MAGE_MODEL = 'mage_flow_edit_turbo_int8_convrot.safetensors'
+MAGE_ENCODER, MAGE_VAE = 'qwen3vl_4b_bf16.safetensors', 'mage_flow_vae_bf16.safetensors'
 ENCODER, VAE = 'qwen_3_4b.safetensors', 'ae.safetensors'
 NODES = ('UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode',
          'ConditioningZeroOut', 'ModelSamplingAuraFlow', 'EmptySD3LatentImage',
@@ -61,7 +63,7 @@ def _origin(value):
 def _spec(value):
     if not isinstance(value, dict):
         raise AssetRunError('Provide an image prompt and asset settings.')
-    fields = {'prompt', 'name', 'semantic_role', 'person_id', 'prompt_tag', 'model', 'width', 'height', 'seed'}
+    fields = {'prompt', 'name', 'semantic_role', 'person_id', 'prompt_tag', 'model', 'width', 'height', 'seed', 'reference_asset_ids'}
     if set(value) - fields:
         raise AssetRunError('The image request contains unsupported settings.')
     result = copy.deepcopy(value)
@@ -78,12 +80,22 @@ def _spec(value):
         raise AssetRunError('Use a short reference tag such as arin-face or cafe-background.')
     result['person_id'] = _id(result['person_id']) if result.get('person_id') is not None else None
     result.setdefault('model', MODELS[0])
-    if result['model'] not in (*MODELS, H3_FRAME_MODEL):
-        raise AssetRunError('Select an installed Z-Image-Turbo or experimental H3 frame generator.')
+    if result['model'] not in (*MODELS, H3_FRAME_MODEL, MAGE_MODEL):
+        raise AssetRunError('Select an installed Z-Image-Turbo, Mage editing, or experimental H3 frame generator.')
+    if result['model'] == MAGE_MODEL:
+        refs = result.get('reference_asset_ids')
+        if not isinstance(refs, list) or not 1 <= len(refs) <= 4:
+            raise AssetRunError('Mage editing needs one to four image references from the asset library.')
+        result['reference_asset_ids'] = [_id(value) for value in refs]
+        if len(set(result['reference_asset_ids'])) != len(refs):
+            raise AssetRunError('Choose each image reference only once.')
+    elif 'reference_asset_ids' in result:
+        raise AssetRunError('Image references are supported only by the Mage editing model.')
     for key in ('width', 'height'):
         result.setdefault(key, 512)
-        if type(result[key]) is not int or not 128 <= result[key] <= 1024 or result[key] % 16:
-            raise AssetRunError('Image dimensions must be multiples of 16 between 128 and 1024 pixels.')
+        low, high = (512, 2048) if result['model'] == MAGE_MODEL else (128, 1024)
+        if type(result[key]) is not int or not low <= result[key] <= high or result[key] % 16:
+            raise AssetRunError(f'Image dimensions must be multiples of 16 between {low} and {high} pixels.')
         if result['model'] == H3_FRAME_MODEL and result[key] % 32:
             raise AssetRunError('Experimental H3 frame dimensions must be multiples of 32.')
     if type(result.get('seed')) is not int or not 0 <= result['seed'] <= MAX_SEED:
@@ -143,6 +155,43 @@ def _h3_catalog(info):
     return ([] if missing else [H3_FRAME_MODEL]), missing
 
 
+def _mage_catalog(info):
+    required = ('UNETLoader', 'CLIPLoader', 'VAELoader', 'LoadImage', 'TextEncodeMageFlowEdit',
+                'KSampler', 'VAEDecode', 'SaveImage')
+    missing = [node for node in required if not isinstance(info.get(node), dict)]
+    choices = [('UNETLoader', 'unet_name', MAGE_MODEL), ('CLIPLoader', 'clip_name', MAGE_ENCODER),
+               ('CLIPLoader', 'type', 'mage'), ('VAELoader', 'vae_name', MAGE_VAE),
+               ('KSampler', 'sampler_name', 'euler'), ('KSampler', 'scheduler', 'simple')]
+    missing += [f'{node}: {option}' for node, field, option in choices if option not in _choices(info, node, field)]
+    return ([] if missing else [MAGE_MODEL]), missing
+
+
+def _mage_graph(request_id, spec, references):
+    # Official Comfy-Org image_mage_flow_edit_turbo_int8 workflow: Euler/simple,
+    # four distilled steps, CFG 1, direct model (no extra sampling shift).
+    # https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_mage_flow_edit_turbo_int8.json
+    if len(references) != len(spec['reference_asset_ids']):
+        raise AssetRunError('Frozen editing references are missing. Submit a new image request.')
+    def node(kind, **inputs):
+        return {'class_type': kind, 'inputs': inputs}
+    graph = {
+        '1': node('UNETLoader', unet_name=MAGE_MODEL, weight_dtype='default'),
+        '2': node('CLIPLoader', clip_name=MAGE_ENCODER, type='mage', device='default'),
+        '3': node('VAELoader', vae_name=MAGE_VAE),
+        '5': node('TextEncodeMageFlowEdit', clip=['2', 0], vae=['3', 0], prompt=spec['prompt'],
+                  negative_prompt='', width=spec['width'], height=spec['height'], batch_size=1),
+        '8': node('KSampler', model=['1', 0], positive=['5', 0], negative=['5', 1], latent_image=['5', 2],
+                  seed=spec['seed'], steps=4, cfg=1.0, sampler_name='euler', scheduler='simple', denoise=1.0),
+        '9': node('VAEDecode', samples=['8', 0], vae=['3', 0]),
+        '10': node('SaveImage', images=['9', 0], filename_prefix=f'h3_prompt_studio/assets/{request_id}/image'),
+    }
+    for index, reference in enumerate(references, 1):
+        ident = str(10 + index)
+        graph[ident] = node('LoadImage', image=reference['input_name'])
+        graph['5']['inputs'][f'images.image_{index}'] = [ident, 0]
+    return graph
+
+
 def _h3_frame_graph(request_id, spec):
     from .comfy_transfer import HERETIC, FL_LORA
     def node(kind, **inputs):
@@ -168,10 +217,12 @@ def _h3_frame_graph(request_id, spec):
     }
 
 
-def build_graph(request_id, spec):
+def build_graph(request_id, spec, references=()):
     """The native official Turbo graph; no arbitrary caller-supplied nodes."""
     if spec['model'] == H3_FRAME_MODEL:
         return _h3_frame_graph(request_id, spec)
+    if spec['model'] == MAGE_MODEL:
+        return _mage_graph(request_id, spec, references)
     def node(kind, **inputs):
         return {'class_type': kind, 'inputs': inputs}
     return {
@@ -194,6 +245,7 @@ class AssetRunManager:
     def __init__(self, data_dir, resources, get_settings, store_asset, *, client_factory=None,
                  start_workers=True, poll_interval=1.5, monitor_timeout=1800):
         self.directory = (Path(data_dir) / 'asset_runs').resolve()
+        self.asset_directory = (Path(data_dir) / 'assets').resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.resources, self.get_settings, self.store_asset = resources, get_settings, store_asset
         self.client_factory = client_factory or (lambda: httpx.Client(trust_env=False, follow_redirects=False, timeout=15))
@@ -236,10 +288,12 @@ class AssetRunManager:
                     info = response.json()
                     models, missing = _catalog(info)
                     h3_models, h3_missing = _h3_catalog(info)
-                available_models = ([] if missing else models) + h3_models
+                    mage_models, mage_missing = _mage_catalog(info)
+                available_models = ([] if missing else models) + h3_models + mage_models
                 model_missing = {model: list(missing) +
                                  ([] if model in models else [f'UNETLoader: {model}']) for model in MODELS}
                 model_missing[H3_FRAME_MODEL] = h3_missing
+                model_missing[MAGE_MODEL] = mage_missing
                 servers.append({'comfy_url': origin, 'models': available_models, 'missing': missing,
                                 'h3_missing': h3_missing, 'model_missing': model_missing,
                                 'ready': bool(available_models)})
@@ -251,16 +305,19 @@ class AssetRunManager:
                 message = f'Cannot read ComfyUI node inventory at {origin}. Check that server and refresh availability; installed models could not be verified.'
                 errors.append(message)
                 unavailable.append({'comfy_url': origin, 'reason': 'inventory_unavailable', 'message': message})
-        available = [model for model in (*MODELS, H3_FRAME_MODEL) if any(s['ready'] and model in s['models'] for s in servers)]
+        available = [model for model in (*MODELS, H3_FRAME_MODEL, MAGE_MODEL) if any(s['ready'] and model in s['models'] for s in servers)]
         return {'ready': bool(available), 'models': available, 'default_model': available[0] if available else None,
                 'encoder': ENCODER, 'vae': VAE, 'width': 512, 'height': 512, 'max_dimension': 1024,
                 'steps': 8, 'cfg': 1, 'sampler': 'res_multistep', 'scheduler': 'simple', 'shift': 3,
                 'generators': [{'id': model, 'model': model, 'available': True, 'compatible': True,
                                 'name': 'H3 frame · experimental' if model == H3_FRAME_MODEL else model,
                                 'label': 'H3 frame · experimental, 5 frames /4 steps' if model == H3_FRAME_MODEL else model,
-                                'experimental': model == H3_FRAME_MODEL, 'kind': 'h3_frame' if model == H3_FRAME_MODEL else 'z_image_turbo',
-                                'steps': 4 if model == H3_FRAME_MODEL else 8,
-                                'note': 'Extracts one frame below the trained video duration. Speed and quality require local testing.' if model == H3_FRAME_MODEL else 'Native eight-step Z-Image-Turbo recipe.'}
+                                'experimental': model == H3_FRAME_MODEL, 'kind': 'h3_frame' if model == H3_FRAME_MODEL else 'mage_flow_edit' if model == MAGE_MODEL else 'z_image_turbo',
+                                'steps': 4 if model in (H3_FRAME_MODEL, MAGE_MODEL) else 8,
+                                'supports_references': model == MAGE_MODEL,
+                                'min_references': 1 if model == MAGE_MODEL else 0, 'max_references': 4 if model == MAGE_MODEL else 0,
+                                'min_dimension': 512 if model == MAGE_MODEL else 128, 'max_dimension': 2048 if model == MAGE_MODEL else 1024,
+                                'note': 'Extracts one frame below the trained video duration. Speed and quality require local testing.' if model == H3_FRAME_MODEL else 'Native four-step Mage editing recipe; select one to four library images.' if model == MAGE_MODEL else 'Native eight-step Z-Image-Turbo recipe.'}
                                for model in available], 'servers': servers, 'errors': errors,
                 'inventory_available': bool(servers), 'unavailable_servers': unavailable}
 
@@ -314,6 +371,75 @@ class AssetRunManager:
         with self.lock:
             return [self._public(r) for r in sorted(self.records.values(), key=lambda r: r['created_at'], reverse=True)]
 
+    def _read_references(self, spec):
+        references = []
+        for index, asset_id in enumerate(spec.get('reference_asset_ids', []), 1):
+            folder = (self.asset_directory / asset_id).resolve()
+            try:
+                if not folder.is_relative_to(self.asset_directory):
+                    raise ValueError()
+                metadata_path = (folder / 'metadata.json').resolve(strict=True)
+                path = (folder / 'source.png').resolve(strict=True)
+                if not metadata_path.is_relative_to(folder) or not path.is_relative_to(folder):
+                    raise ValueError()
+                metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+                if (metadata.get('id') != asset_id or metadata.get('media_type') != 'image'
+                        or metadata.get('filename') != 'source.png' or not 0 < path.stat().st_size <= MAX_BYTES):
+                    raise ValueError()
+                data = path.read_bytes()
+                digest = hashlib.sha256(data).hexdigest()
+                if len(data) > MAX_BYTES or metadata.get('sha256') != digest:
+                    raise ValueError()
+                with Image.open(io.BytesIO(data)) as image:
+                    if image.format != 'PNG' or not all(1 <= value <= 4096 for value in image.size):
+                        raise ValueError()
+                    dimensions = list(image.size)
+                    image.verify()
+                if dimensions != [metadata.get('width'), metadata.get('height')]:
+                    raise ValueError()
+            except (OSError, ValueError, TypeError, AttributeError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+                raise AssetRunError('An editing reference is missing, changed, or not a valid library image. Add it again before editing.') from exc
+            references.append({'asset_id': asset_id, 'sha256': digest, 'dimensions': dimensions,
+                               'filename': f'reference_{index:02}_{digest[:16]}.png', 'data': data})
+        return references
+
+    def _upload_references(self, record, client, origin):
+        references = record.get('references', [])
+        if record['spec']['model'] != MAGE_MODEL:
+            return []
+        if [r.get('asset_id') for r in references] != record['spec']['reference_asset_ids']:
+            raise AssetRunError('Frozen editing references are missing. Submit a new image request.')
+        folder = (self.directory / record['id'] / 'references').resolve()
+        if not folder.is_relative_to(self.directory / record['id']):
+            raise AssetRunError('The frozen editing reference folder is outside this image job.')
+        subfolder = f'h3_prompt_studio/asset_inputs/{record["id"]}'
+        uploaded = []
+        for index, reference in enumerate(references, 1):
+            filename = f'reference_{index:02}_{reference["sha256"][:16]}.png'
+            path = (folder / filename).resolve()
+            if (reference.get('filename') != filename or not path.is_relative_to(folder)
+                    or not path.is_file() or not 0 < path.stat().st_size <= MAX_BYTES):
+                raise AssetRunError('A frozen editing reference is unavailable. Submit a new image request.')
+            data = path.read_bytes()
+            if len(data) > MAX_BYTES or hashlib.sha256(data).hexdigest() != reference['sha256']:
+                raise AssetRunError('A frozen editing reference changed. Submit a new image request.')
+            params = {'filename': filename, 'subfolder': subfolder, 'type': 'input'}
+            existing = client.get(origin + '/view', params=params)
+            if existing.status_code == 404:
+                response = client.post(origin + '/upload/image', files={'image': (filename, data, 'image/png')},
+                                       data={'type': 'input', 'subfolder': subfolder, 'overwrite': 'false'}, timeout=30)
+                response.raise_for_status()
+                reply = response.json()
+                if (not isinstance(reply, dict) or reply.get('name') != filename
+                        or str(reply.get('subfolder', '')).replace('\\', '/') != subfolder or reply.get('type') != 'input'):
+                    raise AssetRunError('ComfyUI did not preserve the owned editing reference. Submit a new request.')
+                existing = client.get(origin + '/view', params=params, timeout=30)
+            existing.raise_for_status()
+            if hashlib.sha256(existing.content).hexdigest() != reference['sha256']:
+                raise AssetRunError('ComfyUI returned a different editing reference. Submit a new request.')
+            uploaded.append({**reference, 'input_name': subfolder + '/' + filename})
+        return uploaded
+
     def submit(self, request_id, spec):
         ident, spec = _id(request_id), _spec(spec)
         digest = _digest(spec)
@@ -326,14 +452,24 @@ class AssetRunManager:
                 return self._public(record)
             if any(r['status'] in ACTIVE for r in self.records.values()):
                 raise AssetRunError('Another image job is active. Wait for it or recover its status first.')
+            references = self._read_references(spec)
             now = time.time()
             record = {'id': ident, 'request_id': ident, 'spec': spec, 'digest': digest, 'origins': origins,
                       'created_at': now, 'updated_at': now, 'started_at': None, 'finished_at': None,
                       'status': 'preparing', 'stage': 'Checking image models', 'error': None, 'warning': None,
                       'submission_intent': False, 'prompt_id': None, 'prompt_confirmed': False,
                       'client_id': 'h3studio-asset-' + ident, 'cancel_requested': False, 'asset': None, 'asset_id': None}
+            if references:
+                record['references'] = [{key: value for key, value in reference.items() if key != 'data'} for reference in references]
             folder = self.directory / ident
             folder.mkdir()
+            if references:
+                (folder / 'references').mkdir()
+                for reference in references:
+                    path = folder / 'references' / reference['filename']
+                    temporary = path.with_suffix('.tmp')
+                    temporary.write_bytes(reference['data'])
+                    temporary.replace(path)
             atomic_json(folder / 'spec.json', spec)
             self.records[ident], self.job_locks[ident] = record, threading.RLock()
             self._save(record)
@@ -388,8 +524,6 @@ class AssetRunManager:
                 origin = server['comfy_url']
                 if origin not in record['origins']:
                     raise AssetRunError('ComfyUI settings changed during image preparation. Submit a new request.')
-                graph = build_graph(record['id'], record['spec'])
-                atomic_json(self.directory / record['id'] / 'graph.json', graph)
                 self._save(record, comfy_url=origin, stage='Preparing image model')
                 if record['cancel_requested']:
                     self._save(record, status='cancelled', stage='Image cancelled', finished_at=time.time())
@@ -401,6 +535,9 @@ class AssetRunManager:
                         queue = self._queue(client, origin)
                         if queue['queue_running'] or queue['queue_pending']:
                             raise ResourceError('ComfyUI has running or queued work. The image was not submitted.')
+                        references = self._upload_references(record, client, origin)
+                        graph = build_graph(record['id'], record['spec'], references)
+                        atomic_json(self.directory / record['id'] / 'graph.json', graph)
                         with self.lock:
                             if record['cancel_requested']:
                                 self._save(record, status='cancelled', stage='Image cancelled', finished_at=time.time())
@@ -516,9 +653,10 @@ class AssetRunManager:
             _id(asset['id'])
             asset = {**asset, 'semantic_role': spec['semantic_role'], 'prompt_tag': spec['prompt_tag'],
                      'description': spec['prompt'], 'person_id': spec['person_id'],
-                     'generated_by': {'kind': 'h3_frame' if spec['model'] == H3_FRAME_MODEL else 'z_image_turbo',
+                     'generated_by': {'kind': 'h3_frame' if spec['model'] == H3_FRAME_MODEL else 'mage_flow_edit' if spec['model'] == MAGE_MODEL else 'z_image_turbo',
                                       'run_id': record['id'], 'model': spec['model'], 'seed': spec['seed'],
-                                      'steps': 4 if spec['model'] == H3_FRAME_MODEL else 8, 'cfg': 1,
+                                      'steps': 4 if spec['model'] in (H3_FRAME_MODEL, MAGE_MODEL) else 8, 'cfg': 1,
+                                      **({'references': copy.deepcopy(record['references'])} if spec['model'] == MAGE_MODEL else {}),
                                       **({'experimental': True, 'generated_frames': 5, 'selected_frame': 2} if spec['model'] == H3_FRAME_MODEL else {})}}
             if spec['person_id'] and spec['semantic_role'] == 'object':
                 asset['simple_owner_id'] = spec['person_id']
