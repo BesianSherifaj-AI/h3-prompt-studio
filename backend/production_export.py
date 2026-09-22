@@ -31,26 +31,51 @@ def _edits(value, items):
     if value is None:
         return []
     if not isinstance(value, list) or len(value) > 100:
-        raise ValueError('Provide at most one crop edit per production item.')
+        raise ValueError('Provide at most one timing/crop edit per production item.')
     result, seen = [], set()
     for edit in value:
-        if not isinstance(edit, dict) or set(edit) != {'index', 'cut_at', 'crop'}:
-            raise ValueError('Each edit needs index, cut_at and crop.')
-        index, cut, crop = edit['index'], edit['cut_at'], edit['crop']
+        if (not isinstance(edit, dict) or 'index' not in edit or len(edit) < 2
+                or set(edit) - {'index', 'cut_at', 'crop', 'in_point', 'out_point'}
+                or ('crop' in edit) != ('cut_at' in edit)):
+            raise ValueError('Each edit needs index and trim points, a cut_at/crop pair, or both.')
+        index = edit['index']
         if type(index) is not int or not 0 <= index < len(items) or index in seen:
             raise ValueError('Use one unique zero-based item index per edit.')
+        duration = _duration(items[index])
+        entry = {'index': index}
+        end = duration
+        if 'in_point' in edit or 'out_point' in edit:
+            start, end = edit.get('in_point', 0), edit.get('out_point', duration)
+            if (any(type(n) not in (int, float) or not math.isfinite(n) for n in (start, end))
+                    or not 0 <= start < end <= duration):
+                raise ValueError('Trim points must satisfy 0 <= in_point < out_point <= the authored duration.')
+            start, end = (math.floor(n * 24 + 0.5) / 24 for n in (start, end))
+            if not 0 <= start < end <= duration:
+                raise ValueError('Frame-aligned trim points must retain at least one frame within the authored duration.')
+            entry.update(in_point=start, out_point=end)
+        if 'crop' not in edit:
+            result.append(entry)
+            seen.add(index)
+            continue
+        cut, crop = edit['cut_at'], edit['crop']
         if type(cut) not in (int, float) or not math.isfinite(cut) or not 0 <= cut < _duration(items[index]):
             raise ValueError('A crop cut must be finite and before the end of its clip.')
         frame = math.floor(cut * 24 + 0.5)
         if frame / 24 >= _duration(items[index]):
             raise ValueError('The frame-aligned crop cut must leave at least one reaction frame.')
+        if frame / 24 >= end:
+            raise ValueError('A crop cut uses source time and must precede the trim out point.')
         if not isinstance(crop, dict) or set(crop) != {'x', 'y', 'width', 'height'}:
             raise ValueError('A crop needs x, y, width and height.')
         if any(type(crop[k]) is not int or crop[k] % 2 or crop[k] < (2 if k in ('width', 'height') else 0) for k in crop):
             raise ValueError('Crop coordinates and dimensions must be nonnegative even integers, with positive dimensions.')
-        result.append({'index': index, 'cut_at': frame / 24, 'crop': dict(crop)})
+        result.append({**entry, 'cut_at': frame / 24, 'crop': dict(crop)})
         seen.add(index)
     return sorted(result, key=lambda edit: edit['index'])
+
+
+def _delivery_duration(item, edit=None):
+    return edit['out_point'] - edit['in_point'] if edit and 'in_point' in edit else _duration(item)
 
 
 def _source_dimensions(path):
@@ -80,9 +105,9 @@ def _crop_filter(edit, dimensions):
             '[before][after]concat=n=2:v=1:a=0[edited]')
 
 
-def _measure_audio(path, duration):
+def _measure_audio(path, duration, in_point=0):
     result = subprocess.run(['ffmpeg', '-hide_banner', '-nostdin', '-threads', '2', '-filter_threads', '2',
-        '-i', str(path), '-vn', '-map', '0:a:0', '-af',
+        *(['-ss', str(in_point)] if in_point else []), '-i', str(path), '-vn', '-map', '0:a:0', '-af',
         f'atrim=duration={duration},loudnorm=I=-16:TP={AUDIO_HEADROOM_DBTP}:LRA=11:print_format=json',
         '-f', 'null', '-'], capture_output=True, timeout=120,
         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -102,7 +127,7 @@ def _limited_gain(duration, gain):
             f'alimiter=limit={10 ** (AUDIO_HEADROOM_DBTP / 20):.9f}:level=false:latency=true,aresample=48000')
 
 
-def _normalization_plan(source, duration):
+def _normalization_plan(source, duration, in_point=0):
     probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries',
         'stream=index', '-of', 'json', str(source)], capture_output=True, timeout=30,
         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -110,7 +135,7 @@ def _normalization_plan(source, duration):
         raise ValueError('Audio stream could not be inspected before normalization.')
     if not json.loads(probe.stdout).get('streams'):
         return None
-    measured = _measure_audio(source, duration)
+    measured = _measure_audio(source, duration, in_point)
     if measured['input_tp'] is None:
         return {'filter': f'atrim=duration={duration}', 'method': 'silent_source_preserved', 'input': measured}
     if all(value is not None for value in measured.values()):
@@ -168,6 +193,8 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
     if not items or len(items) > 100 or any(x.get('status') != 'succeeded' or not x.get('run_id') for x in items):
         raise ValueError('Every item must finish successfully before exporting this production.')
     edits = _edits(edits, items)
+    edit_map = {edit['index']: edit for edit in edits}
+    total_duration = sum(_delivery_duration(item, edit_map.get(index)) for index, item in enumerate(items))
     for item in items:
         _duration(item)
     identity = hashlib.sha256(json.dumps({
@@ -185,8 +212,10 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
         if not output.exists():
             # Validate every crop against decoded metadata before any transcode.
             sources = [Path(video_path(safe_id(item['run_id']))) for item in items]
-            edit_map, dimensions = {edit['index']: edit for edit in edits}, {}
+            dimensions = {}
             for edit in edits:
+                if 'crop' not in edit:
+                    continue
                 index, crop = edit['index'], edit['crop']
                 dimensions[index] = _source_dimensions(sources[index])
                 width, height = dimensions[index]
@@ -194,22 +223,28 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
                     raise ValueError(f'Crop for item {index} exceeds its {width}×{height} source frame.')
             files = []
             manifest = {'name': batch.get('name', 'Production'), 'review_status': 'Generated; creative review required',
+                        'duration': total_duration,
                         'edits': edits, 'normalize_audio': normalize_audio,
                         'audio_normalization_version': AUDIO_NORMALIZATION_VERSION if normalize_audio else None, 'clips': []}
             for index, item in enumerate(items, 1):
                 source = sources[index - 1]
                 project = item.get('project', {})
-                duration = _duration(item)
+                edit = edit_map.get(index - 1)
+                duration = _delivery_duration(item, edit)
+                in_point = edit.get('in_point', 0) if edit else 0
                 target = folder / f'{index:03}.mp4'
                 audio_receipt = folder / f'{index:03}-audio.json'
                 if not target.exists() or normalize_audio and not audio_receipt.exists():
                     temp = folder / f'{index:03}-building.mp4'
-                    edit = edit_map.get(index - 1)
-                    video_filter = (['-filter_complex', _crop_filter(edit, dimensions[index - 1]), '-map', '[edited]']
-                                    if edit else ['-map', '0:v:0', '-vf', 'setsar=1'])
-                    plan = _normalization_plan(source, duration) if normalize_audio else None
+                    # Crop cut_at remains on the original source timeline. A
+                    # cut before the selected in point crops the whole range.
+                    relative_crop = {**edit, 'cut_at': max(0, edit['cut_at'] - in_point)} if edit and 'crop' in edit else None
+                    video_filter = (['-filter_complex', _crop_filter(relative_crop, dimensions[index - 1]), '-map', '[edited]']
+                                    if relative_crop else ['-map', '0:v:0', '-vf', 'setsar=1'])
+                    plan = _normalization_plan(source, duration, in_point) if normalize_audio else None
                     audio_filter = ['-af', plan['filter']] if plan else []
-                    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', str(source),
+                    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+                          *(['-ss', str(in_point)] if in_point else []), '-i', str(source),
                           '-t', str(duration), *video_filter, '-map', '0:a:0?', '-map_metadata', '-1',
                           *audio_filter,
                           '-r', '24', '-c:v', 'libx264', '-crf', '17', '-preset', 'fast',
@@ -223,6 +258,7 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
                 files.append(target)
                 manifest['clips'].append({'index': index, 'title': project.get('title', item.get('title', 'Clip')),
                                           'run_id': item['run_id'], 'duration': duration, 'file': target.name,
+                                          **({'in_point': in_point, 'out_point': edit['out_point'], 'source_duration': _duration(item)} if edit and 'in_point' in edit else {}),
                                           **({'audio_normalization': json.loads(audio_receipt.read_text(encoding='utf-8'))} if normalize_audio else {})})
             atomic_json(folder / 'manifest.json', manifest)
             if kind == 'film':
@@ -255,6 +291,7 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
     return {'id': batch['id'], 'export_id': identity, 'kind': kind, 'filename': output.name,
             'url': f'/api/production/{batch["id"]}/exports/{identity}/{output.name}',
             'review_status': 'Generated; creative review required', 'clip_count': len(items), 'edits': edits,
+            'duration': total_duration,
             'normalize_audio': normalize_audio,
             'audio_normalization_version': AUDIO_NORMALIZATION_VERSION if normalize_audio else None}
 

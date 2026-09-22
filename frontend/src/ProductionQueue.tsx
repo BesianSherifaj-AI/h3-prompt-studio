@@ -7,15 +7,34 @@ export type ProductionItem = {
   index: number; project_id: string; title: string; status: string; stage?: string;
   error?: string; run_id?: string; video_url?: string; duration?: number; asset_url?: string;
 };
+export type ProductionEdit = { index: number; in_point?: number; out_point?: number; cut_at?: number; crop?: { x: number; y: number; width: number; height: number } };
+export type ProductionTrimDrafts = Record<number, { in_point: string; out_point: string }>;
 export type ProductionBatch = {
   id: string; name: string; status: string; error?: string; items: ProductionItem[];
   completed: number; total: number; created_at?: number;
-  latest_export?: { url: string; filename: string; kind: 'film' | 'clips'; export_id: string; clip_count: number; normalize_audio?: boolean } | null;
+  latest_export?: { url: string; filename: string; kind: 'film' | 'clips'; export_id: string; clip_count: number; normalize_audio?: boolean; edits?: ProductionEdit[]; duration?: number } | null;
 };
 type SavedProject = { id: string; title: string };
 const TIMEOUT = { timeoutMs: 20_000 };
-export function productionExportOptions(kind: 'film' | 'clips', balanceAudio: boolean) {
-  return { kind, normalize_audio: kind === 'clips' && balanceAudio };
+export function productionExportOptions(kind: 'film' | 'clips', balanceAudio: boolean, edits: ProductionEdit[] = []) {
+  return { kind, normalize_audio: kind === 'clips' && balanceAudio, ...(edits.length ? { edits } : {}) };
+}
+export function productionTrimEdits(items: ProductionItem[], drafts: ProductionTrimDrafts, saved: ProductionEdit[] = []) {
+  const edits = new Map(saved.map(edit => [edit.index, { ...edit }]));
+  for (const [key, points] of Object.entries(drafts)) {
+    const index = Number(key), item = items.find(value => value.index === index), duration = item?.duration;
+    const start = Number(points.in_point), end = Number(points.out_point);
+    if (!duration || !points.in_point.trim() || !points.out_point.trim() || !Number.isFinite(start) || !Number.isFinite(end)
+      || start < 0 || start >= end || end > duration) throw new Error(`Video ${index + 1}: choose 0 ≤ In < Out ≤ ${duration || 'source duration'} seconds.`);
+    const inPoint = Math.floor(start * 24 + .5) / 24, outPoint = Math.floor(end * 24 + .5) / 24;
+    if (inPoint >= outPoint || outPoint > duration) throw new Error(`Video ${index + 1}: keep at least one complete frame within the source.`);
+    const edit: ProductionEdit = { ...edits.get(index), index };
+    if (edit.crop && edit.cut_at !== undefined && edit.cut_at >= outPoint) throw new Error(`Video ${index + 1}: Out must follow the saved crop cut at ${edit.cut_at}s.`);
+    delete edit.in_point; delete edit.out_point;
+    if (inPoint !== 0 || outPoint !== duration) { edit.in_point = inPoint; edit.out_point = outPoint; }
+    if (Object.keys(edit).length > 1) edits.set(index, edit); else edits.delete(index);
+  }
+  return [...edits.values()].sort((a, b) => a.index - b.index);
 }
 export function productionProgress(batch: ProductionBatch) {
   const total = Math.max(0, batch.total || batch.items?.length || 0);
@@ -34,10 +53,26 @@ export function productionStatus(status: string) {
 export function ProductionBatchView({ batch, pending = false, onAction, onRetry, onPreview, onOpenProject, onExport, balanceAudio = true, onBalanceAudioChange }: {
   batch: ProductionBatch; pending?: boolean; onAction: (action: string) => void;
   onRetry: (index: number) => void; onPreview: (item: ProductionItem) => void; onOpenProject: (id: string) => void;
-  onExport?: (kind: 'film' | 'clips') => void;
+  onExport?: (kind: 'film' | 'clips', edits: ProductionEdit[]) => void;
   balanceAudio?: boolean; onBalanceAudioChange?: (value: boolean) => void;
 }) {
   const progress = productionProgress(batch), actions = productionActions(batch.status);
+  const [trims, setTrims] = useState<ProductionTrimDrafts>({});
+  useEffect(() => setTrims({}), [batch.id, batch.latest_export?.export_id]);
+  const savedEdits = batch.latest_export?.edits || [];
+  let exportEdits: ProductionEdit[] = [], trimError = '';
+  try { exportEdits = productionTrimEdits(batch.items, trims, savedEdits); }
+  catch (error) { trimError = (error as Error).message; }
+  const trimReady = batch.status === 'succeeded' && progress.completed === progress.total && progress.total > 0 && onExport;
+  const deliveryDuration = batch.items.every(item => item.duration) ? batch.items.reduce((sum, item) => {
+    const edit = exportEdits.find(value => value.index === item.index);
+    return sum + ((edit?.out_point ?? item.duration!) - (edit?.in_point ?? 0));
+  }, 0) : undefined;
+  const updateTrim = (item: ProductionItem, field: 'in_point' | 'out_point', value: string) => setTrims(current => {
+    const saved = savedEdits.find(edit => edit.index === item.index);
+    return { ...current, [item.index]: { in_point: current[item.index]?.in_point ?? String(saved?.in_point ?? 0),
+      out_point: current[item.index]?.out_point ?? String(saved?.out_point ?? item.duration), [field]: value } };
+  });
   return <section className="production-batch" aria-label={batch.name}>
     <div className="production-batch-heading"><div><h3>{batch.name}</h3><p role="status">{productionStatus(batch.status)} · {progress.completed}/{progress.total} rendered</p></div>
       <div className="production-buttons">
@@ -46,13 +81,29 @@ export function ProductionBatchView({ batch, pending = false, onAction, onRetry,
         {actions.cancel && <button disabled={pending} onClick={() => onAction('cancel')}><Square size={15}/>Stop queue</button>}
         {progress.completed > 0 && <a href={`/api/production/${batch.id}/playlist`} download><Download size={15}/>Playlist</a>}
         {batch.status === 'succeeded' && progress.completed === progress.total && progress.total > 0 && onExport && <>
-          <button disabled={pending} onClick={() => onExport('film')}><Clapperboard size={15}/>Export film</button>
-          <button disabled={pending} onClick={() => onExport('clips')}><Download size={15}/>Export clips ZIP</button>
+          <button disabled={pending || !!trimError} onClick={() => onExport('film', exportEdits)}><Clapperboard size={15}/>Export film</button>
+          <button disabled={pending || !!trimError} onClick={() => onExport('clips', exportEdits)}><Download size={15}/>Export clips ZIP</button>
           {onBalanceAudioChange && <div className="production-audio"><label><input type="checkbox" checked={balanceAudio} disabled={pending} onChange={event => onBalanceAudioChange(event.target.checked)}/>Balance clip volume</label><small>Matches quiet and loud clips in the ZIP.</small></div>}
         </>}
       </div>
     </div>
     <progress max={progress.total || 1} value={progress.completed} aria-label="Rendered videos"/>
+    {trimReady && <details className="production-trims"><summary>Trim timing{deliveryDuration !== undefined && !trimError ? ` · ${deliveryDuration.toFixed(2)}s film` : ''}</summary>
+      <p>Keep the strongest moment in each take. In and Out use seconds in the original video; audio follows the same range. Cuts snap to 24 fps.</p>
+      {savedEdits.some(edit => edit.crop) && <p>Saved crop edits are retained. Their cut times remain relative to the original video.</p>}
+      <div className="production-trim-list">{batch.items.filter(item => item.duration).map(item => {
+        const saved = savedEdits.find(edit => edit.index === item.index);
+        return <div className="production-trim-row" key={item.index}><span>{item.index + 1}. {item.title}</span>
+          <label>In<input aria-label={`In point for ${item.title}`} type="number" min="0" max={item.duration} step="any" disabled={pending}
+            value={trims[item.index]?.in_point ?? saved?.in_point ?? 0} onChange={event => updateTrim(item, 'in_point', event.target.value)}/></label>
+          <label>Out<input aria-label={`Out point for ${item.title}`} type="number" min="0" max={item.duration} step="any" disabled={pending}
+            value={trims[item.index]?.out_point ?? saved?.out_point ?? item.duration} onChange={event => updateTrim(item, 'out_point', event.target.value)}/></label>
+          <button disabled={pending || !item.video_url} onClick={() => onPreview(item)}>Review source</button></div>;
+      })}</div>
+      <button disabled={pending} onClick={() => setTrims(Object.fromEntries(batch.items.filter(item => item.duration).map(item => [item.index, { in_point: '0', out_point: String(item.duration) }])))}>Reset timing</button>
+      <small>Timing is saved with a successful export. Original takes stay available.</small>
+    </details>}
+    {trimError && <p className="production-error" role="alert">{trimError}</p>}
     {batch.error && <p className="production-error" role="alert">{batch.error}</p>}
     <ol className="production-items">{batch.items?.map(item => <li key={item.index} className={`production-item is-${item.status}`}>
       <span className="production-index">{item.index + 1}</span>
@@ -68,7 +119,7 @@ export function ProductionBatchView({ batch, pending = false, onAction, onRetry,
     </li>)}</ol>
     {batch.latest_export?.url && <p className="production-export" role="status">
       <a href={batch.latest_export.url} download={batch.latest_export.filename} aria-label={`Download latest export: ${batch.latest_export.filename}`}><Download size={15}/>{batch.latest_export.filename}</a>
-      <small>Latest saved {batch.latest_export.kind === 'film' ? 'film' : 'clips'} export · {batch.latest_export.clip_count} clips{batch.latest_export.normalize_audio ? ' · Balanced audio' : ''}. Review the video before publishing.</small>
+      <small>Latest saved {batch.latest_export.kind === 'film' ? 'film' : 'clips'} export · {batch.latest_export.clip_count} clips{batch.latest_export.duration !== undefined ? ` · ${batch.latest_export.duration.toFixed(2)}s` : ''}{batch.latest_export.normalize_audio ? ' · Balanced audio' : ''}. Review the video before publishing.</small>
     </p>}
     <p className="production-hint">Rendered videos remain takes for review. The queue does not accept Game actions or change story state.</p>
   </section>;
@@ -159,12 +210,12 @@ export default function ProductionQueue({ active, currentProjectId, currentProje
       </details>
       {batches.length > 0 && <label className="production-picker">Saved batch<select value={selectedId} onChange={event => { setBatch(null); setPreview(null); setSelectedId(event.target.value); }}>
         {batches.map(item => <option key={item.id} value={item.id}>{item.name} · {productionStatus(item.status)}</option>)}</select></label>}
-      {batch && batch.id === selectedId && <ProductionBatchView batch={batch} pending={pending}
+      {batch && batch.id === selectedId && <ProductionBatchView key={batch.id} batch={batch} pending={pending}
         balanceAudio={balanceAudio} onBalanceAudioChange={setBalanceAudio}
         onAction={action => void perform(async () => { await api(`/production/${batch.id}/${action}`, {}, undefined, undefined, TIMEOUT); })}
         onRetry={index => void perform(async () => { await api(`/production/${batch.id}/items/${index}/retry`, { request_id: crypto.randomUUID() }, undefined, undefined, TIMEOUT); })}
-        onExport={kind => void perform(async () => {
-          const result = await api(`/production/${batch.id}/export`, productionExportOptions(kind, balanceAudio), undefined, undefined, { timeoutMs: 600_000 });
+        onExport={(kind, edits) => void perform(async () => {
+          const result = await api(`/production/${batch.id}/export`, productionExportOptions(kind, balanceAudio, edits), undefined, undefined, { timeoutMs: 600_000 });
           setBatch(current => current?.id === batch.id ? { ...current, latest_export: { ...result, kind } } : current);
         }, 'Preparing your export. Large batches can take a few minutes…')}
         onPreview={setPreview} onOpenProject={id => void perform(() => onOpenProject(id))}/>}
