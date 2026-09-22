@@ -37,7 +37,7 @@ def api_rig(server, monkeypatch):
     videos, assets, llm = RouteVideos(), Assets(), Client()
     calls, ending_calls, cached_calls, saved = [], [], [], {}
 
-    def run_ai(model, operation):
+    def run_ai(model, operation, *, profile=None):
         calls.append(model)
         return operation(model)
 
@@ -262,7 +262,7 @@ def test_planner_resource_conflicts_and_missing_assets_return_actionable_errors(
     response = rig.http.post(path, headers=auth(rig.module), json={'message': 'Go to a garden.'})
     assert response.status_code == 400 and 'new images' in response.json()['detail']
     assert not rig.assets.requests and not rig.videos.queues
-    def conflict(*args):
+    def conflict(*args, **kwargs):
         raise ResourceError('Another render is active.')
     monkeypatch.setattr(rig.resources, 'run_ai', conflict)
     response = rig.http.post(path, headers=auth(rig.module), json={'message': 'Continue.'})

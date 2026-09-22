@@ -17,6 +17,12 @@ export class ApiTimeoutError extends Error {
   }
 }
 export type ApiOptions = { timeoutMs?: number; signal?: AbortSignal };
+export function controlRequestTimeout(path: string): number | undefined {
+  const endpoint = path.split('?')[0];
+  if (endpoint === '/connections') return 45_000;
+  if (endpoint === '/bootstrap' || endpoint === '/settings') return 15_000;
+  return undefined;
+}
 export const setToken = (value: string) => {
   token = value;
 };
@@ -32,12 +38,13 @@ export async function api(
   const abort = () => controller.abort(options.signal?.reason);
   if (options.signal?.aborted) abort();
   else options.signal?.addEventListener("abort", abort, { once: true });
+  const timeoutMs = options.timeoutMs ?? controlRequestTimeout(path);
   const timer =
-    options.timeoutMs && options.timeoutMs > 0
+    timeoutMs && timeoutMs > 0
       ? setTimeout(() => {
           timedOut = true;
           controller.abort();
-        }, options.timeoutMs)
+        }, timeoutMs)
       : undefined;
   try {
     const send = () =>

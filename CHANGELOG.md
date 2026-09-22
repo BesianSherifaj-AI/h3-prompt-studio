@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.0 — Saved assistant profiles and production queues
+
+- Independent Studio/Game model, context and CPU/GPU settings, with verified loaded configuration and recovery.
+- Draft-based Connections settings, bounded requests, shared errors and compact mobile controls.
+- Durable serial batches of up to 100 projects, optional Z-Image first frames, safe resume and explicit failed-take retries.
+- Film and individual-clip ZIP exports with preserved originals and clear creative-review status.
+- Existing selected takes can be adopted only when their complete project snapshot matches.
+
+
 ## 1.5.0 — Separate Studio and Game workspaces
 
 - Added direct `/studio` and `/game` navigation with browser Back and Forward support and independent workspace selections.

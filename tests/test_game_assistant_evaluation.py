@@ -142,7 +142,7 @@ class Resources:
         self.settings, self.client, self.state_path = settings, client, state_path
         self.calls = []
         self.pending_load = None
-    def run_ai(self, model, operation=None):
+    def run_ai(self, model, operation=None, *, profile=None):
         self.calls.append(('prediction' if operation else 'prepare', model))
         return operation('owned:' + model) if operation else {'instance_id': 'owned:' + model}
     def prepare_h3(self):

@@ -1,6 +1,22 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { api, ApiError, ApiTimeoutError, setToken } from './api';
+import { api, ApiError, ApiTimeoutError, controlRequestTimeout, setToken } from './api';
 afterEach(()=>{ vi.unstubAllGlobals(); vi.useRealTimers(); });
+test('control deadlines bound setup without changing generation requests',()=>{
+  expect(controlRequestTimeout('/bootstrap?workspace=studio')).toBe(15000);
+  expect(controlRequestTimeout('/settings')).toBe(15000);
+  expect(controlRequestTimeout('/connections')).toBe(45000);
+  expect(controlRequestTimeout('/ai/plan')).toBeUndefined();
+  expect(controlRequestTimeout('/stories/game/turns')).toBeUndefined();
+});
+test('a stalled settings save times out by default without retrying its write',async()=>{
+  vi.useFakeTimers();
+  const fetcher=vi.fn((_url,init)=>new Promise<Response>((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')))));
+  vi.stubGlobal('fetch',fetcher);
+  const failure=api('/settings',{assistant_profiles:{game:{model:'saved'}}}).catch(error=>error);
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(await failure).toBeInstanceOf(ApiTimeoutError);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
 test('server restart refreshes token without replacing the draft and retries only the rejected request',async()=>{
   const token='a'.repeat(43), requests:any[]=[];
   const responses=[new Response(JSON.stringify({detail:'Studio session expired. Reload this page.'}),{status:403}),new Response(JSON.stringify({token,project:{id:'another-project'}})),new Response(JSON.stringify({saved:true}))];

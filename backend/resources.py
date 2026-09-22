@@ -1,6 +1,7 @@
 """Serialize app inference and verify local GPU hand-offs without interrupting jobs."""
 from __future__ import annotations
 import json
+import copy
 import subprocess
 import sys
 import threading
@@ -11,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from .lmstudio import RESIDENT_PREFIX, ASSISTANT_PREFIX
+from .lmstudio import RESIDENT_PREFIX, RESIDENT_CPU_PREFIX, ASSISTANT_PREFIX, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS
 from .projects import atomic_json
 try:
     import psutil
@@ -63,12 +64,15 @@ def gpu_snapshot():
 
 class ResourceManager:
     def __init__(self, get_settings, get_client, *, state_path=None):
-        self.get_settings, self.get_client = get_settings, get_client
+        self._settings_provider, self.get_client = get_settings, get_client
+        self._active_settings = None
+        self._profile_was_explicit = False
         self.lock = threading.Lock()
         self.stage = 'idle'
         self.instance_id = None
         self.model_key = None
         self.instance_endpoint = None
+        self.instance_profile = None
         self.exclusive_ownership = None
         self.ai_idle_memory_mib = None
         self.baseline_instance_id = None
@@ -89,11 +93,35 @@ class ResourceManager:
                 # previous process's VRAM baseline without live inventory.
                 self.exclusive_ownership = self._saved_ownership(state.get('exclusive_instance'))
                 candidate = state.get('pending_load')
-                if isinstance(candidate, dict) and isinstance(candidate.get('instance_id'), str) and candidate['instance_id'].startswith(ASSISTANT_PREFIX):
+                if isinstance(candidate, dict) and isinstance(candidate.get('instance_id'), str) and candidate['instance_id'].startswith((ASSISTANT_PREFIX, RESIDENT_PREFIX)):
                     self.pending_load = candidate
             except (OSError, ValueError, AttributeError):
                 # An unreadable marker cannot establish that H3 is still warm.
                 self.comfy_kind = 'unknown'
+
+    def get_settings(self):
+        return copy.deepcopy(self._active_settings if self._active_settings is not None else self._settings_provider())
+
+    def _begin_profile(self, model, profile):
+        """Freeze one operation's profile under the lease, independent of UI changes."""
+        settings = copy.deepcopy(self._settings_provider())
+        if profile is not None:
+            if not isinstance(profile, dict) or profile.get('model') != model:
+                raise ResourceError('The assistant profile must name the requested model.')
+            settings.update({key: profile[key] for key in ('model', 'context_length', 'ai_memory_mode') if key in profile})
+        mode = settings.get('ai_memory_mode', 'exclusive')
+        context = 4096 if mode == 'resident_small' else settings.get('context_length', 8192)
+        if mode not in ('exclusive', 'resident_small', 'resident_cpu') or type(context) is not int or not MIN_CONTEXT_TOKENS <= context <= MAX_CONTEXT_TOKENS:
+            raise ResourceError('Choose a supported assistant execution mode and context length.')
+        settings['context_length'] = context
+        self._active_settings = settings
+        self._profile_was_explicit = profile is not None
+
+    @staticmethod
+    def _loaded_context(item):
+        config = item.get('config', {})
+        context = config.get('context_length', config.get('contextLength')) if isinstance(config, dict) else None
+        return context if type(context) is int else None
 
     @staticmethod
     def _endpoint(value):
@@ -140,6 +168,7 @@ class ResourceManager:
         self.instance_id, self.model_key = None, None
         self.instance_endpoint, self.exclusive_ownership = None, None
         self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+        self.instance_profile = None
         self._save_state()
 
     def _restore_exclusive(self, client, loaded):
@@ -221,18 +250,21 @@ class ResourceManager:
         # instead resolve this previous instance's own exact inventory key.
         previous_model = item.get('model_key', item.get('model'))
         self.assert_idle()
-        verified = client.verify_resident_model(previous_model, ident)
+        mode = 'resident_cpu' if ident.startswith(RESIDENT_CPU_PREFIX) else 'resident_small'
+        verified = (client.verify_resident_model(previous_model, ident, context_length=None, mode=mode)
+                    if mode == 'resident_cpu' else client.verify_resident_model(previous_model, ident))
         if (verified.get('instance_id') != ident or verified.get('model') != previous_model
-                or verified.get('profile') != 'resident_small_cpu'):
+                or verified.get('profile') not in ('resident_small_cpu', 'resident_cpu')):
             raise ResourceError('The previous resident model could not be verified; no model was unloaded.')
         self.instance_id, self.model_key = ident, previous_model
         self.instance_endpoint, self.exclusive_ownership = self._client_endpoint(client), None
         self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+        self.instance_profile = {'model': previous_model, 'context_length': verified['context_length'], 'ai_memory_mode': mode}
         self._save_state()
         return True
 
     def _prepare_ai(self, model):
-        if self.get_settings().get('ai_memory_mode', 'exclusive') == 'resident_small':
+        if self.get_settings().get('ai_memory_mode', 'exclusive') in ('resident_small', 'resident_cpu'):
             return self._prepare_resident_ai(model)
         client = self.get_client()
         self.stage = 'checking ComfyUI'
@@ -253,7 +285,14 @@ class ResourceManager:
                 self._save_state()
             else:
                 raise ResourceError('A previous assistant load has an uncertain response. Check its named instance in LM Studio before retrying; no duplicate load was started.')
-        if self.instance_id and self.model_key != model:
+        selected = next((item for item in loaded if instance_id(item) == self.instance_id), None)
+        loaded_context = self._loaded_context(selected or {})
+        if loaded_context is None and self.instance_profile:
+            loaded_context = self.instance_profile['context_length']
+        context_changed = ((loaded_context is not None and loaded_context != self.get_settings()['context_length'])
+                           or (selected is not None and loaded_context is None and self._profile_was_explicit))
+        resident_loaded = bool(self.instance_id and self.instance_id.startswith(RESIDENT_PREFIX))
+        if self.instance_id and (self.model_key != model or context_changed or resident_loaded):
             self.stage = 'unloading previous AI model'
             if any(instance_id(item) == self.instance_id for item in loaded):
                 client.unload_model(self.instance_id)
@@ -319,6 +358,9 @@ class ResourceManager:
             raise ResourceError('Multiple instances of the selected LM Studio model are loaded. Keep one instance before preparing AI.')
         if matching:
             selected_id = instance_id(matching[0])
+            effective_context = self._loaded_context(matching[0])
+            if effective_context is None and self.instance_profile and self.instance_id == selected_id:
+                effective_context = self.instance_profile.get('context_length')
             if online and (not owned_baseline or selected_id != self.baseline_instance_id):
                 raise ResourceError('The loaded AI instance changed during the hand-off. Retry to verify its memory state.')
             if selected_id != self.baseline_instance_id:
@@ -334,35 +376,61 @@ class ResourceManager:
                 self.pending_load = {'instance_id': ASSISTANT_PREFIX + uuid.uuid4().hex,
                                      'model': model, 'endpoint': self._client_endpoint(client)}
                 self._save_state()
-                result = owned_loader(model, context_length=self.get_settings()['context_length'],
-                                      instance_id=self.pending_load['instance_id'])
+                try:
+                    result = owned_loader(model, context_length=self.get_settings()['context_length'],
+                                          instance_id=self.pending_load['instance_id'])
+                except Exception as exc:
+                    if getattr(exc, 'load_submitted', None) is False:
+                        self.pending_load = None
+                        self._save_state()
+                    raise
             else:
                 result = client.load_model(model, context_length=self.get_settings()['context_length'])
             self.instance_id = result['instance_id']
+            effective_context = self._loaded_context({'config': result.get('load_config', {})})
+            if effective_context is None:
+                current = next((item for item in client.loaded_instances() if instance_id(item) == self.instance_id), {})
+                effective_context = self._loaded_context(current)
             self.pending_load = None
             baseline = gpu_snapshot()
             if baseline is not None and memory is not None:
                 self.ai_idle_memory_mib = baseline['used_mib']
                 self.baseline_instance_id = self.instance_id
         self.model_key = model
+        self.instance_profile = {'model': model, 'context_length': effective_context, 'ai_memory_mode': 'exclusive'}
         self._remember_exclusive(client)
         self.stage = 'AI ready'
         self.last_error = None
-        return {'ready': True, 'instance_id': self.instance_id, 'model': model, 'gpu': gpu_snapshot()}
+        return {'ready': True, 'instance_id': self.instance_id, 'model': model, 'context_length': self.instance_profile['context_length'],
+                'memory_mode': 'exclusive', 'gpu': gpu_snapshot(), 'message': 'The selected assistant is ready. GPU memory was prepared for AI.'}
 
     def _prepare_resident_ai(self, model):
         """Keep H3 untouched while one exact small vision model runs on CPU."""
         settings = self.get_settings()
+        mode = settings.get('ai_memory_mode', 'resident_small')
+        context = 4096 if mode == 'resident_small' else settings.get('context_length', 8192)
+        options = {'mode': mode} if mode == 'resident_cpu' else {}
         if model != settings.get('model'):
             raise ResourceError('Resident mode uses the exact small vision model selected in Connections.')
         self.stage = 'checking resident AI'
         self.assert_idle()
         client = self.get_client()
-        client.resident_model_info(model)
+        client.resident_model_info(model, **options)
         loaded = client.loaded_instances()
         self._restore_exclusive(client, loaded)
+        self._adopt_previous_resident(client, loaded)
         instance_id = lambda item: item.get('id', item.get('instance_id'))
-        if self.instance_id and self.model_key != model:
+        if self.pending_load is not None:
+            pending = self.pending_load
+            if (self.instance_id == pending['instance_id'] and self.model_key == pending.get('model')
+                    and pending.get('endpoint') == self._client_endpoint(client)):
+                self.pending_load = None
+                self._save_state()
+            else:
+                raise ResourceError('A previous assistant load has an uncertain response. Check its named instance in LM Studio before retrying; no duplicate load was started.')
+        changed_profile = bool(self.instance_profile and (self.instance_profile['context_length'] != context
+                               or self.instance_profile['ai_memory_mode'] != mode))
+        if self.instance_id and (self.model_key != model or changed_profile or not self.instance_id.startswith(RESIDENT_PREFIX)):
             # Changing the selected model may release only the instance this
             # coordinator already owns. Never adopt/unload unrelated models.
             if any(instance_id(item) != self.instance_id for item in loaded):
@@ -376,19 +444,34 @@ class ResourceManager:
             if (len(loaded) != 1 or loaded[0].get('model_key', loaded[0].get('model')) != model):
                 raise ResourceError('Resident mode can keep only its selected small vision model. Unload the other LM Studio model first.')
             self.stage = 'verifying resident CPU model'
-            result = client.verify_resident_model(model, instance_id(loaded[0]))
+            result = (client.verify_resident_model(model, instance_id(loaded[0]), context_length=context, **options)
+                      if mode == 'resident_cpu' else client.verify_resident_model(model, instance_id(loaded[0])))
         else:
             self._forget_instance()
             self.assert_idle()
             self.stage = 'loading resident CPU vision model'
-            result = client.load_resident_model(model)
+            if mode == 'resident_cpu':
+                self.pending_load = {'instance_id': RESIDENT_CPU_PREFIX + uuid.uuid4().hex,
+                                     'model': model, 'endpoint': self._client_endpoint(client)}
+                self._save_state()
+                try:
+                    result = client.load_resident_model(model, context_length=context, instance_id=self.pending_load['instance_id'], **options)
+                except Exception as exc:
+                    if getattr(exc, 'load_submitted', None) is False:
+                        self.pending_load = None
+                        self._save_state()
+                    raise
+                self.pending_load = None
+            else:
+                result = client.load_resident_model(model)
         self.instance_id, self.model_key = result['instance_id'], model
         self.instance_endpoint, self.exclusive_ownership = self._client_endpoint(client), None
         self.ai_idle_memory_mib, self.baseline_instance_id = None, None
+        self.instance_profile = {'model': model, 'context_length': result['context_length'], 'ai_memory_mode': mode}
         self._save_state()
         self.assert_idle()
         self.stage, self.last_error = 'AI ready · H3 kept loaded', None
-        return {**result, 'memory_mode': 'resident_small', 'gpu': gpu_snapshot()}
+        return {**result, 'memory_mode': mode, 'gpu': gpu_snapshot(), 'message': 'The CPU assistant is ready. H3 can keep using the GPU.'}
 
     def _prepare_resident_h3(self):
         self.stage = 'verifying resident AI before H3'
@@ -397,29 +480,22 @@ class ResourceManager:
         loaded = client.loaded_instances()
         self._restore_exclusive(client, loaded)
         if loaded:
-            model = self.get_settings().get('model')
-            client.resident_model_info(model)
-            if len(loaded) != 1 or loaded[0].get('model_key', loaded[0].get('model')) != model:
+            if not self._adopt_previous_resident(client, loaded):
                 raise ResourceError('H3 can keep only the verified resident small model. Unload the other LM Studio model first.')
-            ident = loaded[0].get('id', loaded[0].get('instance_id'))
-            result = client.verify_resident_model(model, ident)
-            self.instance_id, self.model_key = result['instance_id'], model
-            self.instance_endpoint, self.exclusive_ownership = self._client_endpoint(client), None
-            self.ai_idle_memory_mib, self.baseline_instance_id = None, None
-            self._save_state()
             message = 'The resident CPU vision model stays loaded while H3 renders.'
         else:
             self._forget_instance()
             message = 'No AI model is loaded. H3 is ready.'
         self.stage, self.last_error = 'H3 ready', None
-        return {'ready': True, 'memory_mode': 'resident_small', 'gpu': gpu_snapshot(), 'message': message}
+        return {'ready': True, 'memory_mode': (self.instance_profile or {}).get('ai_memory_mode', 'resident_small'), 'gpu': gpu_snapshot(), 'message': message}
 
-    def run_ai(self, model, operation=None):
+    def run_ai(self, model, operation=None, *, profile=None):
         if not model:
             raise ResourceError('Select a vision model in Connections first.')
         if not self.lock.acquire(blocking=False):
             raise ResourceError('Another AI or GPU hand-off is in progress. Wait for it to finish.')
         try:
+            self._begin_profile(model, profile)
             prepared = self._prepare_ai(model)
             if operation is None:
                 return prepared
@@ -432,9 +508,11 @@ class ResourceManager:
             self.stage = 'needs attention'
             raise
         finally:
+            self._active_settings = None
+            self._profile_was_explicit = False
             self.lock.release()
 
-    def run_ai_batch(self, model, operations, *, concurrency=1, cancel_event=None):
+    def run_ai_batch(self, model, operations, *, concurrency=1, cancel_event=None, profile=None):
         """Run independent callbacks under one family lease, draining on failure.
 
         Each callback receives (exact_instance_id, shared_cancel_event). Do not
@@ -450,6 +528,7 @@ class ResourceManager:
         stopped = cancel_event if cancel_event is not None else threading.Event()
         started = time.perf_counter()
         try:
+            self._begin_profile(model, profile)
             if stopped.is_set():
                 raise ResourceError('The assistant batch was cancelled before it started.')
             prepared = self._prepare_ai(model)
@@ -488,6 +567,8 @@ class ResourceManager:
             self.stage, self.last_error = 'needs attention', str(exc)
             raise
         finally:
+            self._active_settings = None
+            self._profile_was_explicit = False
             self.lock.release()
 
     def prepare_h3(self):
@@ -556,13 +637,17 @@ class ResourceManager:
     def _prepare_h3_locked(self):
         try:
             self.assert_idle()
-            if self.get_settings().get('ai_memory_mode', 'exclusive') == 'resident_small':
-                return self._prepare_resident_h3()
+            if self.pending_load is not None:
+                raise ResourceError('An assistant load still has an uncertain result. Prepare AI to verify that instance before rendering; nothing was queued.')
             self.stage = 'releasing AI memory'
             client = self.get_client()
             loaded = client.loaded_instances()
             self._restore_exclusive(client, loaded)
-            released_cpu_resident = self._adopt_previous_resident(client, loaded)
+            # A workspace switch changes preferences, not physical placement.
+            # Keep only a freshly verified CPU instance, irrespective of the UI.
+            if (any(str(item.get('id', item.get('instance_id', ''))).startswith(RESIDENT_PREFIX) for item in loaded)
+                    or (not loaded and self.get_settings().get('ai_memory_mode') in ('resident_small', 'resident_cpu'))):
+                return self._prepare_resident_h3()
             memory_before = gpu_snapshot()
             released = False
             if self.instance_id:
@@ -579,7 +664,7 @@ class ResourceManager:
             # CPU placement is verified through the SDK and the native API has
             # confirmed the instance gone. A global 128MiB VRAM drop is not a
             # meaningful requirement for releasing CPU weights and CPU KV.
-            while released and not released_cpu_resident:
+            while released:
                 memory = gpu_snapshot()
                 if not memory or memory['used_mib'] < 4096 or (memory_before and memory_before['used_mib'] - memory['used_mib'] >= 128):
                     break

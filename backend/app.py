@@ -24,6 +24,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .projects import new_project, project_workspace, safe_id, atomic_json, check_project, merge_plan, merge_assist, ALLOWED_SHOT_FIELDS
 from .resources import ResourceManager, ResourceError, local_url, gpu_snapshot
+from .assistant_profiles import migrate_profiles, merge_profile_settings, resolve_profile, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('H3_STUDIO_DATA', ROOT / 'data')).resolve()
@@ -38,6 +39,7 @@ VIDEO_RUNS = None
 STORIES = None
 ASSET_RUNS = None
 MOTION_LAB = None
+PRODUCTION = None
 VIDEO_FILE_LOCKS = {}
 DEFAULT_SETTINGS = {'lm_url': 'http://127.0.0.1:1234/v1', 'model': '', 'context_length': 8192,
                     'comfy_urls': ['http://127.0.0.1:8188', 'http://127.0.0.1:8000', 'http://127.0.0.1:8010'], 'persona': 'universal', 'last_project': '',
@@ -45,7 +47,7 @@ DEFAULT_SETTINGS = {'lm_url': 'http://127.0.0.1:1234/v1', 'model': '', 'context_
 SETTINGS = {**DEFAULT_SETTINGS}
 if (DATA / 'settings.json').exists():
     SETTINGS.update(json.loads((DATA / 'settings.json').read_text(encoding='utf-8')))
-MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS = 1024, 262_144
+SETTINGS = migrate_profiles(SETTINGS)
 
 @lru_cache(maxsize=4)
 def _assistant_client(base_url):
@@ -59,7 +61,7 @@ def client():
     return _assistant_client(SETTINGS['lm_url'])
 
 RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client, state_path=DATA / 'resource_state.json')
-app = FastAPI(title='H3 Prompt Studio', version='1.5.0', docs_url='/api/docs')
+app = FastAPI(title='H3 Prompt Studio', version='1.6.0', docs_url='/api/docs')
 BRIDGE_PORTS = ('8188', '8000', '8010')
 LOCAL_ORIGINS = [f'http://{host}:{port}' for host in ('127.0.0.1', 'localhost') for port in (8766, 8188, 8010, 8000)]
 app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'PATCH'], allow_headers=['Content-Type', 'X-H3-Bridge', 'X-H3-Token'])
@@ -317,41 +319,37 @@ def library_update_version(record_id: str, body: dict):
 
 @app.post('/api/settings')
 def save_settings(body: dict):
-    if RESOURCES.lock.locked():
+    if RESOURCES.lock.locked() and body.get('lm_url', SETTINGS['lm_url']) != SETTINGS['lm_url']:
         raise ResourceError('Wait for AI to finish before changing its connection.')
-    allowed = {k: body[k] for k in DEFAULT_SETTINGS if k in body and k not in ('last_project', 'last_game_project')}
+    allowed = {k: body[k] for k in (*DEFAULT_SETTINGS, 'assistant_profiles') if k in body and k not in ('last_project', 'last_game_project')}
     if 'lm_url' in allowed:
         allowed['lm_url'] = local_url(allowed['lm_url'])
     if 'comfy_urls' in allowed:
         if not isinstance(allowed['comfy_urls'], list) or not 1 <= len(allowed['comfy_urls']) <= 4:
             raise ValueError('Choose one to four local ComfyUI instances.')
         allowed['comfy_urls'] = [local_url(u) for u in allowed['comfy_urls']]
-    context_length = allowed.get('context_length', 8192)
-    if type(context_length) is not int or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
-        raise ValueError(f'Choose a context length between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens.')
-    if 'model' in allowed and (not isinstance(allowed['model'], str) or len(allowed['model']) > 500 or (allowed['model'] and not allowed['model'].strip())):
-        raise ValueError('Choose a valid installed LM Studio model.')
-    if allowed.get('ai_memory_mode', 'exclusive') not in ('exclusive', 'resident_small'):
-        raise ValueError('Choose automatic model switching or the resident 0.8B assistant.')
-    proposed = {**SETTINGS, **allowed}
-    if proposed.get('ai_memory_mode') == 'resident_small':
-        from .lmstudio import LMStudioClient
-        LMStudioClient(base_url=proposed['lm_url']).resident_model_info(proposed['model'])
-        allowed['context_length'] = 4096
     with STATE_LOCK:
-        SETTINGS.update(allowed)
-        atomic_json(DATA / 'settings.json', SETTINGS)
+        proposed = merge_profile_settings(SETTINGS, allowed)
+        proposed.update({key: value for key, value in allowed.items()
+                         if key not in ('assistant_profiles', 'model', 'context_length', 'ai_memory_mode')})
+        # Save before publishing, so a failed disk write leaves the live choices intact.
+        atomic_json(DATA / 'settings.json', proposed)
+        SETTINGS.update(proposed)
         return copy.deepcopy(SETTINGS)
 
 @app.get('/api/connections')
 def connections():
     result = {'stage': RESOURCES.stage, 'busy': RESOURCES.lock.locked(), 'error': RESOURCES.last_error,
               'gpu': gpu_snapshot(), 'instance_id': RESOURCES.instance_id, 'model': RESOURCES.model_key,
-              'ai_memory_mode': SETTINGS['ai_memory_mode']}
+              'ai_memory_mode': SETTINGS['ai_memory_mode'],
+              'assistant_profiles': copy.deepcopy(SETTINGS['assistant_profiles']),
+              'active_profile': copy.deepcopy(getattr(RESOURCES, 'instance_profile', None)),
+              'effective_context_length': (getattr(RESOURCES, 'instance_profile', None) or {}).get('context_length')}
     try:
         result['lm'] = {'online': True, 'models': client().models(), 'loaded': client().loaded_instances()}
     except Exception as exc:
-        result['lm'] = {'online': False, 'models': [], 'loaded': [], 'error': str(exc)[:400]}
+        result['lm'] = {'online': False, 'models': [], 'loaded': [], 'error': str(exc)[:400],
+                        'recovery': 'Start LM Studio\u2019s local server, then select Reconnect. Your saved models and contexts are preserved.'}
     try:
         result['comfy'] = RESOURCES.queues()
     except Exception as exc:
@@ -589,21 +587,27 @@ def video_run_suggest(run_id: str, body: dict):
     if job.get('status') != 'succeeded' or not job.get('continuation_source'):
         raise ValueError('Select a finished take with saved motion before continuing it.')
     source = video_manager().snapshot(job['id'])
+    profile = resolve_profile(SETTINGS, workspace_for_project(source))
     started = time.monotonic()
     def generate(model):
         RESOURCES.stage = 'Reading the actual ending and suggesting next scenes'
         ending = video_run_ending_image(job['id'])
         result = suggest_continuations(client(), model, source, duration, image_data(ending['id']), direction,
-                                       small_model=SETTINGS.get('ai_memory_mode') == 'resident_small')
+                                       small_model=profile['ai_memory_mode'] == 'resident_small')
         return {**result, 'ending_asset': ending, 'ending_image_url': '/api/assets/' + ending['id'] + '/file',
-                'model': SETTINGS['model'], 'source_run_id': job['id']}
-    result = RESOURCES.run_ai(SETTINGS['model'], generate)
+                'model': profile['model'], 'source_run_id': job['id']}
+    result = RESOURCES.run_ai(profile['model'], generate, profile=profile)
     result['seconds'] = round(time.monotonic() - started, 3)
     return result
 
 @app.post('/api/gpu/prepare-ai')
+@app.post('/api/ai/prepare')
 def prepare_ai(body: dict):
-    return RESOURCES.run_ai(body.get('model') or SETTINGS['model'])
+    profile = resolve_profile(SETTINGS, body.get('workspace', 'studio'))
+    if body.get('model'):
+        from .assistant_profiles import validate_profile
+        profile = validate_profile({**profile, 'model': body['model']})
+    return RESOURCES.run_ai(profile['model'], profile=profile)
 
 def asset_manager():
     global ASSET_RUNS
@@ -612,6 +616,57 @@ def asset_manager():
             from .asset_runs import AssetRunManager
             ASSET_RUNS = AssetRunManager(DATA, RESOURCES, lambda: copy.deepcopy(SETTINGS), store_asset)
         return ASSET_RUNS
+
+def production_manager():
+    global PRODUCTION
+    with STATE_LOCK:
+        if PRODUCTION is None:
+            from .production import ProductionManager
+            PRODUCTION = ProductionManager(DATA, load_project, video_manager, asset_manager)
+        return PRODUCTION
+
+@app.get('/api/production')
+def production_list():
+    return {'batches': production_manager().list()}
+
+@app.post('/api/production')
+def production_create(body: dict):
+    return production_manager().create(body)
+
+@app.get('/api/production/{batch_id}')
+def production_get(batch_id: str):
+    return production_manager().get(batch_id)
+
+@app.post('/api/production/{batch_id}/start')
+@app.post('/api/production/{batch_id}/resume')
+def production_start(batch_id: str):
+    return production_manager().start(batch_id)
+
+@app.post('/api/production/{batch_id}/cancel')
+def production_cancel(batch_id: str):
+    return production_manager().cancel(batch_id)
+
+@app.post('/api/production/{batch_id}/items/{index}/retry')
+def production_retry(batch_id: str, index: int):
+    return production_manager().retry(batch_id, index)
+
+@app.get('/api/production/{batch_id}/playlist')
+def production_playlist(batch_id: str):
+    return JSONResponse(production_manager().playlist(batch_id),
+                        headers={'Content-Disposition': 'attachment; filename="production-playlist.json"'})
+
+@app.post('/api/production/{batch_id}/export')
+def production_export(batch_id: str, body: dict):
+    from .production_export import export_production
+    if set(body) - {'kind'}:
+        raise ValueError('Choose a film or individual clips export.')
+    return export_production(DATA, production_manager().get(batch_id), scene_video_path, body.get('kind', 'film'))
+
+@app.get('/api/production/{batch_id}/exports/{export_id}/{filename}')
+def production_export_download(batch_id: str, export_id: str, filename: str):
+    from .production_export import export_file
+    path = export_file(DATA, batch_id, export_id, filename)
+    return FileResponse(path, filename=path.name)
 
 def story_manager():
     global STORIES
@@ -773,6 +828,8 @@ def plan_video_continuation(run_id: str, body: dict):
     from .stories import settings_for, text
     settings_for({'duration': duration})
     turn = {'branch_id': 'temporary', 'duration': duration, 'message': text(body.get('message', ''), 4000), 'parent_run_id': run['id']}
+    turn['assistant_profile'] = resolve_profile(SETTINGS, workspace_for_project(source))
+    turn['assistant_model'] = turn['assistant_profile']['model']
     if not turn['message']:
         raise ValueError('Describe what happens next or ask the assistant to choose.')
     plan = manager.plan(story, turn, source, video_run_ending_image(run['id']))
@@ -1013,14 +1070,22 @@ def compile_api(body: dict):
 def analyse(body: dict):
     asset = body.get('asset', {})
     data_url = image_data(safe_id(asset.get('id')))
+    if body.get('project'):
+        workspace = workspace_for_project(check_project(body['project']))
+    elif body.get('project_id'):
+        workspace = workspace_for_project(load_project(body['project_id']))
+    else:
+        workspace = body.get('workspace', 'studio')
+    profile = resolve_profile(SETTINGS, workspace)
     start = time.monotonic()
-    observation = RESOURCES.run_ai(SETTINGS['model'], lambda model: client().analyse_image(model, data_url, asset))
+    observation = RESOURCES.run_ai(profile['model'], lambda model: client().analyse_image(model, data_url, asset), profile=profile)
     return {'observation': observation, 'seconds': time.monotonic() - start}
 
 @app.post('/api/ai/plan')
 def plan(body: dict):
     from .compiler import compile_project
     project = check_project(body.get('project'))
+    profile = resolve_profile(SETTINGS, workspace_for_project(project))
     alias_codes = {'invalid_reference_tag', 'duplicate_reference_tag', 'unknown_reference_tag', 'disabled_reference_tag', 'inactive_reference_tag'}
     alias_errors = [i['message'] for i in compile_project(project)['issues'] if i['code'] in alias_codes and i['severity'] == 'error']
     if alias_errors:
@@ -1043,12 +1108,12 @@ def plan(body: dict):
                 asset['approved_observation'] = observation['observation']
                 observations.append({'asset_id': asset['id'], 'name': asset['name'], **observation})
         RESOURCES.stage = 'Building the scene plan'
-        if SETTINGS.get('ai_memory_mode') == 'resident_small':
+        if profile['ai_memory_mode'] == 'resident_small':
             from .continuation_suggestions import compact_plan
             planning_project.setdefault('simple', {})['directed'] = True
             return compact_plan(lm, model, planning_project, body.get('instructions', ''), body.get('persona', SETTINGS['persona']))
         return lm.propose_plan(model, planning_project, body.get('instructions', ''), body.get('persona', SETTINGS['persona']))
-    proposal = RESOURCES.run_ai(SETTINGS['model'], generate)
+    proposal = RESOURCES.run_ai(profile['model'], generate, profile=profile)
     candidate = merge_plan(planning_project, proposal)
     compiled = compile_project(candidate)
     return {'candidate': candidate, 'proposal': proposal, 'compiled': compiled, 'observations': observations, 'seconds': time.monotonic() - start,
@@ -1058,12 +1123,13 @@ def plan(body: dict):
 def assist(body: dict):
     from .compiler import compile_project
     project = check_project(body.get('project'))
+    profile = resolve_profile(SETTINGS, workspace_for_project(project))
     if body.get('field') not in ALLOWED_SHOT_FIELDS - {'visible_subject_ids', 'offscreen_subject_ids', 'transition'}:
         raise ValueError('This field is protected from AI replacement.')
     if not any(s.get('id') == body.get('shot_id') for s in project['shots']):
         raise ValueError('The selected shot no longer exists.')
     start = time.monotonic()
-    proposal = RESOURCES.run_ai(SETTINGS['model'], lambda model: client().assist(model, project, body['shot_id'], body['field'], body.get('instructions', ''), body.get('persona', SETTINGS['persona'])))
+    proposal = RESOURCES.run_ai(profile['model'], lambda model: client().assist(model, project, body['shot_id'], body['field'], body.get('instructions', ''), body.get('persona', SETTINGS['persona'])), profile=profile)
     candidate = merge_assist(project, body['shot_id'], body['field'], proposal['value'])
     return {'candidate': candidate, 'proposal': proposal, 'compiled': compile_project(candidate), 'seconds': time.monotonic() - start}
 

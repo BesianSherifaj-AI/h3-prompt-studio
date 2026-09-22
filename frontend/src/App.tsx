@@ -57,10 +57,12 @@ import MotionTools from "./MotionTools";
 import MotionLab from "./MotionLab";
 import FilesOutputs from "./FilesOutputs";
 import SimpleStudio from "./SimpleStudio";
+import ProductionQueue from "./ProductionQueue";
 import SceneContinuity from "./SceneContinuity";
 import { pruneSceneActors } from "./sceneContinuityState";
 import ComfyPanel from './ComfyPanel';
-import ModelPicker, { residentModelOptions } from './ModelPicker';
+import ModelPicker, { modelPickerOptions, residentModelOptions } from './ModelPicker';
+import { assistantProfile, assistantProfilePatch, connectionSettingsPatch, CONTEXT_LENGTHS, prepareStatusMessage, type AssistantProfile } from './assistantProfiles';
 import ContinuationLinkReview from './ContinuationLinkReview';
 import VideoWorkspace, { type VideoJob, type ContinuationSuggestions } from './VideoWorkspace';
 import { useVideoRuns } from './useVideoRuns';
@@ -239,6 +241,10 @@ function Modal({ title, subtitle, onClose, children, wide = false }: any) {
 export default function App() {
   const [workspaceMode, setWorkspaceMode] = useWorkspaceRoute();
   const [gameVisited, setGameVisited] = useState(workspaceMode === 'game');
+  const [connectionDraft, setConnectionDraft] = useState<any>(null);
+  const [connectionWorkspace, setConnectionWorkspace] = useState(workspaceMode);
+  const connectionRefresh = useRef<Promise<void> | null>(null);
+  const operationLock = useRef(false);
   const [projectSearch, setProjectSearch] = useState('');
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [gameSource, setGameSource] = useState<string|undefined>();
@@ -340,15 +346,19 @@ export default function App() {
     setNotice(s);
     setTimeout(() => setNotice(""), 6500);
   };
-  const refresh = async () => {
-    try {
-      setConnection(await api("/connections"));
-    } catch (e) {
-      setError(String((e as Error).message));
-    }
+  const refresh = () => {
+    if (connectionRefresh.current) return connectionRefresh.current;
+    const request = (async () => {
+      try { setConnection(await api("/connections")); }
+      catch (e) { setError(String((e as Error).message)); }
+      finally { connectionRefresh.current = null; }
+    })();
+    connectionRefresh.current = request;
+    return request;
   };
   const run = async (label: string, fn: () => Promise<any>, rethrow = false) => {
-    if (busy) return;
+    if (operationLock.current || busy) return;
+    operationLock.current = true;
     setBusy(label);
     setError("");
     try {
@@ -357,10 +367,18 @@ export default function App() {
       setError((e as Error).message);
       if(rethrow) throw e;
     } finally {
+      operationLock.current = false;
       setBusy("");
       refresh();
     }
   };
+  useEffect(() => {
+    if (modal === 'connections') {
+      setConnectionDraft(structuredClone(settings));
+      setConnectionWorkspace(workspaceMode);
+    } else setConnectionDraft(null);
+    // A dialog owns its draft until Save or Close; polling must not overwrite edits.
+  }, [modal]);
   const loadContinuationReview = async (link:ContinuationLink) => {
     const request = ++continuationRequest.current;
     setContinuationReview(current=>({link,source:current?.link?.projectId===link.projectId?current.source:null,loading:true,error:''}));
@@ -465,10 +483,10 @@ export default function App() {
   }, [p]);
   useEffect(() => {
     const t = setInterval(() => {
-      if (busy || videos.active || modal === "connections") refresh();
-    }, 3000);
+      if (document.visibilityState !== 'hidden' && (busy || videos.active || modal === "connections" || workspaceMode === 'game')) refresh();
+    }, busy || videos.active || modal === 'connections' ? 3000 : 8000);
     return () => clearInterval(t);
-  }, [busy, videos.active, modal]);
+  }, [busy, videos.active, modal, workspaceMode]);
   useEffect(() => {
     if (p && !p.shots.some((s) => s.id === selectedShot))
       setSelectedShot(p.shots[0]?.id || "");
@@ -757,7 +775,7 @@ export default function App() {
   async function analyse() {
     if (!active) return;
     await run("Reading reference", async () => {
-      const result = await api("/ai/analyse", { asset: active });
+      const result = await api("/ai/analyse", { asset: active, workspace: 'studio', project_id: p.id });
       update((d) => {
         const a = d.assets.find((a) => a.id === active.id);
         if (a) {
@@ -802,7 +820,7 @@ export default function App() {
         project: prepared,
         instructions: simpleInstructions(prepared) + "\nKeep each scene action to one coherent beat. Use scene_contract for precise actor starting positions, who acts or stays in place, object identity and counts, and ending positions. Retain detailed staging when it matters; avoid repeated descriptions and extra camera moves. Keep speaking faces visible." + (prepared.assistant_instructions?.trim() ? "\nAdditional user direction: " + prepared.assistant_instructions : ""),
         persona: aiPersona,
-        vision: connection.lm?.models?.find((m:any)=>m.id===settings.model)?.vision !== false,
+        vision: connection.lm?.models?.find((m:any)=>m.id===assistantProfile(settings,'studio').model)?.vision !== false,
       }) : {candidate:prepared,compiled:await api('/compile',{project:prepared}),seconds:0,observations:[]};
       if (JSON.stringify(projectRef.current) !== originalKey) {
         throw new Error("Your photos or instructions changed while the prompt was being made. Click Generate prompt again to use the latest version.");
@@ -1088,12 +1106,33 @@ export default function App() {
     const story=await api('/stories/'+studioStoryId+'/branch',{request_id:uid(),run_id:job.id});studioStoryRevision.current++;setStudioStory(story);
   };
   const playGame = (job:VideoJob)=>{setGameSource(job.id);setGameSourceKey(value=>value+1);setWorkspaceMode('game');};
-  const promptModelPicker=<ModelPicker settings={settings} models={connection.lm?.models} online={!!connection.lm?.online} busy={busy||videos.active}
-    onRefresh={refresh} onConnections={()=>{refresh();setModal('connections');}}
-    onLoad={()=>run('Preparing the assistant',async()=>{await api('/gpu/prepare-ai',{});await refresh();})}
-    onResident={model=>run('Preparing the 0.8B assistant',async()=>{setSettings(await api('/settings',{model,ai_memory_mode:'resident_small',context_length:4096}));await api('/gpu/prepare-ai',{});await refresh();})}
-    onSelect={model=>run('Saving prompt model',async()=>{const small=residentModelOptions(connection.lm?.models).some(m=>m.id===model);
-      setSettings(await api('/settings',{model,ai_memory_mode:small&&settings.ai_memory_mode==='resident_small'?'resident_small':'exclusive',context_length:small?4096:8192}));})}/>;
+  const selectedProfile = assistantProfile(settings, workspaceMode);
+  const changeAssistant = (patch: Partial<AssistantProfile>) => run('Saving assistant settings', async () => {
+    const changes = { ...patch };
+    if (changes.model && selectedProfile.ai_memory_mode !== 'exclusive' && !residentModelOptions(connection.lm?.models).some(model => model.id === changes.model)) {
+      changes.ai_memory_mode = 'exclusive';
+    }
+    setSettings(await api('/settings', assistantProfilePatch(settings, workspaceMode, changes)));
+    toast(`${workspaceMode === 'game' ? 'Game' : 'Studio'} assistant settings saved.${changes.model && changes.ai_memory_mode === 'exclusive' ? ' This model uses GPU mode; your context is unchanged.' : ''}`);
+  });
+  const prepareAssistant = async (workspace = workspaceMode) => {
+    const result = await api('/ai/prepare', {workspace}, undefined, undefined, {timeoutMs:180_000});
+    toast(prepareStatusMessage(result, `${workspace === 'game' ? 'Game' : 'Studio'} assistant prepared.`));
+  };
+  const promptModelPicker=<ModelPicker settings={selectedProfile} workspace={workspaceMode} models={connection.lm?.models} online={!!connection.lm?.online} busy={busy||videos.active||connection.busy} stage={connection.stage} activeProfile={connection.active_profile}
+    onRefresh={refresh} onConnections={()=>{void refresh();setModal('connections');}}
+    onLoad={()=>run('Preparing the assistant',()=>prepareAssistant())} onChange={changeAssistant}/>;
+  const draftSettings = connectionDraft || settings;
+  const draftProfile = assistantProfile(draftSettings, connectionWorkspace);
+  const changeDraftProfile = (patch: Partial<AssistantProfile>) => {
+    const changes = {...patch};
+    if (changes.model && draftProfile.ai_memory_mode !== 'exclusive' && !residentModelOptions(connection.lm?.models).some(model => model.id === changes.model)) changes.ai_memory_mode = 'exclusive';
+    setConnectionDraft({...draftSettings, assistant_profiles:{...draftSettings.assistant_profiles, ...assistantProfilePatch(draftSettings,connectionWorkspace,changes).assistant_profiles}});
+  };
+  const saveConnections = async () => {
+    const savedSettings = await api('/settings',connectionSettingsPatch(draftSettings,connectionWorkspace));
+    setSettings(savedSettings);setConnectionDraft(structuredClone(savedSettings));
+  };
 
   return (
     <div
@@ -1103,12 +1142,17 @@ export default function App() {
     >
       <WorkspaceNavigation mode={workspaceMode} onNavigate={setWorkspaceMode}
         onConnections={()=>{void refresh();setModal('connections');}} onHelp={()=>setModal('help')}/>
+      {(error || notice) && <div className="workspace-feedback">
+        {error && <div className="workspace-feedback-error" role="alert"><AlertCircle size={18}/><span>{error}</span><button type="button" aria-label="Dismiss message" onClick={()=>setError('')}><X size={17}/></button></div>}
+        {notice && <div className="workspace-feedback-notice" role="status"><Check size={17}/><span>{notice}</span></div>}
+      </div>}
       <div id="game-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='game'}>{(gameVisited || workspaceMode==='game') && <Suspense fallback={<div className="boot" role="status">Opening Game…</div>}><GameStudio project={p} modelPicker={promptModelPicker} onUploadFiles={async files=>{const assets:Asset[]=[];for(const file of files){const form=new FormData();form.append('file',file);assets.push(await api('/assets',undefined,form));}return assets;}} onConnections={()=>{void refresh();setModal('connections');}} onStudio={()=>setWorkspaceMode('studio')} initialSourceRunId={gameSource} initialSourceKey={gameSourceKey}/></Suspense>}</div>
       <div id="studio-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='studio'}>
+      <ProductionQueue active={workspaceMode === 'studio'} currentProjectId={p.id} currentProjectTitle={p.title} onSaveCurrent={saveNow} onOpenProject={loadProject}/>
       {view === "simple" && <SimpleStudio
         project={p} update={update} checkpointUpdate={checkpointUpdate} onRestore={restoreLibraryCopy} onReplacePhoto={replaceReference} onAddFiles={(files) => addFiles(files)} onGenerate={()=>generateSimplePrompt()} onBuild={()=>generateSimplePrompt(false)}
         busy={busy} renderBusy={videos.active} progress={connection.stage && connection.stage !== "idle" ? connection.stage : busy}
-        error={error} notice={notice} result={shownSimpleResult} currentPrompt={compiled.prompt} resultFresh={simpleResultFresh}
+        error="" notice="" result={shownSimpleResult} currentPrompt={compiled.prompt} resultFresh={simpleResultFresh}
         referenceMap={compiled.references}
         onCopy={copyPrompt} onSave={() => compiled.valid && downloadText("h3-prompt.txt", compiled.prompt)}
         onAdvanced={() => { setView("advanced"); setError(""); }}
@@ -1283,23 +1327,6 @@ export default function App() {
           ))}
         </div>
       </div>
-      {error && (
-        <div className="banner error">
-          <AlertCircle size={16} />
-          <span>{error}</span>
-          <IconButton
-            icon={X}
-            title="Dismiss error"
-            onClick={() => setError("")}
-          />
-        </div>
-      )}
-      {notice && (
-        <div className="toast" role="status">
-          <Check size={15} />
-          {notice}
-        </div>
-      )}
       {bridgeImport && (
         <div className="banner bridge-banner">
           <Link2 size={16} />
@@ -2717,36 +2744,29 @@ export default function App() {
           {notice && <p role="status">{notice}</p>}
           <Input
             label="LM Studio endpoint"
-            value={settings.lm_url}
-            onChange={(v: string) => setSettings({ ...settings, lm_url: v })}
+            value={draftSettings.lm_url}
+            onChange={(v: string) => setConnectionDraft({ ...draftSettings, lm_url: v })}
           />
+          <p className="callout">Editing the {connectionWorkspace === 'game' ? 'Game' : 'Studio'} assistant. Each workspace keeps its own model, context and memory mode. Changes take effect when saved.</p>
           <Select
             label="Prompt assistant model"
-            value={settings.model}
-            onChange={(v: string) => setSettings({ ...settings, model: v })}
-            options={
-              connection.lm?.models
-                ?.map((m: any) => [
-                  m.id,
-                  (m.name || m.id) + (m.vision === true ? ' · reads photos' : m.vision === false ? ' · text only' : ' · photo support unknown') + (m.loaded ? " · loaded" : ""),
-                ]) || [[settings.model, settings.model]]
-            }
+            value={draftProfile.model}
+            onChange={(v: string) => changeDraftProfile({model:v})}
+            options={modelPickerOptions(connection.lm?.models,draftProfile.model).map(model=>[model.id,model.label])}
           />
           <Select
             label="Context length"
-            value={settings.context_length}
-            onChange={(v: string) =>
-              setSettings({ ...settings, context_length: Number(v) })
-            }
+            value={draftProfile.context_length}
+            onChange={(v: string) => changeDraftProfile({context_length:Number(v)})}
+            options={[...new Set([...CONTEXT_LENGTHS,draftProfile.context_length])].sort((a,b)=>a-b).map(value=>[value,`${value.toLocaleString('en-US')} tokens`])}
+          />
+          <Select
+            label="Model memory"
+            value={draftProfile.ai_memory_mode === 'exclusive' ? 'exclusive' : 'resident_cpu'}
+            onChange={(v:string)=>changeDraftProfile({ai_memory_mode:v as AssistantProfile['ai_memory_mode']})}
             options={[
-              [4096, "4,096 tokens"],
-              [8192, "8,192 tokens · recommended for small models"],
-              [12288, "12,288 tokens"],
-              [16384, "16,384 tokens"],
-              [32768, "32,768 tokens"],
-              [65536, "65,536 tokens"],
-              [131072, "131,072 tokens"],
-              [262144, "262,144 tokens"],
+              ['exclusive','GPU · automatic H3 handoff'],
+              ...((draftProfile.ai_memory_mode !== 'exclusive' || residentModelOptions(connection.lm?.models).some(model=>model.id===draftProfile.model)) ? [['resident_cpu','CPU · keep ready with H3']] : []),
             ]}
           />
           <p className="callout">
@@ -2756,10 +2776,10 @@ export default function App() {
           </p>
           <Area
             label="ComfyUI instances (one local URL per line)"
-            value={(settings.comfy_urls || []).join("\n")}
+            value={(draftSettings.comfy_urls || []).join("\n")}
             onChange={(v: string) =>
-              setSettings({
-                ...settings,
+              setConnectionDraft({
+                ...draftSettings,
                 comfy_urls: v.split("\n").filter(Boolean),
               })
             }
@@ -2788,9 +2808,10 @@ export default function App() {
           <div className="modal-actions">
             <button
               className="quiet"
+              disabled={!!busy || !!connection.busy}
               onClick={() =>
                 run("Saving connections", async () => {
-                  setSettings(await api("/settings", settings));
+                  await saveConnections();
                   toast("Connections saved.");
                   refresh();
                 })
@@ -2800,30 +2821,28 @@ export default function App() {
             </button>
             <button
               className="primary"
-              disabled={!!busy}
+              disabled={!!busy || !!connection.busy}
               onClick={() =>
-                run("Preparing vision model", async () => {
-                  setSettings(await api("/settings", settings));
-                  const result = await api("/gpu/prepare-ai", {});
-                  toast("Vision model loaded. H3 is out of GPU memory.");
-                  refresh();
+                run("Preparing assistant", async () => {
+                  await saveConnections();
+                  await prepareAssistant(connectionWorkspace);
                 })
               }
             >
               <Sparkles size={14} /> Prepare AI
             </button>
             <button
-              disabled={!!busy}
+              disabled={!!busy || !!connection.busy}
               onClick={() =>
                 run("Preparing H3", async () => {
-                  await api("/gpu/prepare-h3", {});
-                  toast("LM Studio unloaded. Ready for H3.");
-                  refresh();
+                  const result = await api("/gpu/prepare-h3", {}, undefined, undefined, {timeoutMs:180_000});
+                  toast(prepareStatusMessage(result,'H3 preparation completed.'));
                 })
               }
             >
               Prepare H3
             </button>
+            <button type="button" className="quiet" onClick={()=>setModal('')}>Close</button>
           </div>
         </Modal>
       )}

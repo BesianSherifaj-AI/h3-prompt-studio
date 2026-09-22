@@ -1,0 +1,76 @@
+import { describe, expect, it } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ProductionQueue, { ProductionBatchView, productionActions, productionProgress, productionStatus, type ProductionBatch } from './ProductionQueue';
+
+const fixture: ProductionBatch = { id: 'batch-one', name: 'Six before sunrise', status: 'needs_attention', completed: 1, total: 3, items: [
+  { index: 0, project_id: 'p1', title: 'Opening', status: 'succeeded', video_url: '/api/video/runs/r1/video', duration: 8 },
+  { index: 1, project_id: 'p2', title: 'The signal', status: 'failed', error: 'ComfyUI went offline.' },
+  { index: 2, project_id: 'p3', title: 'Finale', status: 'queued' },
+] };
+const noop = () => {};
+function render(batch = fixture, pending = false) {
+  return renderToStaticMarkup(<ProductionBatchView batch={batch} pending={pending} onAction={noop} onRetry={noop} onPreview={noop} onOpenProject={noop}/>);
+}
+describe('Production queue progress and recovery', () => {
+  it('counts successful renders separately from total planned work', () => {
+    expect(productionProgress(fixture)).toEqual({ total: 3, completed: 1, percent: 33 });
+    expect(productionProgress({ ...fixture, total: 0, items: [], completed: 5 })).toEqual({ total: 0, completed: 0, percent: 0 });
+  });
+  it('offers only appropriate batch controls for persisted state', () => {
+    expect(productionActions('draft')).toEqual({ start: true, resume: false, cancel: false });
+    expect(productionActions('running')).toEqual({ start: false, resume: false, cancel: true });
+    for (const status of ['paused', 'needs_attention']) expect(productionActions(status).resume).toBe(true);
+    for (const status of ['succeeded', 'cancelled']) expect(Object.values(productionActions(status))).toEqual([false, false, false]);
+  });
+  it('retains failure details and requires deliberate retry, then resume', () => {
+    const html = render();
+    expect(html).toContain('ComfyUI went offline.');
+    expect(html).toContain('Resume remaining');
+    expect(html).toContain('>Retry</button>');
+    expect(html).not.toContain('Start batch');
+    expect(html).toContain('1/3 rendered');
+  });
+  it('does not retry uncertain submissions or offer retry while another item runs', () => {
+    const uncertain = render({ ...fixture, items: [{ ...fixture.items[1], status: 'uncertain' }] });
+    expect(uncertain).toContain('Checking submission');
+    expect(uncertain).not.toContain('>Retry</button>');
+    const running = render({ ...fixture, status: 'running' });
+    expect(running).toContain('Stop queue');
+    expect(running).toContain('disabled="">Retry');
+    expect(running).not.toContain('Resume remaining');
+  });
+  it('offers review for rendered media without claiming accepted story state', () => {
+    const html = render({ ...fixture, status: 'succeeded' });
+    expect(html).toContain('Play Opening');
+    expect(html).toContain('/api/production/batch-one/playlist');
+    expect(html).toContain('does not accept Game actions');
+    expect(productionStatus('succeeded')).toBe('Rendered · review takes');
+  });
+  it('keeps creation and saved project selection inside Studio', () => {
+    const html = renderToStaticMarkup(<ProductionQueue active currentProjectId="p1" currentProjectTitle="Opening" onSaveCurrent={async () => {}} onOpenProject={async () => {}}/>);
+    expect(html).toContain('Production queue');
+    expect(html).toContain('Queue current project');
+    expect(html).toContain('Create batch · 0 selected');
+    expect(html).toContain('one video at a time');
+  });
+  it('offers film and clip exports only after all planned items succeeded', () => {
+    const props = { pending: false, onAction: noop, onRetry: noop, onPreview: noop, onOpenProject: noop, onExport: noop };
+    const done = renderToStaticMarkup(<ProductionBatchView {...props} batch={{ ...fixture, status: 'succeeded', completed: 3 }}/>);
+    expect(done).toContain('Export film'); expect(done).toContain('Export clips ZIP');
+    const incomplete = renderToStaticMarkup(<ProductionBatchView {...props} batch={fixture}/>);
+    expect(incomplete).not.toContain('Export film');
+  });
+  it('links generated first frames while video is queued without preloading images', () => {
+    const html = render({ ...fixture, items: [{ ...fixture.items[2], asset_url: '/api/assets/frame/file', run_id: 'waiting-run' }] });
+    expect(html).toContain('aria-label="First frame for Finale"');
+    expect(html).toContain('href="/api/assets/frame/file" target="_blank"');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('/api/video/runs/waiting-run/project');
+  });
+  it('provides the exact rendered source snapshot only for finished videos', () => {
+    const html = render({ ...fixture, items: [{ ...fixture.items[0], run_id: 'rendered-run' }] });
+    expect(html).toContain('href="/api/video/runs/rendered-run/project" download=""');
+    expect(html).toContain('aria-label="Download source project for Opening"');
+    expect(html).not.toContain('First frame');
+  });
+});

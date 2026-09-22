@@ -28,35 +28,42 @@ from . import prompts
 
 
 class LMStudioError(RuntimeError):
-    def __init__(self, message, *, code="lmstudio_error", status_code=None, detail="", diagnostics=None):
+    def __init__(self, message, *, code="lmstudio_error", status_code=None, detail="", diagnostics=None, load_submitted=None):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.detail = detail
         self.diagnostics = copy.deepcopy(diagnostics)
+        self.load_submitted = load_submitted
 
 
 RESIDENT_PREFIX = "h3-studio-resident-"
+RESIDENT_CPU_PREFIX = RESIDENT_PREFIX + "cpu-"
 ASSISTANT_PREFIX = "h3-studio-assistant-"
 RESIDENT_MAX_BYTES = 1_500_000_000
+RESIDENT_CPU_MAX_BYTES = 8_000_000_000
 MIN_CONTEXT_TOKENS = 1024
 MAX_CONTEXT_TOKENS = 262_144
 
 
-def resident_cpu_profile():
+def resident_cpu_profile(context_length=4096):
     """A fresh explicit SDK load profile; ordinary REST loads remain unchanged."""
-    return {"gpu": {"ratio": 0, "disabledGpus": [0]}, "contextLength": 4096,
+    if type(context_length) is not int or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
+        raise LMStudioError('Choose a supported CPU context length.', code='invalid_request', load_submitted=False)
+    return {"gpu": {"ratio": 0, "disabledGpus": [0]}, "contextLength": context_length,
             "offloadKVCacheToGpu": False, "evalBatchSize": 128,
             "flashAttention": True, "gpuStrictVramCap": True}
 
 
-def validate_resident_cpu_config(config):
+def validate_resident_cpu_config(config, context_length=4096):
     """Reject unknown placement; a small filename alone never proves residency."""
     gpu = config.get("gpu", {}) if isinstance(config, dict) else {}
     ratio = gpu.get("ratio") if isinstance(gpu, dict) else None
     zero = ratio == "off" or (type(ratio) in (int, float) and ratio == 0)
     if not (isinstance(config, dict) and zero and gpu.get("disabledGpus") == [0]
-            and type(config.get("contextLength")) is int and config["contextLength"] == 4096
+            and type(config.get("contextLength")) is int
+            and MIN_CONTEXT_TOKENS <= config["contextLength"] <= MAX_CONTEXT_TOKENS
+            and (context_length is None or config["contextLength"] == context_length)
             and config.get("offloadKVCacheToGpu") is False
             and type(config.get("evalBatchSize")) is int and config["evalBatchSize"] == 128
             and config.get("flashAttention") is True and config.get("gpuStrictVramCap") is True):
@@ -318,31 +325,34 @@ class LMStudioClient:
         chooses its own instance ID; ownership is established by its response,
         never by claiming an already-loaded matching model.
         """
-        if type(context_length) is not int or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
-            raise LMStudioError(f'Choose a supported loaded context length between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens.', code='invalid_request')
-        instance_id = instance_id or ASSISTANT_PREFIX + uuid.uuid4().hex
-        if not isinstance(instance_id, str) or not instance_id.startswith(ASSISTANT_PREFIX):
-            raise LMStudioError('An owned assistant instance needs its app-generated identifier.', code='invalid_request')
-        inventory = self.native_models()
-        if any(m.get('loaded_instances') for m in inventory):
-            raise LMStudioError('Another LM Studio instance is loaded. It was left unchanged.', code='model_conflict')
-        matches = [m for m in inventory if m['key'] == model and m.get('type') == 'llm']
-        if len(matches) != 1:
-            raise LMStudioError('Select one installed assistant model.', code='invalid_model')
-        if self.api_key:
-            result = self.load_model(model, context_length, offload_kv_cache_to_gpu=True)
-            config = result.get('load_config')
-            if (not isinstance(config, dict) or config.get('context_length') != context_length
-                    or config.get('offload_kv_cache_to_gpu') is not True):
-                raise LMStudioError('The assistant loaded, but its requested GPU KV cache could not be verified. Inspect the instance before retrying.', code='model_unverified')
-            return {**result, 'ownership_transport': 'rest_confirmed_response'}
+        submitted = False
         try:
+            if type(context_length) is not int or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
+                raise LMStudioError(f'Choose a supported loaded context length between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens.', code='invalid_request')
+            instance_id = instance_id or ASSISTANT_PREFIX + uuid.uuid4().hex
+            if not isinstance(instance_id, str) or not instance_id.startswith(ASSISTANT_PREFIX):
+                raise LMStudioError('An owned assistant instance needs its app-generated identifier.', code='invalid_request')
+            inventory = self.native_models()
+            if any(m.get('loaded_instances') for m in inventory):
+                raise LMStudioError('Another LM Studio instance is loaded. It was left unchanged.', code='model_conflict')
+            matches = [m for m in inventory if m['key'] == model and m.get('type') == 'llm']
+            if len(matches) != 1:
+                raise LMStudioError('Select one installed assistant model.', code='invalid_model')
+            if self.api_key:
+                submitted = True
+                result = self.load_model(model, context_length, offload_kv_cache_to_gpu=True)
+                config = result.get('load_config')
+                if (not isinstance(config, dict) or config.get('context_length') != context_length
+                        or config.get('offload_kv_cache_to_gpu') is not True):
+                    raise LMStudioError('The assistant loaded, but its requested GPU KV cache could not be verified. Inspect the instance before retrying.', code='model_unverified')
+                return {**result, 'ownership_transport': 'rest_confirmed_response'}
             with self._resident_sdk() as sdk:
                 items = [m for m in sdk.llm.list_downloaded() if m.model_key == model]
                 if len(items) != 1 or not items[0].path:
                     raise LMStudioError('The assistant could not be matched to one installed model file.', code='model_unverified')
                 if sdk.llm.list_loaded():
                     raise LMStudioError('Another model appeared before loading; it was left unchanged.', code='model_conflict')
+                submitted = True
                 handle = sdk.llm.load_new_instance(items[0].path, instance_id,
                     config={'contextLength': context_length, 'flashAttention': True, 'offloadKVCacheToGpu': True}, ttl=None)
                 info = handle.get_info().to_dict()
@@ -356,10 +366,13 @@ class LMStudioClient:
                 raise LMStudioError('The native server did not confirm the new assistant instance.', code='model_unverified')
             return {'status': 'loaded', 'instance_id': instance_id, 'load_config': config,
                     'ownership_transport': 'sdk_named_instance'}
-        except LMStudioError:
+        except LMStudioError as exc:
+            exc.load_submitted = submitted
             raise
         except Exception as exc:
-            raise LMStudioError('The assistant load could not be confirmed. Check the named instance in LM Studio before retrying.', code='model_load_uncertain') from exc
+            message = ('The assistant load could not be confirmed. Check the named instance in LM Studio before retrying.'
+                       if submitted else 'Assistant preparation failed before loading. Check LM Studio and retry.')
+            raise LMStudioError(message, code='model_load_uncertain' if submitted else 'model_preflight_failed', load_submitted=submitted) from exc
 
     def context_budget(self, model, system, content, max_tokens, *, margin=256):
         """Read the actual tokenizer/context. Image token cost stays explicit unknown."""
@@ -478,8 +491,10 @@ class LMStudioClient:
             if watcher is not None:
                 watcher.join(timeout=1)
 
-    def resident_model_info(self, model):
+    def resident_model_info(self, model, *, mode='resident_small'):
         """Read-only native inventory gate for the dedicated small-model mode."""
+        if mode not in ('resident_small', 'resident_cpu'):
+            raise LMStudioError('Choose a supported CPU assistant mode.', code='invalid_request')
         if not isinstance(model, str) or not model or len(model) > 512:
             raise LMStudioError("Select an installed 0.8B vision model for resident mode.", code="invalid_model")
         matches = [entry for entry in self.native_models() if entry["key"] == model]
@@ -487,10 +502,12 @@ class LMStudioClient:
             raise LMStudioError("The resident model must match one exact local model key.", code="invalid_model")
         entry = matches[0]
         size = entry.get("size_bytes")
-        if (entry.get("type") != "llm" or "0.8b" not in model.lower()
+        if (entry.get("type") != "llm" or (mode == 'resident_small' and "0.8b" not in model.lower())
                 or entry.get("capabilities", {}).get("vision") is not True
-                or type(size) is not int or not 0 < size <= RESIDENT_MAX_BYTES):
-            raise LMStudioError("Resident mode needs an installed 0.8B model with vision and a size of at most 1.5 GB. Select one in Connections, or use the normal memory mode.", code="resident_model_ineligible")
+                or type(size) is not int or not 0 < size <= (RESIDENT_MAX_BYTES if mode == 'resident_small' else RESIDENT_CPU_MAX_BYTES)):
+            message = ("Resident mode needs an installed 0.8B model with vision and a size of at most 1.5 GB."
+                       if mode == 'resident_small' else "CPU mode needs an installed vision model of at most 8 GB. Text-only models cannot inspect Game images.")
+            raise LMStudioError(message + " Select one in Connections, or use GPU switching.", code="resident_model_ineligible")
         return copy.deepcopy(entry)
 
     def _resident_sdk(self):
@@ -516,20 +533,23 @@ class LMStudioClient:
             raise LMStudioError("The small model's local file and vision capability could not be verified.", code="resident_model_unverified")
         return item.path
 
-    def _verify_resident_handle(self, handle, model, instance_id, expected_path):
+    def _verify_resident_handle(self, handle, model, instance_id, expected_path, context_length=4096, *, mode='resident_small'):
         info = handle.get_info().to_dict()
         if (handle.identifier != instance_id or info.get("identifier") != instance_id
                 or info.get("modelKey") != model or info.get("path") != expected_path):
             raise LMStudioError("The loaded small model does not match its exact selected file and instance.", code="resident_model_unverified")
-        config = validate_resident_cpu_config(handle.get_load_config().to_dict())
+        config = validate_resident_cpu_config(handle.get_load_config().to_dict(), context_length)
         return {"ready": True, "status": "loaded", "instance_id": instance_id, "model": model,
-                "profile": "resident_small_cpu", "context_length": 4096, "load_config": config}
+                "profile": "resident_small_cpu" if mode == 'resident_small' else 'resident_cpu',
+                "context_length": config['contextLength'], "load_config": config}
 
-    def verify_resident_model(self, model, instance_id):
+    def verify_resident_model(self, model, instance_id, context_length=4096, *, mode='resident_small'):
         """Read only: verify an exact Studio instance without calling SDK JIT APIs."""
         if not isinstance(instance_id, str) or not instance_id.startswith(RESIDENT_PREFIX):
             raise LMStudioError("Resident mode can only keep a verified h3-studio-resident instance. Unload the other LM Studio instance first.", code="resident_model_unverified")
-        native = self.resident_model_info(model)
+        if mode == 'resident_small':
+            context_length = 4096
+        native = self.resident_model_info(model, mode=mode)
         if not any(item.get("id") == instance_id for item in native.get("loaded_instances", []) if isinstance(item, dict)):
             raise LMStudioError("The selected resident model instance is no longer loaded.", code="model_not_loaded")
         try:
@@ -538,33 +558,44 @@ class LMStudioClient:
                 matches = [handle for handle in sdk.llm.list_loaded() if handle.identifier == instance_id]
                 if len(matches) != 1:
                     raise LMStudioError("The resident model instance could not be verified through the SDK.", code="resident_model_unverified")
-                return self._verify_resident_handle(matches[0], model, instance_id, path)
+                return self._verify_resident_handle(matches[0], model, instance_id, path, context_length, mode=mode)
         except LMStudioError:
             raise
         except Exception as exc:
             raise LMStudioError("LM Studio could not verify the resident CPU configuration. H3 was not unloaded.", code="resident_sdk_error") from exc
 
-    def load_resident_model(self, model):
+    def load_resident_model(self, model, context_length=None, *, mode='resident_small', instance_id=None):
         """Explicit CPU load; the caller must hold the coordinator lock and verify idle."""
-        native = self.resident_model_info(model)
-        if self.loaded_instances():
-            raise LMStudioError("Unload the other LM Studio instance before preparing the resident small model.", code="resident_model_conflict")
-        instance_id = RESIDENT_PREFIX + uuid.uuid4().hex
+        submitted = False
         try:
+            if mode == 'resident_small':
+                context_length = 4096
+            elif context_length is None:
+                context_length = 8192
+            config = resident_cpu_profile(context_length)
+            native = self.resident_model_info(model, mode=mode)
+            if self.loaded_instances():
+                raise LMStudioError("Unload the other LM Studio instance before preparing the resident small model.", code="resident_model_conflict")
+            prefix = RESIDENT_CPU_PREFIX if mode == 'resident_cpu' else RESIDENT_PREFIX
+            instance_id = instance_id or prefix + uuid.uuid4().hex
+            if not isinstance(instance_id, str) or not instance_id.startswith(prefix):
+                raise LMStudioError('Use an app-generated CPU instance identifier.', code='invalid_request')
             with self._resident_sdk() as sdk:
                 path = self._resident_inventory(sdk, native)
                 if sdk.llm.list_loaded():
                     raise LMStudioError("An LM Studio model appeared during resident preparation; no additional model was loaded.", code="resident_model_conflict")
-                handle = sdk.llm.load_new_instance(path, instance_id, config=resident_cpu_profile(), ttl=None)
-                result = self._verify_resident_handle(handle, model, instance_id, path)
+                submitted = True
+                handle = sdk.llm.load_new_instance(path, instance_id, config=config, ttl=None)
+                result = self._verify_resident_handle(handle, model, instance_id, path, context_length, mode=mode)
             # Native inference uses this identifier. Confirm the mapping through
             # its inventory too, rather than falling back to a model-key JIT load.
-            return self.verify_resident_model(model, result["instance_id"])
-        except LMStudioError:
+            return self.verify_resident_model(model, result["instance_id"], context_length, mode=mode)
+        except LMStudioError as exc:
+            exc.load_submitted = submitted
             raise
         except Exception as exc:
             # Never retry an uncertain load or unload an unverified handle.
-            raise LMStudioError("LM Studio could not finish the resident CPU load. Check the small model instance before retrying; H3 was not unloaded.", code="resident_sdk_error") from exc
+            raise LMStudioError("LM Studio could not finish the resident CPU load. Check the small model instance before retrying; H3 was not unloaded.", code="resident_sdk_error", load_submitted=submitted) from exc
 
     def unload_model(self, instance_id):
         if not isinstance(instance_id, str) or not instance_id or len(instance_id) > 512:

@@ -107,6 +107,7 @@ def test_legacy_turn_captures_current_assistant_once_then_reuses_it(rig):
     rig.manager.get_settings = lambda: copy.deepcopy(selected)
     _, record, turn, _ = saved_turn(rig)
     turn.pop('assistant_model', None)
+    turn.pop('assistant_profile', None)  # Emulate a saved turn predating workspace profiles.
     selected['model'] = 'retry-assistant'
     calls = []
     def answer(model, *args, **kwargs):

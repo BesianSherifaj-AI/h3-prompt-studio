@@ -109,6 +109,9 @@ const STARTER_MOVES = [
   { title: "Surprise me", message: "Surprise me" },
 ];
 const SETUP_DRAFT = "h3-game:setup-v1.2";
+export function missingGameMedia(message: string): boolean {
+  return /(?:video run|source (?:video|media)|saved (?:video|media)|snapshot).*(?:not found|missing|unavailable)|(?:missing|unavailable).*(?:video run|source media|snapshot)/i.test(message);
+}
 function readSetupDraft(): StoryConfiguration {
   try { const v = JSON.parse(localStorage.getItem(SETUP_DRAFT) || "null"); if (v?.project?.assets && v?.world?.characters && typeof v.premise === "string") return v; } catch { /* Optional browser storage. */ }
   return { project: blankGameProject(), world: emptyWorld(), guides: [], settings: { ...DEFAULT_STORY_SETTINGS }, premise: "", player_name: "", player_character_id: "" };
@@ -736,7 +739,7 @@ export default function GameStudio({
     const previous = document.activeElement as HTMLElement | null;
     settingsClose.current?.focus();
     const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSettingsOpen(false);
+      if (event.key === "Escape" && !event.defaultPrevented) setSettingsOpen(false);
     };
     window.addEventListener("keydown", key);
     return () => {
@@ -965,10 +968,12 @@ export default function GameStudio({
           </button>
         </div>
       </header>
+      <div className="game-assistant-strip">{modelPicker}</div>
       <div className="game-session-bar">
         <label>
           <span>Saved stories</span>
           <select
+            id="game-saved-story"
             aria-label="Saved game"
             value={session.selectedId}
             disabled={setupLocked}
@@ -1006,16 +1011,17 @@ export default function GameStudio({
       </div>
       {(localError || session.error) && (
         <div className="game-alert" role="alert">
-          <span>{localError || session.error}</span>
+          <span>{localError || session.error}{missingGameMedia(localError || session.error) && <small className="game-missing-media-help">The saved game refers to media that is no longer available. Choose another saved game or inspect its saved scenes. Your story has been kept.</small>}</span>
           {!pendingCreation && (
             <button
               className="quiet"
               disabled={submitting}
-              onClick={() => void perform(() => session.refresh())}
+              onClick={() => missingGameMedia(localError || session.error) ? document.getElementById('game-saved-story')?.focus() : void perform(() => session.refresh())}
             >
-              <RefreshCw size={14} /> Check connection
+              <RefreshCw size={14} /> {missingGameMedia(localError || session.error) ? 'Choose saved game' : 'Refresh saved game'}
             </button>
           )}
+          {story && missingGameMedia(localError || session.error) && <button className="quiet" onClick={()=>setPlayView('scenes')}>Open saved scenes</button>}
         </div>
       )}
       {pendingCreation && (

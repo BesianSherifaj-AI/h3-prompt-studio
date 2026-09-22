@@ -242,6 +242,7 @@ export default function SimpleStudio(props: SimpleStudioProps) {
           {props.onSaveProject && <button className="simple-quiet" onClick={props.onSaveProject} disabled={unavailable || props.savedStatus==='Saving…'}>{props.savedStatus==='Not saved'?'Retry save':'Save now'}</button>}
         </div>
 
+        <div className="simple-assistant-strip">{props.modelPicker}</div>
         <div className="simple-workspace-layout">
         <div className="simple-editor">
         <div className="simple-editor-tabs" role="tablist" aria-label="Scene editor">
@@ -1022,7 +1023,6 @@ export default function SimpleStudio(props: SimpleStudioProps) {
           </fieldset>
 
           <TemplateShelf project={p} update={props.checkpointUpdate} onRestore={props.onRestore} currentPrompt={props.currentPrompt} resultFresh={props.resultFresh} busy={unavailable}/>
-          {props.modelPicker}
           {props.settingsPanel}
         </section>
         <div className="simple-editor-footer">

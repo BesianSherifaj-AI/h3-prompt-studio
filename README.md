@@ -2,7 +2,7 @@
 
 A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
 
-Version **1.5.0** gives **Studio** and **Game** their own addresses, projects and navigation. Open `/studio` to direct videos or `/game` to play a saved story. Switch workspaces without replacing your Studio draft, use the browser's Back and Forward buttons, and find playback and film export in Game's **Scenes** view on desktop or mobile. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
+Version **1.6.0** gives **Studio** and **Game** their own addresses, projects and navigation. Open `/studio` to direct videos or `/game` to play a saved story. Switch workspaces without replacing your Studio draft, use the browser's Back and Forward buttons, and find playback and film export in Game's **Scenes** view on desktop or mobile. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
 
 **[Game scene and movement guide](docs/GAME_SCENE_MOVEMENT.md)** · **[Scene continuity](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Workspace validation](docs/WORKSPACE_SEPARATION_VALIDATION.md)** · **[Scene validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
 
@@ -20,6 +20,10 @@ The earlier **v1.0** [The Message demo](demo/README.md) remains available: three
 
 The showreel combines clearly labeled captures of the working app with real generated videos played at normal speed. It follows reference assignment, shot and dialogue direction, a completed take, seed comparison, three AI story choices, and a combined continuation. See [the test record](VERIFICATION.md) for what was verified.
 
+## Production batches
+
+Studio now includes **Production queue**. Queue saved projects, inspect individual receipts and videos, stop future work or explicitly resume after a restart. The API also supports optional Z-Image first frames, generated before the video phase to reduce model switching. Export a completed batch as a joined film or a ZIP of individually trimmed clips. Rendering success is separate from creative approval; review motion, identity and sound before publishing. See [production workflow](docs/PRODUCTION.md).
+
 ## What you can do
 
 - Keep Studio projects separate from Game sessions, with independent resume choices and direct links to each workspace.
@@ -36,7 +40,7 @@ The showreel combines clearly labeled captures of the working app with real gene
 - Generate needed character, outfit, prop or location references with an installed Z-Image-Turbo model. Existing identities and reference tags are reused; new visual elements use an explicit scene cut.
 - Switch between the latest scene and the whole accepted story. Sequential playback needs no ComfyUI join job. Save the active branch as one film; compatible legacy continuation chains can still use **Combine clips**.
 - Use named takes, favorites, side-by-side comparison, saved setups, and portable project ZIPs with references.
-- Choose the installed LM Studio model. Automatic GPU hand-off lets larger assistants and H3 take turns. An optional verified 0.8B assistant can stay in system memory alongside H3.
+- Save a separate LM Studio model, context, and CPU/GPU choice for Studio and Game. GPU hand-off lets larger assistants and H3 take turns; compatible vision models up to 8 GB can use verified CPU placement alongside H3. See [assistant profiles](docs/ASSISTANT_PROFILES.md).
 - Sketch a guide or plan simple movement, then add it as a reference or scene instruction.
 
 No cloud account is required by this app. Reference photos, prompt drafts, stories and projects remain in the configured local data folder; the app sends them to the local LM Studio and ComfyUI services you configure.
@@ -164,7 +168,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.5.0 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.6.0 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.
