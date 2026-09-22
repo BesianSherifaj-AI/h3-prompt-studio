@@ -10,6 +10,7 @@ export type ProductionItem = {
 export type ProductionBatch = {
   id: string; name: string; status: string; error?: string; items: ProductionItem[];
   completed: number; total: number; created_at?: number;
+  latest_export?: { url: string; filename: string; kind: 'film' | 'clips'; export_id: string; clip_count: number } | null;
 };
 type SavedProject = { id: string; title: string };
 const TIMEOUT = { timeoutMs: 20_000 };
@@ -60,6 +61,10 @@ export function ProductionBatchView({ batch, pending = false, onAction, onRetry,
       {item.video_url && <button aria-label={`Play ${item.title || `video ${item.index + 1}`}`} onClick={() => onPreview(item)}><Play size={15}/><span>Review</span></button>}
       {['failed', 'cancelled'].includes(item.status) && <button disabled={pending || batch.status === 'running'} onClick={() => onRetry(item.index)}>Retry</button>}
     </li>)}</ol>
+    {batch.latest_export?.url && <p className="production-export" role="status">
+      <a href={batch.latest_export.url} download={batch.latest_export.filename} aria-label={`Download latest export: ${batch.latest_export.filename}`}><Download size={15}/>{batch.latest_export.filename}</a>
+      <small>Latest saved {batch.latest_export.kind === 'film' ? 'film' : 'clips'} export · {batch.latest_export.clip_count} clips. Review the video before publishing.</small>
+    </p>}
     <p className="production-hint">Rendered videos remain takes for review. The queue does not accept Game actions or change story state.</p>
   </section>;
 }
@@ -74,7 +79,6 @@ export default function ProductionQueue({ active, currentProjectId, currentProje
   const [name, setName] = useState(''), [search, setSearch] = useState(''), [error, setError] = useState('');
   const [pending, setPending] = useState(false), [preview, setPreview] = useState<ProductionItem | null>(null);
   const [pendingLabel, setPendingLabel] = useState('Saving queue changes…');
-  const [exported, setExported] = useState<{ batchId: string; url: string; filename: string; review_status: string } | null>(null);
   const refreshBusy = useRef(false), createRequest = useRef({ signature: '', id: '' });
   const activeId = useRef(selectedId); activeId.current = selectedId;
 
@@ -154,10 +158,9 @@ export default function ProductionQueue({ active, currentProjectId, currentProje
         onRetry={index => void perform(async () => { await api(`/production/${batch.id}/items/${index}/retry`, { request_id: crypto.randomUUID() }, undefined, undefined, TIMEOUT); })}
         onExport={kind => void perform(async () => {
           const result = await api(`/production/${batch.id}/export`, { kind }, undefined, undefined, { timeoutMs: 600_000 });
-          setExported({ ...result, batchId: batch.id });
+          setBatch(current => current?.id === batch.id ? { ...current, latest_export: { ...result, kind } } : current);
         }, 'Preparing your export. Large batches can take a few minutes…')}
         onPreview={setPreview} onOpenProject={id => void perform(() => onOpenProject(id))}/>}
-      {exported?.batchId === selectedId && <p className="production-export" role="status"><a href={exported.url} download={exported.filename}><Download size={15}/>{exported.filename}</a><small>Export ready. Review the video before publishing.</small></p>}
       {preview?.video_url && <section className="production-preview" aria-label="Review rendered video"><div><strong>{preview.title}</strong><button aria-label="Close video preview" onClick={() => setPreview(null)}><X size={16}/></button></div><video controls playsInline preload="metadata" src={preview.video_url}/><a href={preview.video_url} download>Save video</a></section>}
       {!batches.length && <p className="production-hint">Create a batch from saved Studio projects. Starting a batch uses your local model and ComfyUI.</p>}
     </div>

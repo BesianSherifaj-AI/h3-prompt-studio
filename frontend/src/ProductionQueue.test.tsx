@@ -73,4 +73,11 @@ describe('Production queue progress and recovery', () => {
     expect(html).toContain('aria-label="Download source project for Opening"');
     expect(html).not.toContain('First frame');
   });
+  it('shows the persisted latest export independently of the browser session', () => {
+    const html = render({ ...fixture, latest_export: { url: '/api/production/batch-one/exports/crop-final', filename: 'sunrise-cropped.mp4', kind: 'film', export_id: 'crop-final', clip_count: 18 } });
+    expect(html).toContain('href="/api/production/batch-one/exports/crop-final" download="sunrise-cropped.mp4"');
+    expect(html).toContain('aria-label="Download latest export: sunrise-cropped.mp4"');
+    expect(html).toContain('Latest saved film export · 18 clips');
+    expect(render()).not.toContain('Download latest export');
+  });
 });

@@ -362,3 +362,12 @@ class ProductionManager:
                 'review_required': True, 'items': [{k: item.get(k) for k in
                     ('index', 'title', 'project_id', 'run_id', 'status', 'duration', 'actual_duration', 'video_url')}
                     for item in record['items']]}
+
+    def remember_export(self, ident, result):
+        """Save a successful export link without altering its render receipts."""
+        with self.lock:
+            record = self._record(ident)
+            if not isinstance(result, dict) or result.get('id') != record['id']:
+                raise ProductionError('This export belongs to another production batch.')
+            self._save(record, latest_export=copy.deepcopy(result))
+            return self._public(record)

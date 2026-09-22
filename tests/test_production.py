@@ -230,3 +230,18 @@ def test_all_images_finish_before_first_video_and_do_not_count_as_completed(rig)
     videos.submit = submit
     result = run(rig, body)
     assert result['completed'] == 2
+
+
+def test_latest_export_persists_without_modifying_receipts(rig):
+    manager, body, projects, videos, assets = rig
+    before = run(rig)
+    result = {'id': before['id'], 'export_id': 'a' * 20, 'url': '/export/film.mp4', 'edits': []}
+    manager.remember_export(before['id'], result)
+    result['edits'].append('external mutation')
+    restarted = ProductionManager(manager.directory.parent, lambda ident: projects[ident],
+                                  lambda: videos, lambda: assets, start_workers=False)
+    saved = restarted.get(before['id'])
+    assert saved['latest_export']['edits'] == []
+    assert saved['items'] == before['items']
+    with pytest.raises(ProductionError, match='another production'):
+        manager.remember_export(before['id'], {'id': uid()})

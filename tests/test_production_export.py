@@ -186,3 +186,76 @@ def test_mixed_resolutions_require_individual_export(tmp_path, synthetic_media):
     assert not list(tmp_path.rglob('film.mp4'))
     clips = exports.export_production(tmp_path, value, sources.__getitem__, 'clips')
     assert exports.export_file(tmp_path, value['id'], clips['export_id'], 'clips.zip').is_file()
+
+
+def edit(index=0, cut=0, **crop):
+    return {'index': index, 'cut_at': cut, 'crop': {'x': 0, 'y': 0, 'width': 32, 'height': 80, **crop}}
+
+
+@pytest.mark.parametrize('edits', [
+    {}, [edit()] * 101, [edit(), edit()], [edit(index=True)], [edit(index=1)],
+    [edit(cut=float('nan'))], [edit(cut=float('inf'))], [edit(cut=-1)], [edit(cut=4)],
+    [edit(cut=3.999)], [edit(width=0)], [edit(width=31)], [edit(x=-2)], [edit(x=True)],
+    [{'index': 0, 'crop': {}}], [{**edit(), 'arbitrary': 'filter'}], [edit(width=32.0)],
+])
+def test_invalid_edits_reject_before_media_lookup(tmp_path, edits):
+    with pytest.raises(ValueError):
+        exports.export_production(tmp_path, batch(4), reject_lookup, edits=edits)
+
+
+def test_all_crop_bounds_checked_before_any_transcode(tmp_path, synthetic_media, monkeypatch):
+    value = batch(4, 4)
+    sources = dict(zip((x['run_id'] for x in value['items']), synthetic_media))
+    monkeypatch.setattr(exports, '_run', lambda _: pytest.fail('No transcode before all bounds pass'))
+    with pytest.raises(ValueError, match='exceeds its 96×160'):
+        exports.export_production(tmp_path, value, sources.__getitem__, 'clips',
+                                  [edit(), edit(index=1, x=90)])
+
+
+def test_edits_change_cache_and_manifest_and_are_frame_aligned(tmp_path, monkeypatch):
+    monkeypatch.setattr(exports, '_run', lambda args: Path(args[-1]).write_bytes(b'media'))
+    monkeypatch.setattr(exports, '_source_dimensions', lambda _: (96, 160))
+    value = batch(4)
+    lookup = lambda _: tmp_path / 'source.mp4'
+    untouched = exports.export_production(tmp_path, value, lookup, 'clips')
+    cropped = exports.export_production(tmp_path, value, lookup, 'clips', [edit(cut=1.51)])
+    cached = exports.export_production(tmp_path, value, reject_lookup, 'clips', [edit(cut=1.5)])
+    assert untouched['export_id'] != cropped['export_id'] == cached['export_id']
+    assert cropped['edits'][0]['cut_at'] == 1.5
+    manifest = json.loads(exports.export_file(tmp_path, value['id'], cropped['export_id'], 'manifest.json').read_text())
+    assert manifest['edits'] == cropped['edits']
+    with zipfile.ZipFile(exports.export_file(tmp_path, value['id'], cropped['export_id'], 'clips.zip')) as archive:
+        assert json.loads(archive.read('manifest.json'))['edits'] == cropped['edits']
+
+
+def test_real_reaction_cut_keeps_timing_audio_source_and_output_dimensions(tmp_path, synthetic_media):
+    source = tmp_path / 'spatial-source.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(synthetic_media[1]),
+                    '-vf', 'drawbox=x=0:y=0:w=32:h=160:color=red:t=fill', '-c:v', 'libx264',
+                    '-threads', '2', '-c:a', 'copy', str(source)], check=True, capture_output=True)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    value = batch(4)
+    original = exports.export_production(tmp_path, value, lambda _: source)
+    result = exports.export_production(tmp_path, value, lambda _: source, edits=[edit(cut=1.5)])
+    output = exports.export_file(tmp_path, value['id'], result['export_id'], result['filename'])
+    original_output = exports.export_file(tmp_path, value['id'], original['export_id'], original['filename'])
+    info = probe(output)
+    video = next(s for s in info['streams'] if s['codec_type'] == 'video')
+    assert (video['width'], video['height'], int(video['nb_frames'])) == (96, 160, 96)
+    assert float(video['duration']) == pytest.approx(4, abs=1 / 240)
+    def pixel(t):
+        return subprocess.run(['ffmpeg', '-v', 'error', '-ss', str(t), '-i', str(output),
+            '-frames:v', '1', '-vf', 'crop=2:2:80:80,scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'],
+            check=True, capture_output=True).stdout
+    before, after = pixel(1.4), pixel(1.6)
+    assert before[2] > 200 and before[0] < 30  # Original right side remains blue.
+    assert after[0] > 200 and after[2] < 30  # Reaction crop fills original output size.
+    def audio(path):
+        return subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-map', '0:a:0',
+            '-f', 's16le', '-acodec', 'pcm_s16le', '-'], check=True, capture_output=True).stdout
+    assert audio(output) == audio(original_output)
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+    full_crop = exports.export_production(tmp_path, value, lambda _: source, edits=[edit(cut=0)])
+    full_output = exports.export_file(tmp_path, value['id'], full_crop['export_id'], full_crop['filename'])
+    full_video = next(s for s in probe(full_output)['streams'] if s['codec_type'] == 'video')
+    assert (full_video['width'], full_video['height'], int(full_video['nb_frames'])) == (96, 160, 96)

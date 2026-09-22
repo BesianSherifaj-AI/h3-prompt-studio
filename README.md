@@ -2,7 +2,7 @@
 
 A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
 
-Version **1.6.0** gives **Studio** and **Game** their own addresses, projects and navigation. Open `/studio` to direct videos or `/game` to play a saved story. Switch workspaces without replacing your Studio draft, use the browser's Back and Forward buttons, and find playback and film export in Game's **Scenes** view on desktop or mobile. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
+Version **1.6.1** adds saved production downloads and validated crop cuts for film and clip exports. **Studio** and **Game** have their own addresses, projects and navigation. Open `/studio` to direct videos or `/game` to play a saved story. Switch workspaces without replacing your Studio draft, use the browser's Back and Forward buttons, and find playback and film export in Game's **Scenes** view on desktop or mobile. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
 
 **[Game scene and movement guide](docs/GAME_SCENE_MOVEMENT.md)** · **[Scene continuity](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Workspace validation](docs/WORKSPACE_SEPARATION_VALIDATION.md)** · **[Scene validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
 
@@ -168,7 +168,7 @@ The included tests use neutral fixtures and mocked model/GPU calls. They do not 
 After testing and building a reviewed release checkout, create its portable archive from the repository root:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package_release.py --version 1.6.0 --output-dir release
+.\.venv\Scripts\python.exe tools/package_release.py --version 1.6.1 --output-dir release
 ```
 
 The package includes the prebuilt `dist/` frontend, source, launchers, dependency locks, notices and selected public demo. It excludes runtime data, environments, logs, credentials and model files. The script writes a file-hash manifest and an archive SHA-256 sidecar, uses fixed ZIP metadata, and refuses to overwrite an existing release. Rebuilding or packaging never uploads anything.

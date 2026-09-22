@@ -96,6 +96,35 @@ def test_production_routes_require_auth_and_preserve_explicit_start(server, monk
     assert client.get(base + '/exports/not-valid/film.mp4').status_code == 400
 
 
+def test_production_export_accepts_edits_and_only_saves_success(server, monkeypatch):
+    module, client, _ = server
+    from backend.production import ProductionManager
+    from backend import production_export
+    project = new_project()
+    project['mode'] = 't2va'
+    project['story']['text'] = 'A paper boat drifts.'
+    project['shots'][0].update(action='A paper boat drifts across a pond.', setting='A quiet pond')
+    manager = ProductionManager(module.DATA, lambda ident: project, denied, denied, start_workers=False)
+    monkeypatch.setattr(module, 'PRODUCTION', manager)
+    batch = manager.create({'request_id': str(uuid.uuid4()), 'project_ids': [project['id']]})
+    edits = [{'index': 0, 'cut_at': 1.5, 'crop': {'x': 0, 'y': 0, 'width': 32, 'height': 80}}]
+    calls = []
+    result = {'id': batch['id'], 'url': '/export/film.mp4', 'edits': edits}
+    def export(data, snapshot, path, kind, *, edits):
+        calls.append((snapshot['id'], kind, edits))
+        return result
+    monkeypatch.setattr(production_export, 'export_production', export)
+    base = '/api/production/' + batch['id']
+    response = client.post(base + '/export', json={'kind': 'film', 'edits': edits}, headers=auth(module))
+    assert response.status_code == 200 and calls == [(batch['id'], 'film', edits)]
+    assert client.get(base).json()['latest_export'] == result
+    def fail(*args, **kwargs):
+        raise ValueError('Transcode failed')
+    monkeypatch.setattr(production_export, 'export_production', fail)
+    assert client.post(base + '/export', json={'kind': 'film'}, headers=auth(module)).status_code == 400
+    assert client.get(base).json()['latest_export'] == result
+
+
 def test_upscale_handoff_uses_resolved_scene_and_requires_session(server, monkeypatch, tmp_path):
     module, client, _ = server
     from backend import upscale_adapter
