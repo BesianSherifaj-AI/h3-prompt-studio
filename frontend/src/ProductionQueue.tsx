@@ -5,7 +5,7 @@ import './ProductionQueue.css';
 
 export type ProductionItem = {
   index: number; project_id: string; title: string; status: string; stage?: string;
-  error?: string; run_id?: string; video_url?: string; duration?: number;
+  error?: string; run_id?: string; video_url?: string; duration?: number; asset_url?: string;
 };
 export type ProductionBatch = {
   id: string; name: string; status: string; error?: string; items: ProductionItem[];
@@ -52,6 +52,10 @@ export function ProductionBatchView({ batch, pending = false, onAction, onRetry,
       <span className="production-index">{item.index + 1}</span>
       <div className="production-item-copy"><button className="production-project-link" onClick={() => onOpenProject(item.project_id)}>{item.title || `Video ${item.index + 1}`}</button>
         <small>{productionStatus(item.status)}{item.stage && item.stage !== item.status ? ` · ${item.stage}` : ''}{item.duration ? ` · ${item.duration}s` : ''}</small>
+        {(item.asset_url || (item.status === 'succeeded' && item.run_id)) && <div className="production-item-files">
+          {item.asset_url && <a href={item.asset_url} target="_blank" rel="noopener noreferrer" aria-label={`First frame for ${item.title || `video ${item.index + 1}`}`}>First frame</a>}
+          {item.status === 'succeeded' && item.run_id && <a href={`/api/video/runs/${item.run_id}/project`} download aria-label={`Download source project for ${item.title || `video ${item.index + 1}`}`}><Download size={12}/>Source project</a>}
+        </div>}
         {item.error && <p className="production-error">{item.error}</p>}</div>
       {item.video_url && <button aria-label={`Play ${item.title || `video ${item.index + 1}`}`} onClick={() => onPreview(item)}><Play size={15}/><span>Review</span></button>}
       {['failed', 'cancelled'].includes(item.status) && <button disabled={pending || batch.status === 'running'} onClick={() => onRetry(item.index)}>Retry</button>}

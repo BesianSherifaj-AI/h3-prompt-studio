@@ -60,4 +60,17 @@ describe('Production queue progress and recovery', () => {
     const incomplete = renderToStaticMarkup(<ProductionBatchView {...props} batch={fixture}/>);
     expect(incomplete).not.toContain('Export film');
   });
+  it('links generated first frames while video is queued without preloading images', () => {
+    const html = render({ ...fixture, items: [{ ...fixture.items[2], asset_url: '/api/assets/frame/file', run_id: 'waiting-run' }] });
+    expect(html).toContain('aria-label="First frame for Finale"');
+    expect(html).toContain('href="/api/assets/frame/file" target="_blank"');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('/api/video/runs/waiting-run/project');
+  });
+  it('provides the exact rendered source snapshot only for finished videos', () => {
+    const html = render({ ...fixture, items: [{ ...fixture.items[0], run_id: 'rendered-run' }] });
+    expect(html).toContain('href="/api/video/runs/rendered-run/project" download=""');
+    expect(html).toContain('aria-label="Download source project for Opening"');
+    expect(html).not.toContain('First frame');
+  });
 });
