@@ -11,6 +11,8 @@ from pathlib import Path
 from .projects import atomic_json, safe_id
 
 _LOCK = threading.Lock()
+AUDIO_NORMALIZATION_VERSION = 'measured-two-pass-v2'
+AUDIO_HEADROOM_DBTP = -2.5  # Leave room for AAC reconstruction overshoot.
 
 def _run(args):
     result = subprocess.run(args, capture_output=True, timeout=300,
@@ -78,6 +80,85 @@ def _crop_filter(edit, dimensions):
             '[before][after]concat=n=2:v=1:a=0[edited]')
 
 
+def _measure_audio(path, duration):
+    result = subprocess.run(['ffmpeg', '-hide_banner', '-nostdin', '-threads', '2', '-filter_threads', '2',
+        '-i', str(path), '-vn', '-map', '0:a:0', '-af',
+        f'atrim=duration={duration},loudnorm=I=-16:TP={AUDIO_HEADROOM_DBTP}:LRA=11:print_format=json',
+        '-f', 'null', '-'], capture_output=True, timeout=120,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    text = result.stderr.decode('utf-8', errors='replace')
+    try:
+        if result.returncode or text.rfind('{') < 0:
+            raise ValueError()
+        raw = json.JSONDecoder().raw_decode(text[text.rfind('{'):])[0]
+        values = {key: float(raw[key]) for key in ('input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset')}
+        return {key: value if math.isfinite(value) else None for key, value in values.items()}
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ValueError('Audio loudness could not be measured; no unchecked normalized export was published.') from exc
+
+
+def _limited_gain(duration, gain):
+    return (f'atrim=duration={duration},volume={gain:.6f}dB,aresample=192000,'
+            f'alimiter=limit={10 ** (AUDIO_HEADROOM_DBTP / 20):.9f}:level=false:latency=true,aresample=48000')
+
+
+def _normalization_plan(source, duration):
+    probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries',
+        'stream=index', '-of', 'json', str(source)], capture_output=True, timeout=30,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if probe.returncode:
+        raise ValueError('Audio stream could not be inspected before normalization.')
+    if not json.loads(probe.stdout).get('streams'):
+        return None
+    measured = _measure_audio(source, duration)
+    if measured['input_tp'] is None:
+        return {'filter': f'atrim=duration={duration}', 'method': 'silent_source_preserved', 'input': measured}
+    if all(value is not None for value in measured.values()):
+        chain = (f'atrim=duration={duration},loudnorm=I=-16:TP={AUDIO_HEADROOM_DBTP}:LRA=11:'
+                 f'measured_I={measured["input_i"]}:measured_TP={measured["input_tp"]}:'
+                 f'measured_LRA={measured["input_lra"]}:measured_thresh={measured["input_thresh"]}:'
+                 f'offset={measured["target_offset"]}:linear=true')
+        return {'filter': chain, 'method': 'measured_two_pass', 'input': measured}
+    # Below EBU's absolute gate, do not feed -inf into loudnorm. First lift
+    # measurable content conservatively; digital silence remains untouched.
+    gain = min(80, max(-80, -18 - measured['input_tp']))
+    return {'filter': _limited_gain(duration, gain), 'method': 'below_gate_peak_recovery',
+            'gain_db': gain, 'input': measured}
+
+
+def _finish_normalization(command, temporary, duration, plan):
+    measured = _measure_audio(temporary, duration)
+    attempts, method = 0, plan['method']
+    source_i = plan['input']['input_i']
+    gain = plan.get('gain_db', min(80, max(-80, -16 - source_i)) if source_i is not None else 0)
+    # Sparse, very quiet sources can still defeat loudnorm's dynamic second
+    # pass. Refine a measured gain with an oversampled limiter, always reading
+    # the ORIGINAL input command. Never cascade lossy encodes or add sound.
+    while measured['input_i'] is not None and abs(measured['input_i'] + 16) > 1 and attempts < 3:
+        gain = min(80, max(-80, gain + (-16 - measured['input_i'])))
+        command[command.index('-af') + 1] = _limited_gain(duration, gain)
+        _run(command)
+        measured = _measure_audio(temporary, duration)
+        attempts += 1
+        method = 'measured_gain_limited_recovery'
+    # Verify the encoded AAC, not merely the filter's predicted true peak.
+    for _ in range(2):
+        peak = measured['input_tp']
+        if peak is None or peak <= -1.5:
+            break
+        attenuation = -1.5 - peak - 0.35
+        command[command.index('-af') + 1] += f',volume={attenuation:.6f}dB'
+        _run(command)
+        measured = _measure_audio(temporary, duration)
+        attempts += 1
+    if measured['input_tp'] is not None and measured['input_tp'] > -1.5:
+        raise ValueError('AAC true peak still exceeds -1.5 dBTP; no unchecked export was published.')
+    return {'version': AUDIO_NORMALIZATION_VERSION, 'method': method, 'input': plan['input'],
+            'encoded': measured, 'refinement_encodes': attempts, 'target_lufs': -16, 'maximum_dbtp': -1.5,
+            'warning': 'Integrated loudness remains more than 3 LU from target; review sparse audio or silence.'
+                       if measured['input_i'] is None or abs(measured['input_i'] + 16) > 3 else None}
+
+
 def export_production(data: Path, batch: dict, video_path, kind='film', edits=None, normalize_audio=False):
     if kind not in ('film', 'clips'):
         raise ValueError('Choose a film or individual clips export.')
@@ -95,6 +176,7 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
                    x.get('project', {}).get('title', x.get('title', 'Clip'))) for x in items],
         'edits': edits,
         'normalize_audio': normalize_audio,
+        'audio_normalization_version': AUDIO_NORMALIZATION_VERSION if normalize_audio else None,
     }, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:20]
     folder = data / 'production_exports' / safe_id(batch['id']) / identity
     folder.mkdir(parents=True, exist_ok=True)
@@ -112,28 +194,36 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
                     raise ValueError(f'Crop for item {index} exceeds its {width}×{height} source frame.')
             files = []
             manifest = {'name': batch.get('name', 'Production'), 'review_status': 'Generated; creative review required',
-                        'edits': edits, 'normalize_audio': normalize_audio, 'clips': []}
+                        'edits': edits, 'normalize_audio': normalize_audio,
+                        'audio_normalization_version': AUDIO_NORMALIZATION_VERSION if normalize_audio else None, 'clips': []}
             for index, item in enumerate(items, 1):
                 source = sources[index - 1]
                 project = item.get('project', {})
                 duration = _duration(item)
                 target = folder / f'{index:03}.mp4'
-                if not target.exists():
+                audio_receipt = folder / f'{index:03}-audio.json'
+                if not target.exists() or normalize_audio and not audio_receipt.exists():
                     temp = folder / f'{index:03}-building.mp4'
                     edit = edit_map.get(index - 1)
                     video_filter = (['-filter_complex', _crop_filter(edit, dimensions[index - 1]), '-map', '[edited]']
                                     if edit else ['-map', '0:v:0', '-vf', 'setsar=1'])
-                    audio_filter = ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11'] if normalize_audio else []
-                    _run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', str(source),
+                    plan = _normalization_plan(source, duration) if normalize_audio else None
+                    audio_filter = ['-af', plan['filter']] if plan else []
+                    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', str(source),
                           '-t', str(duration), *video_filter, '-map', '0:a:0?', '-map_metadata', '-1',
                           *audio_filter,
                           '-r', '24', '-c:v', 'libx264', '-crf', '17', '-preset', 'fast',
                           '-threads', '4', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-                          '-movflags', '+faststart', str(temp)])
+                          '-movflags', '+faststart', str(temp)]
+                    _run(command)
+                    if normalize_audio:
+                        audit = _finish_normalization(command, temp, duration, plan) if plan else {'version': AUDIO_NORMALIZATION_VERSION, 'method': 'no_audio_stream'}
+                        atomic_json(audio_receipt, audit)
                     temp.replace(target)
                 files.append(target)
                 manifest['clips'].append({'index': index, 'title': project.get('title', item.get('title', 'Clip')),
-                                          'run_id': item['run_id'], 'duration': duration, 'file': target.name})
+                                          'run_id': item['run_id'], 'duration': duration, 'file': target.name,
+                                          **({'audio_normalization': json.loads(audio_receipt.read_text(encoding='utf-8'))} if normalize_audio else {})})
             atomic_json(folder / 'manifest.json', manifest)
             if kind == 'film':
                 # Prevent silent distortion or invalid concatenation across differing formats.
@@ -165,7 +255,8 @@ def export_production(data: Path, batch: dict, video_path, kind='film', edits=No
     return {'id': batch['id'], 'export_id': identity, 'kind': kind, 'filename': output.name,
             'url': f'/api/production/{batch["id"]}/exports/{identity}/{output.name}',
             'review_status': 'Generated; creative review required', 'clip_count': len(items), 'edits': edits,
-            'normalize_audio': normalize_audio}
+            'normalize_audio': normalize_audio,
+            'audio_normalization_version': AUDIO_NORMALIZATION_VERSION if normalize_audio else None}
 
 def export_file(data: Path, batch_id: str, export_id: str, filename: str):
     if not re.fullmatch(r'[0-9a-f]{20}', export_id) or filename not in ('film.mp4', 'clips.zip', 'manifest.json'):

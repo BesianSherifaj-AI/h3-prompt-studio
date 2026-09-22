@@ -273,6 +273,9 @@ def test_audio_normalization_changes_cache_and_manifest_only_when_enabled(tmp_pa
         commands.append(args)
         Path(args[-1]).write_bytes(b'media')
     monkeypatch.setattr(exports, '_run', encode)
+    measured_filter = 'loudnorm=I=-16:TP=-2.5:LRA=11:measured_I=-40:measured_TP=-25:measured_LRA=2:measured_thresh=-50:offset=0:linear=true'
+    monkeypatch.setattr(exports, '_normalization_plan', lambda *args: {'filter': measured_filter})
+    monkeypatch.setattr(exports, '_finish_normalization', lambda *args: {'version': exports.AUDIO_NORMALIZATION_VERSION})
     value = batch(4)
     default = exports.export_production(tmp_path, value, lambda _: tmp_path / 'source.mp4', 'clips')
     assert '-af' not in commands[0]
@@ -280,12 +283,16 @@ def test_audio_normalization_changes_cache_and_manifest_only_when_enabled(tmp_pa
     assert explicit_false['export_id'] == default['export_id']
     normalized = exports.export_production(tmp_path, value, lambda _: tmp_path / 'source.mp4', 'clips', normalize_audio=True)
     assert normalized['export_id'] != default['export_id'] and normalized['normalize_audio'] is True
-    assert commands[1][commands[1].index('-af') + 1] == 'loudnorm=I=-16:TP=-1.5:LRA=11'
+    assert commands[1][commands[1].index('-af') + 1] == measured_filter
     assert exports.export_production(tmp_path, value, reject_lookup, 'clips', normalize_audio=True)['export_id'] == normalized['export_id']
     manifest = json.loads(exports.export_file(tmp_path, value['id'], normalized['export_id'], 'manifest.json').read_text())
     assert manifest['normalize_audio'] is True
+    assert manifest['audio_normalization_version'] == normalized['audio_normalization_version'] == exports.AUDIO_NORMALIZATION_VERSION
     with zipfile.ZipFile(exports.export_file(tmp_path, value['id'], normalized['export_id'], 'clips.zip')) as archive:
         assert json.loads(archive.read('manifest.json'))['normalize_audio'] is True
+    monkeypatch.setattr(exports, 'AUDIO_NORMALIZATION_VERSION', 'future-measured-version')
+    revised = exports.export_production(tmp_path, value, lambda _: tmp_path / 'source.mp4', 'clips', normalize_audio=True)
+    assert revised['export_id'] != normalized['export_id']
 
 
 def loudness(path):
@@ -326,3 +333,33 @@ def test_normalization_allows_a_video_with_no_audio(tmp_path, synthetic_media):
     result = exports.export_production(tmp_path, value, lambda _: source, normalize_audio=True)
     output = exports.export_file(tmp_path, value['id'], result['export_id'], result['filename'])
     assert not any(s['codec_type'] == 'audio' for s in probe(output)['streams'])
+
+
+def test_bounded_recovery_reads_original_and_enforces_encoded_peak(monkeypatch, tmp_path):
+    calls = []
+    command = ['ffmpeg', '-i', 'original.mp4', '-af', 'initial-filter', str(tmp_path / 'output.mp4')]
+    measurements = iter([{'input_i': -25, 'input_tp': -.6}, {'input_i': -17, 'input_tp': -.7},
+                         {'input_i': -17.8, 'input_tp': -1.7}])
+    monkeypatch.setattr(exports, '_measure_audio', lambda *args: next(measurements))
+    monkeypatch.setattr(exports, '_run', lambda args: calls.append(list(args)))
+    plan = {'method': 'measured_two_pass', 'input': {'input_i': -54, 'input_tp': -35}}
+    result = exports._finish_normalization(command, tmp_path / 'output.mp4', 4, plan)
+    assert len(calls) == 2 and all(c[c.index('-i') + 1] == 'original.mp4' for c in calls)
+    assert 'alimiter=' in calls[0][calls[0].index('-af') + 1]
+    assert result['encoded']['input_tp'] <= -1.5
+
+
+def test_peak_verification_failure_is_not_published(monkeypatch, tmp_path):
+    monkeypatch.setattr(exports, '_measure_audio', lambda *args: {'input_i': -16, 'input_tp': 0})
+    monkeypatch.setattr(exports, '_run', lambda args: None)
+    with pytest.raises(ValueError, match='AAC true peak'):
+        exports._finish_normalization(['ffmpeg', '-af', 'filter'], tmp_path / 'output.mp4', 4,
+                                      {'method': 'measured_two_pass', 'input': {'input_i': -20, 'input_tp': -2}})
+
+
+def test_silence_is_preserved_without_inventing_gain(monkeypatch, tmp_path):
+    monkeypatch.setattr(exports, '_measure_audio', lambda *args: {'input_i': None, 'input_tp': None})
+    monkeypatch.setattr(exports, '_run', lambda args: pytest.fail('Do not boost digital silence'))
+    result = exports._finish_normalization([], tmp_path / 'output.mp4', 4,
+        {'method': 'silent_source_preserved', 'input': {'input_i': None, 'input_tp': None}})
+    assert result['method'] == 'silent_source_preserved' and result['warning']
