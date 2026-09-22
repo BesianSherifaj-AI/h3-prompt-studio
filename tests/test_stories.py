@@ -179,7 +179,7 @@ def rig(tmp_path):
     videos, assets, client = Videos(), Assets(), Client()
     resources = SimpleNamespace(calls=[])
 
-    def run_ai(model, operation):
+    def run_ai(model, operation, *, profile=None):
         resources.calls.append(model)
         return operation(model)
 

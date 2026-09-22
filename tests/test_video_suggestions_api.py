@@ -30,7 +30,7 @@ def test_suggestions_use_combined_final_take_and_immutable_story(server, manager
     calls = []
     monkeypatch.setattr(module, 'video_run_ending_image', lambda ident: calls.append(('ending', ident)) or ending)
     monkeypatch.setattr(module, 'image_data', lambda ident: 'actual-image')
-    monkeypatch.setattr(module.RESOURCES, 'run_ai', lambda model, fn: calls.append(('ai', model)) or fn('exact-loaded-instance'))
+    monkeypatch.setattr(module.RESOURCES, 'run_ai', lambda model, fn, *, profile=None: calls.append(('ai', model)) or fn('exact-loaded-instance'))
     original = copy.deepcopy(manager.project)
     def suggest(actual_client, instance, project, duration, image, direction, *, small_model=False):
         assert instance == 'exact-loaded-instance' and project == original

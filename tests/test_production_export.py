@@ -1,0 +1,188 @@
+"""Export safety and real CPU FFmpeg delivery; no GPU or model inference."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import uuid
+import zipfile
+
+import pytest
+
+from backend import production_export as exports
+
+
+def batch(*durations):
+    return {'id': str(uuid.uuid4()), 'name': 'A small production', 'items': [
+        {'run_id': str(uuid.uuid4()), 'status': 'succeeded', 'duration': d,
+         'title': f'Clip {index}'} for index, d in enumerate(durations, 1)]}
+
+
+def reject_lookup(_):
+    pytest.fail('Invalid export input must not resolve or transcode media.')
+
+
+@pytest.mark.parametrize('change', [
+    lambda b: b.update(items=[]),
+    lambda b: b['items'][0].update(status='running'),
+    lambda b: b['items'][0].pop('run_id'),
+    lambda b: b.update(items=b['items'] * 101),
+    lambda b: b.update(id='../outside'),
+    lambda b: b['items'][0].update(run_id='../outside'),
+])
+def test_invalid_batches_never_resolve_media(tmp_path, change):
+    value = batch(4)
+    change(value)
+    with pytest.raises(ValueError):
+        exports.export_production(tmp_path, value, reject_lookup)
+
+
+def test_unknown_export_kind_never_resolves_media(tmp_path):
+    with pytest.raises(ValueError, match='film or individual'):
+        exports.export_production(tmp_path, batch(4), reject_lookup, '../arbitrary')
+
+
+@pytest.mark.parametrize('duration', [None, True, 3.99, 15.01, '4', float('nan'), float('inf')])
+def test_invalid_duration_never_transcodes(tmp_path, monkeypatch, duration):
+    monkeypatch.setattr(exports, '_run', lambda _: pytest.fail('No invalid-duration transcode'))
+    with pytest.raises(ValueError, match='invalid delivery duration'):
+        exports.export_production(tmp_path, batch(duration), lambda _: tmp_path / 'source.mp4')
+
+
+@pytest.mark.parametrize('batch_id,export_id,filename', [
+    ('../outside', 'a' * 20, 'film.mp4'),
+    (str(uuid.uuid4()), '../outside', 'film.mp4'),
+    (str(uuid.uuid4()), 'a' * 19, 'film.mp4'),
+    (str(uuid.uuid4()), 'A' * 20, 'film.mp4'),
+    (str(uuid.uuid4()), 'a' * 20, '../film.mp4'),
+    (str(uuid.uuid4()), 'a' * 20, 'assembly.ffconcat'),
+])
+def test_download_path_rejects_traversal_and_nonpublic_files(tmp_path, batch_id, export_id, filename):
+    with pytest.raises(ValueError):
+        exports.export_file(tmp_path, batch_id, export_id, filename)
+
+
+def test_download_requires_existing_export(tmp_path):
+    with pytest.raises(ValueError, match='Generate this production export first'):
+        exports.export_file(tmp_path, str(uuid.uuid4()), 'a' * 20, 'film.mp4')
+
+
+@pytest.fixture(scope='module')
+def synthetic_media(tmp_path_factory):
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        pytest.skip('Real CPU FFmpeg export validation requires ffmpeg and ffprobe.')
+    root = tmp_path_factory.mktemp('production-export-media')
+    results = []
+    for index, (color, frequency) in enumerate([('red', 440), ('blue', 660)]):
+        target = root / f'input-{index}.mp4'
+        subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-f', 'lavfi', '-i',
+                        f'color=c={color}:s=96x160:r=24:d=4.25', '-f', 'lavfi', '-i',
+                        f'sine=frequency={frequency}:sample_rate=48000:duration=4.25',
+                        '-c:v', 'libx264', '-threads', '2', '-pix_fmt', 'yuv420p',
+                        '-c:a', 'aac', '-shortest', str(target)], check=True, capture_output=True)
+        results.append(target)
+    return results
+
+
+def probe(path):
+    result = subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-show_format',
+                             '-of', 'json', str(path)], check=True, capture_output=True)
+    return json.loads(result.stdout)
+
+
+def test_real_two_clip_film_has_exact_eight_seconds_and_preserves_sources(tmp_path, synthetic_media):
+    value = batch(4, 4)
+    sources = dict(zip((x['run_id'] for x in value['items']), synthetic_media))
+    before = [hashlib.sha256(p.read_bytes()).hexdigest() for p in synthetic_media]
+    result = exports.export_production(tmp_path, value, sources.__getitem__)
+    output = exports.export_file(tmp_path, value['id'], result['export_id'], result['filename'])
+    info = probe(output)
+    video = next(s for s in info['streams'] if s['codec_type'] == 'video')
+    assert float(video['duration']) == pytest.approx(8, abs=1 / 240)
+    assert int(video['nb_frames']) == 192
+    assert float(info['format']['duration']) == pytest.approx(8, abs=1 / 24)
+    assert (video['width'], video['height']) == (96, 160)
+    assert any(s['codec_type'] == 'audio' for s in info['streams'])
+    assert result['clip_count'] == 2 and result['review_status'] == 'Generated; creative review required'
+    assert before == [hashlib.sha256(p.read_bytes()).hexdigest() for p in synthetic_media]
+    manifest = json.loads(output.with_name('manifest.json').read_text())
+    assert [x['duration'] for x in manifest['clips']] == [4, 4]
+    assert [x['title'] for x in manifest['clips']] == ['Clip 1', 'Clip 2']
+
+
+def test_zip_titles_are_portable_unique_and_manifest_preserves_originals(tmp_path, synthetic_media):
+    value = batch(4, 4)
+    titles = ['../CON:<bad>| / movie?* 🎬', '日本語']
+    for item, title in zip(value['items'], titles):
+        item['title'] = title
+    sources = dict(zip((x['run_id'] for x in value['items']), synthetic_media))
+    result = exports.export_production(tmp_path, value, sources.__getitem__, 'clips')
+    output = exports.export_file(tmp_path, value['id'], result['export_id'], 'clips.zip')
+    with zipfile.ZipFile(output) as archive:
+        assert archive.namelist() == ['manifest.json', '001-CONbad  movie.mp4', '002-clip.mp4']
+        assert all('/' not in name and '\\' not in name for name in archive.namelist())
+        manifest = json.loads(archive.read('manifest.json'))
+        assert [x['title'] for x in manifest['clips']] == titles
+        assert all(x['file'] in archive.namelist() for x in manifest['clips'])
+        assert all(archive.getinfo(name).file_size > 0 for name in archive.namelist())
+
+
+def test_cache_tracks_top_level_duration_titles_and_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(exports, '_run', lambda args: Path(args[-1]).write_bytes(b'test media'))
+    value = batch(4)
+    original = exports.export_production(tmp_path, value, lambda _: tmp_path / 'source.mp4', 'clips')
+    identical = exports.export_production(tmp_path, copy.deepcopy(value), reject_lookup, 'clips')
+    assert identical['export_id'] == original['export_id']
+    ids = {original['export_id']}
+    for change in [lambda b: b['items'][0].update(duration=5),
+                   lambda b: b['items'][0].update(title='Changed title'),
+                   lambda b: b.update(name='Changed name')]:
+        changed = copy.deepcopy(value)
+        change(changed)
+        result = exports.export_production(tmp_path, changed, lambda _: tmp_path / 'source.mp4', 'clips')
+        assert result['export_id'] not in ids
+        ids.add(result['export_id'])
+        manifest_path = exports.export_file(tmp_path, value['id'], result['export_id'], 'manifest.json')
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest['name'] == changed['name']
+        assert manifest['clips'][0]['duration'] == changed['items'][0]['duration']
+        assert manifest['clips'][0]['title'] == changed['items'][0]['title']
+
+
+def test_inline_project_metadata_keeps_precedence(tmp_path, monkeypatch):
+    monkeypatch.setattr(exports, '_run', lambda args: Path(args[-1]).write_bytes(b'test media'))
+    value = batch(4)
+    value['items'][0]['project'] = {'duration': 5, 'title': 'Project title'}
+    result = exports.export_production(tmp_path, value, lambda _: tmp_path / 'source.mp4', 'clips')
+    manifest = json.loads(exports.export_file(tmp_path, value['id'], result['export_id'], 'manifest.json').read_text())
+    assert manifest['clips'][0]['duration'] == 5
+    assert manifest['clips'][0]['title'] == 'Project title'
+
+
+def test_failed_transcode_does_not_publish_export_or_modify_source(tmp_path, monkeypatch):
+    source = tmp_path / 'original.mp4'
+    source.write_bytes(b'original remains intact')
+    def fail(args):
+        Path(args[-1]).write_bytes(b'incomplete')
+        raise ValueError('Export failed')
+    monkeypatch.setattr(exports, '_run', fail)
+    with pytest.raises(ValueError, match='Export failed'):
+        exports.export_production(tmp_path, batch(4), lambda _: source, 'clips')
+    assert source.read_bytes() == b'original remains intact'
+    assert not list(tmp_path.rglob('clips.zip'))
+    assert not list(tmp_path.rglob('001.mp4'))
+
+
+def test_mixed_resolutions_require_individual_export(tmp_path, synthetic_media):
+    differently_sized = tmp_path / 'wide.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-i', str(synthetic_media[1]),
+                    '-vf', 'scale=160:96', '-c:v', 'libx264', '-threads', '2', '-c:a', 'copy',
+                    str(differently_sized)], check=True, capture_output=True)
+    value = batch(4, 4)
+    sources = dict(zip((x['run_id'] for x in value['items']), [synthetic_media[0], differently_sized]))
+    with pytest.raises(ValueError, match='mixed video or audio formats'):
+        exports.export_production(tmp_path, value, sources.__getitem__)
+    assert not list(tmp_path.rglob('film.mp4'))
+    clips = exports.export_production(tmp_path, value, sources.__getitem__, 'clips')
+    assert exports.export_file(tmp_path, value['id'], clips['export_id'], 'clips.zip').is_file()

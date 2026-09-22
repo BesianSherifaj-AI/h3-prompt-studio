@@ -74,6 +74,28 @@ def auth(module):
     return {"X-H3-Token": module.TOKEN, "Origin": "http://127.0.0.1:8766"}
 
 
+def test_production_routes_require_auth_and_preserve_explicit_start(server, monkeypatch):
+    module, client, _ = server
+    from backend.production import ProductionManager
+    project = new_project()
+    project['mode'] = 't2va'
+    project['story']['text'] = 'A paper boat drifts.'
+    project['shots'][0].update(action='A paper boat drifts across a pond.', setting='A quiet pond')
+    manager = ProductionManager(module.DATA, lambda ident: project, denied, denied, start_workers=False)
+    monkeypatch.setattr(module, 'PRODUCTION', manager)
+    body = {'request_id': str(uuid.uuid4()), 'name': 'Production', 'project_ids': [project['id']]}
+    assert client.post('/api/production', json=body).status_code == 403
+    created = client.post('/api/production', json=body, headers=auth(module))
+    assert created.status_code == 200 and created.json()['status'] == 'draft'
+    base = '/api/production/' + body['request_id']
+    assert client.get('/api/production').json()['batches'][0]['id'] == body['request_id']
+    assert client.get(base).json()['status'] == 'draft'
+    assert client.get(base + '/playlist').json()['review_required'] is True
+    assert client.post(base + '/start', headers=auth(module)).json()['status'] == 'running'
+    assert client.post(base + '/cancel', headers=auth(module)).json()['status'] == 'cancelled'
+    assert client.get(base + '/exports/not-valid/film.mp4').status_code == 400
+
+
 def test_upscale_handoff_uses_resolved_scene_and_requires_session(server, monkeypatch, tmp_path):
     module, client, _ = server
     from backend import upscale_adapter
@@ -481,7 +503,7 @@ def test_plan_endpoint_keeps_all_source_facts_and_offscreen_dialogue(server, mon
                 "shots": [{"duration": 5, "action": "A slow light sweep.", "visible_subject_ids": [sid],
                            "dialogue": [{"text": "INVENTED"}]}]}
     monkeypatch.setattr(fake, "propose_plan", lambda *a: proposal, raising=False)
-    monkeypatch.setattr(module.RESOURCES, "run_ai", lambda model, operation=None: operation("mock-loaded"))
+    monkeypatch.setattr(module.RESOURCES, "run_ai", lambda model, operation=None, *, profile=None: operation("mock-loaded"))
     response = client.post("/api/ai/plan", headers=auth(module), json={"project": p})
     assert response.status_code == 200
     data = response.json(); candidate = data["candidate"]
@@ -507,7 +529,7 @@ def test_assist_updates_only_allowed_field_without_saving(server, monkeypatch):
     module, client, fake = server
     p = saved_project(module, client)
     monkeypatch.setattr(fake, "assist", lambda *a: {"field": "action", "value": "A revised light movement.", "reason": "Clearer"}, raising=False)
-    monkeypatch.setattr(module.RESOURCES, "run_ai", lambda model, operation=None: operation("mock-loaded"))
+    monkeypatch.setattr(module.RESOURCES, "run_ai", lambda model, operation=None, *, profile=None: operation("mock-loaded"))
     response = client.post("/api/ai/assist", headers=auth(module), json={"project": p, "shot_id": p["shots"][0]["id"], "field": "action"})
     assert response.status_code == 200
     expected = copy.deepcopy(p); expected["shots"][0]["action"] = "A revised light movement."

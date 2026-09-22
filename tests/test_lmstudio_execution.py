@@ -94,6 +94,7 @@ def test_owned_load_rejects_a_server_ignoring_gpu_kv_configuration():
     with pytest.raises(LMStudioError) as error:
         client(sdk).load_owned_model('model')
     assert error.value.code == 'model_unverified'
+    assert error.value.load_submitted is True
     assert len(sdk.calls) == 1  # Never retry or unload a load with uncertain configuration.
 
 
@@ -125,6 +126,14 @@ def test_user_loaded_matching_model_is_not_reused_or_unloaded_by_owned_loader():
     sdk = SDK()
     with pytest.raises(LMStudioError, match='left unchanged'):
         client(sdk).load_owned_model('model')
+    assert sdk.calls == []
+
+
+def test_owned_loader_marks_bad_model_as_not_submitted():
+    sdk = SDK(loaded=False)
+    with pytest.raises(LMStudioError) as error:
+        client(sdk).load_owned_model('absent')
+    assert error.value.code == 'invalid_model' and error.value.load_submitted is False
     assert sdk.calls == []
 
 

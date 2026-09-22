@@ -35,10 +35,35 @@
 .simple-model-controls button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; min-height: 37px; }
 .simple-model-help { margin: 9px 0 4px; color: var(--muted, #bec9d8); font-size: 12px; line-height: 1.5; }
 .simple-model-handoff { display: block; color: var(--muted, #a7b6ca); font-size: 11px; line-height: 1.5; }
+.simple-model-key{display:block;margin-top:6px;color:var(--muted,#a7b6ca);font-size:11px;line-height:1.4;overflow-wrap:anywhere}.simple-model-key code{font-size:inherit;color:inherit}
 .simple-model-resident { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
 .simple-model-resident button { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.simple-model-profile{display:grid;grid-template-columns:minmax(130px,.65fr) minmax(180px,1fr) auto;gap:10px;align-items:end;margin-top:10px;min-width:0}
+.simple-model-picker .simple-model-profile>label{display:flex;flex-direction:column;gap:5px;margin:0;font-size:12px;color:var(--muted,#bec9d8);min-width:0}
+.simple-model-profile select{width:100%;min-width:0;max-width:100%;min-height:38px;border:1px solid var(--border,#42546a);border-radius:8px;background:var(--bg,#0d1521);color:var(--text,#e9eff8);font:inherit;font-size:13px;padding:8px}
+.simple-model-load{min-height:38px;white-space:normal}
+.game-editor .simple-model-profile{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.game-editor .simple-model-load{grid-column:1/-1}
+.simple-assistant-strip{margin:0 0 16px}.game-assistant-strip{margin:4px 0 14px}
+.game-missing-media-help{display:block;line-height:1.5;margin-top:5px;max-width:70ch}
+.simple-model-picker :focus-visible{outline:2px solid #b9efd8;outline-offset:2px}
+@media(min-width:1100px){
+  .game-assistant-strip>.simple-model-picker{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);column-gap:16px}
+  .game-assistant-strip .simple-model-heading{grid-column:1/-1;grid-row:1}
+  .game-assistant-strip .simple-model-controls{grid-column:1;grid-row:2}
+  .game-assistant-strip .simple-model-key{grid-column:1;grid-row:3}
+  .game-assistant-strip .simple-model-profile{grid-column:2;grid-row:2/4;grid-template-columns:minmax(95px,.7fr) minmax(150px,1fr) auto;align-self:start;margin-top:0;gap:8px}
+  .game-assistant-strip .simple-model-help{grid-column:1/-1;grid-row:4;margin-top:8px}
+  .game-assistant-strip .simple-model-handoff{grid-column:1/-1}
+}
 @media (max-width: 600px) {
   .simple-model-controls { flex-wrap: wrap; }
   .simple-model-controls select { flex-basis: 100%; }
   .simple-model-status { margin-left: 0; }
+  .simple-model-picker{padding:12px}
+  .simple-model-profile{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .simple-model-profile .simple-model-load{grid-column:1/-1}
+  .simple-model-controls button{min-height:40px;flex:1}
+  .simple-model-profile select{font-size:14px;min-height:42px}
+  .simple-model-heading{gap:6px}.simple-model-help{font-size:12px}
 }

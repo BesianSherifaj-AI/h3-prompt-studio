@@ -16,6 +16,7 @@ from .compiler import compile_project
 from .projects import atomic_json, check_project, safe_id, shot
 from .scene_contract import director_output_budget
 from .story_state import StoryStateMixin, AwaitingAssistant, digest, guides_for
+from .assistant_profiles import resolve_profile, validate_profile
 
 
 def ident():
@@ -830,7 +831,8 @@ class StoryManager(StoryStateMixin):
                     'duration': duration, 'render_request_id': ident(), 'asset_jobs': [], 'alternate_run_ids': []}
             turn['plan_origin'] = 'authored' if isinstance(body.get('planned'), dict) else 'automatic'
             self._snapshot_turn(story, turn, body)
-            turn['assistant_model'] = self.get_settings().get('model')
+            turn['assistant_profile'] = resolve_profile(self.get_settings(), story['mode'])
+            turn['assistant_model'] = turn['assistant_profile']['model']
             if isinstance(body.get('planned'), dict):
                 turn['plan'] = validate_plan(body['planned'], story['player_name'], message, story['mode'], duration)
             story['turns'].append(turn); self._save(story)
@@ -872,7 +874,8 @@ class StoryManager(StoryStateMixin):
             job = {'id': request_id, 'request_id': request_id, 'request_digest': fingerprint,
                    'run_id': body['run_id'], 'branch_id': body['branch_id'], 'snapshot': copy.deepcopy(state),
                    'configuration_revision': state['configuration_revision'], 'status': 'pending', 'error': None,
-                   'assistant_model': self.get_settings().get('model'), 'ending_observation_protocol': 3}
+                   'assistant_profile': resolve_profile(self.get_settings(), story['mode']), 'ending_observation_protocol': 3}
+            job['assistant_model'] = job['assistant_profile']['model']
             story.setdefault('scene_inspections', {})[request_id] = job
             self._save(story)
             if self.start_workers:
@@ -982,7 +985,20 @@ class StoryManager(StoryStateMixin):
                 break
         return result
 
+    def _assistant_profile(self, story, turn):
+        """Acquire missing legacy context/mode once, then preserve it on resume."""
+        if not turn.get('assistant_profile'):
+            profile = resolve_profile(self.get_settings(), story['mode'])
+            if turn.get('assistant_model'):
+                profile['model'] = turn['assistant_model']
+            turn['assistant_profile'] = profile
+            turn['assistant_model'] = profile['model']
+            if story.get('id') in self.records:
+                self._save(self._story(story['id']))
+        return validate_profile(copy.deepcopy(turn['assistant_profile']))
+
     def plan(self, story, turn, project, ending=None):
+        profile = self._assistant_profile(story, turn)
         if turn.get('snapshot') and story.get('narrative_version') == 2:
             establish_player_appearance = not ending and self._can_establish_player_appearance(story, turn, project)
             if story['mode'] == 'game' and ending and story['settings'].get('fast_actions', True):
@@ -1036,7 +1052,7 @@ class StoryManager(StoryStateMixin):
                 return sequence()
             # All stages use one frozen assistant. Keep its resource lease for
             # the sequence instead of repeating GPU/queue checks per character.
-            return self.resources.run_ai(turn.get('assistant_model') or self.get_settings()['model'], sequence)
+            return self.resources.run_ai(profile['model'], sequence, profile=profile)
         context = self.context(story, turn, project)
         content = [{'type': 'text', 'text': json.dumps(context, ensure_ascii=False)}]
         images = ([ending] if ending else []) + [a for a in project['assets'] if a.get('enabled', True) and
@@ -1049,17 +1065,14 @@ class StoryManager(StoryStateMixin):
                 schema['properties']['asset_requests']['maxItems'] = 0
             result = self.client().complete_json(model, PLAN_SYSTEM, content, schema, max_tokens=2400, temperature=.65)
             return validate_plan(result, story['player_name'], turn['message'], story['mode'], turn['duration'])
-        return self.resources.run_ai(self.get_settings()['model'], generate)
+        return self.resources.run_ai(profile['model'], generate, profile=profile)
 
     def _predict(self, execution, turn, stage, actor_id, system, content, schema, images=(), *, prepared_model=None):
         if stage == 'language':
             images = ()  # Classify the supplied words; vision adds no language evidence.
         story = self._story(execution['id'])
         self._check_cancel(turn)
-        # Older saved turns acquire their model once on recovery. Later settings
-        # edits apply to new turns, not halfway through this frozen response.
-        if not turn.get('assistant_model'):
-            turn['assistant_model'] = self.get_settings().get('model')
+        profile = self._assistant_profile(execution, turn)
         repair = turn.get('assistant_repair')
         repairing = bool(repair and repair['stage'] == stage and repair.get('actor_id', actor_id) == actor_id)
         if repairing:
@@ -1078,7 +1091,8 @@ class StoryManager(StoryStateMixin):
                        'system': system, 'content': copy.deepcopy(content), 'schema': schema,
                        'images': [{'id': a['id'], 'name': a['name'], 'role': a.get('semantic_role'),
                                    'url': '/api/assets/' + a['id'] + '/file'} for a in images],
-                       'status': 'pending', 'created_at': time.time(), 'model': turn['assistant_model']}
+                       'status': 'pending', 'created_at': time.time(), 'model': profile['model'],
+                       'assistant_profile': copy.deepcopy(profile)}
             requests[context_hash] = request
             if stage == 'ending-inspection':
                 request['observation_protocol_version'] = turn.get('ending_observation_protocol', 1)
@@ -1116,7 +1130,7 @@ class StoryManager(StoryStateMixin):
                 return answer['result']
             return lm.complete_json(model, system, message, schema, **options)
         try:
-            result = generate(prepared_model) if prepared_model is not None else self.resources.run_ai(turn['assistant_model'], generate)
+            result = generate(prepared_model) if prepared_model is not None else self.resources.run_ai(profile['model'], generate, profile=profile)
             self._check_cancel(turn)
         except Exception as exc:
             cancelled = isinstance(exc, InterruptedError) or turn.get('cancel_requested') or getattr(exc, 'code', '') == 'cancelled'
@@ -1634,7 +1648,8 @@ class StoryManager(StoryStateMixin):
                 self._change(story, turn, stage='Checking the new references')
                 for asset in created:
                     if story.get('narrative_version') != 2:
-                        observation = self.resources.run_ai(self.get_settings()['model'], lambda model: self.client().analyse_image(model, self.image_data(asset['id']), asset))
+                        profile = self._assistant_profile(execution, turn)
+                        observation = self.resources.run_ai(profile['model'], lambda model: self.client().analyse_image(model, self.image_data(asset['id']), asset), profile=profile)
                     else:
                         observation = self._predict(execution, turn, 'asset-inspection', asset['id'],
                             'Describe only this reference image: appearance, clothing, objects and location. Do not invent identity or audio.',
@@ -1904,13 +1919,14 @@ class StoryManager(StoryStateMixin):
                     # newly selected model without mixing its work with cached
                     # actors from the previous model. Resume keeps the frozen
                     # model and all still-valid stage receipts.
-                    selected_model = self.get_settings().get('model')
-                    if action == 'retry' and selected_model and selected_model != turn.get('assistant_model'):
+                    selected_profile = resolve_profile(self.get_settings(), story['mode'])
+                    if action == 'retry' and selected_profile != self._assistant_profile(story, turn):
                         for request in turn.get('assistant_requests', {}).values():
                             turn.setdefault('assistant_attempt_history', []).append({**request,
                                 'rejected_reason': 'Retry with the newly selected assistant.', 'rejected_at': time.time()})
                         turn['assistant_requests'] = {}
-                        turn['assistant_model'] = selected_model
+                        turn['assistant_profile'] = selected_profile
+                        turn['assistant_model'] = selected_profile['model']
                     rejected = turn.get('assistant_requests', {}).pop(turn.get('last_assistant_hash'), None)
                     if rejected:
                         turn.setdefault('assistant_attempt_history', []).append({**rejected, 'rejected_reason': turn.get('error'), 'rejected_at': time.time()})

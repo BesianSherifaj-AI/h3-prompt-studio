@@ -47,7 +47,7 @@ class FakeSdk:
         self.reads.append('list_loaded')
         return self.handles
 
-    def add_handle(self, ident=RESIDENT_PREFIX + 'cpu-test'):
+    def add_handle(self, ident=RESIDENT_PREFIX + 'legacy-test'):
         info = {'modelKey': KEY, 'path': PATH, 'identifier': ident, **self.info_override}
         handle = SimpleNamespace(identifier=ident, get_info=lambda: Struct(info),
                                  get_load_config=lambda: Struct(self.config))
@@ -245,7 +245,7 @@ def test_foreign_large_or_changed_selected_model_blocks_resident_mode(resident_m
     manager, sdk, settings = resident_manager
     monkeypatch.setattr(manager.get_client(), 'loaded_instances', lambda: [{'id': 'foreign', 'model': 'qwen-27b'}])
     for operation in [lambda: manager.run_ai(KEY), manager.prepare_h3]:
-        with pytest.raises(resources.ResourceError, match='other LM Studio'):
+        with pytest.raises(resources.ResourceError, match='other LM Studio|outside this Studio'):
             operation()
     assert not sdk.loads
     with pytest.raises(resources.ResourceError, match='exact small vision model'):
@@ -265,7 +265,7 @@ def test_changed_runtime_config_refuses_h3_and_never_submits(resident_manager):
     assert not calls and len(sdk.loads) == 1 and not manager.lock.locked()
 
 
-def test_restart_exclusive_h3_releases_verified_cpu_without_demanding_vram_drop(resident_manager, monkeypatch):
+def test_workspace_preference_change_keeps_verified_cpu_during_h3(resident_manager, monkeypatch):
     manager, sdk, settings = resident_manager
     handle = sdk.add_handle()
     settings.update(ai_memory_mode='exclusive', model='qwen3.5-9b')
@@ -281,7 +281,7 @@ def test_restart_exclusive_h3_releases_verified_cpu_without_demanding_vram_drop(
     monkeypatch.setattr(resources.time, 'sleep', no_wait)
     assert manager.instance_id is None  # Fresh coordinator after restart.
     assert manager.prepare_h3()['ready']
-    assert calls == [handle.identifier] and manager.instance_id is None
+    assert calls == [] and manager.instance_id == handle.identifier
     assert not sdk.loads
 
 
@@ -332,11 +332,101 @@ def test_restart_never_claims_unverified_or_foreign_cpu_model(resident_manager, 
     assert manager.instance_id is None and not sdk.loads
 
 
-def test_failed_cpu_unload_still_blocks_h3_despite_placement_verification(resident_manager, monkeypatch):
+def test_cpu_to_gpu_switch_verifies_unload_before_loading(resident_manager, monkeypatch):
     manager, sdk, settings = resident_manager
     sdk.add_handle()
     settings.update(ai_memory_mode='exclusive')
     monkeypatch.setattr(manager.get_client(), 'unload_model', lambda ident: {'instance_id': ident})
-    with pytest.raises(resources.ResourceError, match='still has a model loaded'):
-        manager.prepare_h3()
+    with pytest.raises(resources.ResourceError, match='outside this Studio'):
+        manager.run_ai(KEY)
     assert len(sdk.handles) == 1 and not sdk.loads
+
+
+@pytest.fixture
+def cpu_rig(sdk_rig):
+    sdk, client = sdk_rig
+    key, path = 'qwen3.5-4b@q4', 'local/qwen3.5-4b-q4.gguf'
+    sdk.native.update(key=key, size_bytes=3_383_082_464)
+    sdk.downloaded = [SimpleNamespace(model_key=key, path=path,
+                      info=Struct({'vision': True, 'sizeBytes': sdk.native['size_bytes']}))]
+    def load(path_arg, ident, **kwargs):
+        sdk.loads.append((path_arg, ident, copy.deepcopy(kwargs)))
+        if sdk.load_failure:
+            raise sdk.load_failure
+        sdk.config = copy.deepcopy(kwargs['config'])
+        info = {'identifier': ident, 'modelKey': key, 'path': path}
+        handle = SimpleNamespace(identifier=ident, get_info=lambda: Struct(info),
+                                 get_load_config=lambda: Struct(sdk.config))
+        sdk.handles.append(handle)
+        sdk.native['loaded_instances'].append({'id': ident, 'config': {'context_length': sdk.config['contextLength']}})
+        return handle
+    sdk.load_new_instance = load
+    return sdk, client, key
+
+
+def test_new_cpu_mode_accepts_4b_and_requested_context_with_exact_verified_placement(cpu_rig):
+    sdk, client, key = cpu_rig
+    result = client.load_resident_model(key, mode='resident_cpu', context_length=16384)
+    assert result['profile'] == 'resident_cpu' and result['context_length'] == 16384
+    assert sdk.loads[0][2]['config'] == resident_cpu_profile(16384)
+    assert client.verify_resident_model(key, result['instance_id'], None, mode='resident_cpu')['context_length'] == 16384
+    with pytest.raises(LMStudioError, match='CPU placement'):
+        client.verify_resident_model(key, result['instance_id'], 8192, mode='resident_cpu')
+
+
+def test_new_cpu_mode_defaults_to_8192(cpu_rig):
+    _, client, key = cpu_rig
+    assert client.load_resident_model(key, mode='resident_cpu')['context_length'] == 8192
+
+
+@pytest.mark.parametrize('change', [{'capabilities': {'vision': False}}, {'size_bytes': 8_000_000_001}])
+def test_cpu_mode_rejects_text_only_and_over_budget_without_loading(cpu_rig, change):
+    sdk, client, key = cpu_rig
+    sdk.native.update(change)
+    with pytest.raises(LMStudioError) as error:
+        client.load_resident_model(key, mode='resident_cpu')
+    assert error.value.code == 'resident_model_ineligible'
+    assert error.value.load_submitted is False and sdk.loads == []
+
+
+def test_cpu_profile_is_frozen_preserves_h3_and_reloads_only_for_context_change(cpu_rig, monkeypatch):
+    sdk, client, key = cpu_rig
+    settings = {'model': 'studio-27b', 'ai_memory_mode': 'exclusive', 'context_length': 32768, 'comfy_urls': []}
+    profile = {'model': key, 'ai_memory_mode': 'resident_cpu', 'context_length': 8192}
+    manager = resources.ResourceManager(lambda: settings, lambda: client)
+    monkeypatch.setattr(resources, 'gpu_snapshot', lambda: {'used_mib': 23500})
+    unloaded = []
+    def unload(ident):
+        unloaded.append(ident)
+        sdk.handles.clear()
+        sdk.native['loaded_instances'].clear()
+    monkeypatch.setattr(client, 'unload_model', unload)
+    def callback(ident):
+        profile['context_length'] = 16384
+        assert manager.get_settings()['context_length'] == 8192
+        return ident
+    first = manager.run_ai(key, callback, profile=profile)
+    assert manager.get_settings() == settings and settings['model'] == 'studio-27b'
+    assert manager.prepare_h3()['memory_mode'] == 'resident_cpu' and unloaded == []
+    second = manager.run_ai(key, profile=profile)
+    assert unloaded == [first] and second['context_length'] == 16384
+    assert manager.run_ai(key, profile=profile)['instance_id'] == second['instance_id']
+    assert len(sdk.loads) == 2
+
+
+def test_cpu_load_uncertainty_is_durable_and_blocks_render(cpu_rig, monkeypatch, tmp_path):
+    sdk, client, key = cpu_rig
+    settings = {'model': key, 'ai_memory_mode': 'resident_cpu', 'context_length': 8192, 'comfy_urls': []}
+    path = tmp_path / 'resources.json'
+    manager = resources.ResourceManager(lambda: settings, lambda: client, state_path=path)
+    monkeypatch.setattr(resources, 'gpu_snapshot', lambda: None)
+    sdk.load_failure = TimeoutError('load result unknown')
+    with pytest.raises(LMStudioError) as error:
+        manager.run_ai(key, profile=settings)
+    assert error.value.load_submitted is True and manager.pending_load is not None
+    restored = resources.ResourceManager(lambda: settings, lambda: client, state_path=path)
+    with pytest.raises(resources.ResourceError, match='uncertain'):
+        restored.run_ai(key, profile=settings)
+    with pytest.raises(resources.ResourceError, match='uncertain'):
+        restored.prepare_h3_then(lambda: pytest.fail('Must not queue'))
+    assert len(sdk.loads) == 1
