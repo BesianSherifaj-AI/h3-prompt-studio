@@ -14,7 +14,9 @@ Projects and generated reference images remain available locally. Queued snapsho
 
 A completely rendered batch can export a joined film or a ZIP of separate MP4s. Export trims each generated clip to its authored duration; source footage is preserved. A film requires compatible video/audio dimensions and stream formats. ZIP works for mixed formats. Its manifest identifies every run and file. Exports are local and contain no automatic social-network upload.
 
-The latest successful export is saved with the batch as `latest_export` (`url`, `filename`, `kind`, `export_id`, `clip_count`). Production queue keeps its download link after refresh or restart, including exports created through the API. Each generated image has a **First frame** link; finished videos also provide a **Source project** download containing their rendered snapshot.
+The latest successful export is saved with the batch as `latest_export` (`url`, `filename`, `kind`, `export_id`, `clip_count`, `normalize_audio`). Production queue keeps its download link after refresh or restart, including exports created through the API. Each generated image has a **First frame** link; finished videos also provide a **Source project** download containing their rendered snapshot.
+
+**Balance clip volume** is enabled by default for **Export clips ZIP**, to bring quiet and loud clips closer together. Turn it off to retain their relative levels. The film button leaves audio balancing off. The API accepts `normalize_audio: true` to apply per-clip loudness normalization targeting −16 LUFS, −1.5 dB true peak and loudness range 11; its default is `false`. The export manifest and saved download label record whether balancing was applied. Original audio is preserved in the source files. Listen to the exported result: normalization cannot repair unclear dialogue or missing sound.
 
 ### Crop cuts through the API
 
@@ -39,6 +41,6 @@ CPU/GPU choices and resource handoff follow the existing [assistant profiles](AS
 - `POST /api/production/{id}/cancel`: stop future work and owned current job.
 - `POST /api/production/{id}/items/{index}/retry`: reset a definite failed item.
 - `GET /api/production/{id}/playlist`: ordered receipts and video links.
-- `POST /api/production/{id}/export` with `kind: "film"` or `"clips"` and optional `edits`: local export.
+- `POST /api/production/{id}/export` with `kind: "film"` or `"clips"`, optional `edits`, and optional `normalize_audio`: local export.
 
 All writes require the current session token and retain the app's loopback boundary. Batch state is in `data/production`; normalized media and exports are in `data/production_exports`.

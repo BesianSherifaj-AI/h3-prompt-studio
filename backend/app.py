@@ -658,11 +658,12 @@ def production_playlist(batch_id: str):
 @app.post('/api/production/{batch_id}/export')
 def production_export(batch_id: str, body: dict):
     from .production_export import export_production
-    if set(body) - {'kind', 'edits'}:
+    if set(body) - {'kind', 'edits', 'normalize_audio'}:
         raise ValueError('Choose a film or individual clips export.')
     manager = production_manager()
     result = export_production(DATA, manager.get(batch_id), scene_video_path,
-                               body.get('kind', 'film'), edits=body.get('edits'))
+                               body.get('kind', 'film'), edits=body.get('edits'),
+                               normalize_audio=body.get('normalize_audio', False))
     manager.remember_export(batch_id, result)
     return result
 

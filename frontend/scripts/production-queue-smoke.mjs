@@ -44,9 +44,14 @@ try {
     else if (path.startsWith('/production/')) {
       const action = path.split('/')[3];
       if (body) {
-        writes.push({ action });
+        writes.push({ action, ...body });
         if (action === 'start' || action === 'resume') batches[0].status = 'running';
         if (action === 'cancel') batches[0].status = 'cancelled';
+        if (action === 'export') {
+          result = { url: '/exports/' + body.kind, filename: body.kind === 'film' ? 'film.mp4' : 'clips.zip', kind: body.kind, export_id: 'export-fixture', clip_count: 1, normalize_audio: body.normalize_audio };
+          batches[0].latest_export = result;
+          await route.fulfill({ json: result }); return;
+        }
       }
       result = batches[0];
     }
@@ -72,6 +77,22 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, 'Production controls fit 390px');
   await page.getByRole('button', { name: 'Stop queue', exact: true }).click();
   await expect(page.locator('.production-batch-heading')).toContainText('Stopped');
+  batches[0].status = 'succeeded'; batches[0].completed = 1; batches[0].items[0].status = 'succeeded';
+  await page.getByRole('button', { name: 'Refresh production queue', exact: true }).click();
+  const balance = page.getByRole('checkbox', { name: 'Balance clip volume', exact: true });
+  await expect(balance).toBeChecked();
+  await page.getByRole('button', { name: 'Export clips ZIP', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Download latest export: clips.zip', exact: true })).toBeVisible();
+  assert.equal(writes.at(-1).normalize_audio, true);
+  await expect(page.locator('.production-export')).toContainText('Balanced audio');
+  await page.getByRole('button', { name: 'Export film', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Download latest export: film.mp4', exact: true })).toBeVisible();
+  assert.equal(writes.at(-1).normalize_audio, false);
+  await balance.uncheck();
+  await page.getByRole('button', { name: 'Export clips ZIP', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Download latest export: clips.zip', exact: true })).toBeVisible();
+  assert.equal(writes.at(-1).normalize_audio, false);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, 'Export controls fit 390px');
   assert.deepEqual(errors, []);
-  console.log('PASS: failed create recovery, stable request ID, start, restart visibility, explicit stop, 390px layout, no runtime errors.');
+  console.log('PASS: queue recovery, stable requests, reload, stop, audio export options, saved download links, 390px layout, no runtime errors.');
 } finally { await browser.close(); await new Promise(done => server.close(done)); }

@@ -6,6 +6,7 @@
 - Edited exports record their crop settings in the manifest and use separate cached outputs.
 - The latest successful batch export remains available in Production queue after refresh or restart, including exports created through the API.
 - Generated first-frame links and finished-video source snapshots are available directly from the queue without preloading every image.
+- Optional per-clip audio normalization balances quiet and loud clips in ZIP exports, with a visible checkbox and saved export metadata; film exports retain their existing audio behavior.
 
 ## 1.6.0 — Saved assistant profiles and production queues
 

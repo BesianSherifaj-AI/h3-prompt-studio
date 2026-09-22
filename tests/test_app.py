@@ -110,19 +110,21 @@ def test_production_export_accepts_edits_and_only_saves_success(server, monkeypa
     edits = [{'index': 0, 'cut_at': 1.5, 'crop': {'x': 0, 'y': 0, 'width': 32, 'height': 80}}]
     calls = []
     result = {'id': batch['id'], 'url': '/export/film.mp4', 'edits': edits}
-    def export(data, snapshot, path, kind, *, edits):
-        calls.append((snapshot['id'], kind, edits))
-        return result
+    def export(data, snapshot, path, kind, *, edits, normalize_audio):
+        calls.append((snapshot['id'], kind, edits, normalize_audio))
+        return {**result, 'normalize_audio': normalize_audio}
     monkeypatch.setattr(production_export, 'export_production', export)
     base = '/api/production/' + batch['id']
     response = client.post(base + '/export', json={'kind': 'film', 'edits': edits}, headers=auth(module))
-    assert response.status_code == 200 and calls == [(batch['id'], 'film', edits)]
-    assert client.get(base).json()['latest_export'] == result
+    assert response.status_code == 200 and calls == [(batch['id'], 'film', edits, False)]
+    assert client.post(base + '/export', json={'kind': 'clips', 'normalize_audio': True}, headers=auth(module)).status_code == 200
+    assert calls[-1] == (batch['id'], 'clips', None, True)
+    assert client.get(base).json()['latest_export'] == {**result, 'normalize_audio': True}
     def fail(*args, **kwargs):
         raise ValueError('Transcode failed')
     monkeypatch.setattr(production_export, 'export_production', fail)
     assert client.post(base + '/export', json={'kind': 'film'}, headers=auth(module)).status_code == 400
-    assert client.get(base).json()['latest_export'] == result
+    assert client.get(base).json()['latest_export'] == {**result, 'normalize_audio': True}
 
 
 def test_upscale_handoff_uses_resolved_scene_and_requires_session(server, monkeypatch, tmp_path):
