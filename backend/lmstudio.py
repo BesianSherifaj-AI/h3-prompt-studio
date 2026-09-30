@@ -302,6 +302,16 @@ class LMStudioClient:
             return {"ok": False, "base_url": self.base_url, "error": str(exc), "code": exc.code}
 
     def load_model(self, model, context_length=8192, *, offload_kv_cache_to_gpu=None):
+        # Inventory/validation failures happen before a load can be accepted.
+        # Preserve that distinction for the coordinator's durable pending intent.
+        try:
+            return self._load_model(model, context_length, offload_kv_cache_to_gpu=offload_kv_cache_to_gpu)
+        except LMStudioError as exc:
+            if exc.load_submitted is None:
+                exc.load_submitted = False
+            raise
+
+    def _load_model(self, model, context_length=8192, *, offload_kv_cache_to_gpu=None):
         if not isinstance(model, str) or not model or len(model) > 512:
             raise LMStudioError("Select a valid local model", code="invalid_model")
         if isinstance(context_length, bool) or not isinstance(context_length, int) or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
@@ -313,9 +323,13 @@ class LMStudioClient:
         payload = {"model": model, "context_length": context_length, "flash_attention": True, "echo_load_config": True}
         if offload_kv_cache_to_gpu is not None:
             payload['offload_kv_cache_to_gpu'] = offload_kv_cache_to_gpu
-        data = self._request("POST", "/api/v1/models/load", payload)
+        try:
+            data = self._request("POST", "/api/v1/models/load", payload)
+        except LMStudioError as exc:
+            exc.load_submitted = True
+            raise
         if not isinstance(data, dict) or not isinstance(data.get("instance_id"), str) or data.get("status") != "loaded":
-            raise LMStudioError("Model load did not return a confirmed instance ID", code="invalid_response")
+            raise LMStudioError("Model load did not return a confirmed instance ID", code="invalid_response", load_submitted=True)
         return data
 
     def load_owned_model(self, model, context_length=8192, *, instance_id=None):
@@ -339,8 +353,12 @@ class LMStudioClient:
             if len(matches) != 1:
                 raise LMStudioError('Select one installed assistant model.', code='invalid_model')
             if self.api_key:
+                try:
+                    result = self.load_model(model, context_length, offload_kv_cache_to_gpu=True)
+                except LMStudioError as exc:
+                    submitted = exc.load_submitted is not False
+                    raise
                 submitted = True
-                result = self.load_model(model, context_length, offload_kv_cache_to_gpu=True)
                 config = result.get('load_config')
                 if (not isinstance(config, dict) or config.get('context_length') != context_length
                         or config.get('offload_kv_cache_to_gpu') is not True):

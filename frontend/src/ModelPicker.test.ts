@@ -42,6 +42,22 @@ describe("prompt assistant choices", () => {
     expect(html).toContain('Full Game requires a vision model');
     expect(html).not.toContain('Ready · GPU');
   });
+  it('requires verified owned-instance readiness rather than a cached profile and any loaded model',()=>{
+    const profile={model:'large',context_length:8192,ai_memory_mode:'exclusive' as const};
+    const props={settings:profile,activeProfile:profile,online:true,busy:false,models:[{id:'large',vision:true,loaded:true}],onChange:()=>{},onRefresh:()=>{},onConnections:()=>{}};
+    expect(renderToStaticMarkup(createElement(ModelPicker,props))).not.toContain('Ready · GPU');
+    expect(renderToStaticMarkup(createElement(ModelPicker,{...props,assistantReady:true}))).toContain('Ready · GPU');
+    const failed=renderToStaticMarkup(createElement(ModelPicker,{...props,assistantReady:true,connectionError:'Connection timed out'}));
+    expect(failed).not.toContain('Ready · GPU');
+    expect(failed).toContain('readiness unverified');
+    expect(failed).toContain('Reconnect');
+  });
+  it('does not mark full Game ready when photo capability is unreported',()=>{
+    const profile={model:'unknown',context_length:8192,ai_memory_mode:'exclusive' as const};
+    const html=renderToStaticMarkup(createElement(ModelPicker,{settings:profile,activeProfile:profile,assistantReady:true,workspace:'game',online:true,busy:false,models:[{id:'unknown',loaded:true}],onChange:()=>{},onRefresh:()=>{},onConnections:()=>{}}));
+    expect(html).not.toContain('Ready · GPU');
+    expect(html).toContain('Game needs a verified vision model');
+  });
   it("keeps all installed text, vision and unknown models with honest capability and loaded labels", () => {
     const options = modelPickerOptions([
       { id: "vision", name: "Small vision", vision: true, loaded: true },

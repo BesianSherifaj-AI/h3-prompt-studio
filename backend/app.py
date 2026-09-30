@@ -344,12 +344,30 @@ def connections():
               'ai_memory_mode': SETTINGS['ai_memory_mode'],
               'assistant_profiles': copy.deepcopy(SETTINGS['assistant_profiles']),
               'active_profile': copy.deepcopy(getattr(RESOURCES, 'instance_profile', None)),
-              'effective_context_length': (getattr(RESOURCES, 'instance_profile', None) or {}).get('context_length')}
+              'effective_context_length': None, 'assistant_ready': False}
     try:
         result['lm'] = {'online': True, 'models': client().models(), 'loaded': client().loaded_instances()}
+        profile = result['active_profile']
+        owned = [item for item in result['lm']['loaded']
+                 if item.get('id', item.get('instance_id')) == result['instance_id']
+                 and item.get('model_key', item.get('model')) == result['model']]
+        if profile and len(owned) == 1 and profile['model'] == result['model']:
+            context = RESOURCES._loaded_context(owned[0])
+            config = owned[0].get('config', {})
+            config = config if isinstance(config, dict) else {}
+            kv_gpu = config.get('offload_kv_cache_to_gpu', config.get('offloadKVCacheToGpu'))
+            expected_kv_gpu = profile['ai_memory_mode'] == 'exclusive'
+            result['assistant_ready'] = (context == profile['context_length'] and type(context) is int
+                                         and (kv_gpu is None or kv_gpu is expected_kv_gpu))
+            if result['assistant_ready']:
+                result['effective_context_length'] = context
     except Exception as exc:
         result['lm'] = {'online': False, 'models': [], 'loaded': [], 'error': str(exc)[:400],
                         'recovery': 'Start LM Studio\u2019s local server, then select Reconnect. Your saved models and contexts are preserved.'}
+    if not result['assistant_ready']:
+        # Cached ownership/profile is not evidence that the current server still
+        # has this exact configured assistant. Never label a foreign instance ready.
+        result['active_profile'] = None
     try:
         result['comfy'] = RESOURCES.queues()
     except Exception as exc:

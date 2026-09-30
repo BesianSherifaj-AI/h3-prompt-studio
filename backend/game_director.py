@@ -194,6 +194,10 @@ Give physical doors/gates a concrete kind and examine/open/close affordances. Th
 interactions, not claims that the door is open or unlocked. Preserve visible lock and opening state;
 do not infer an unlocked state. A doorway, door picture or door key is not an operable door.
 Use effects against these new IDs only for supported changes. Descriptions alone do not grant items.
+Every effect entity_id must match an existing object or an exact ID declared in discoveries.entities
+in this same response. A discovered location does not also register an object; mentioning a prop
+in the beat's prose does not declare it. Remove unsupported object actions and effects rather than
+inventing a mechanism to complete an otherwise ordinary interaction.
 Request images only for a missing visual identity or conditioning actually needed for the shot.
 Effects are proposed changes against the exact known IDs. Each effect has its own supplied fields:
 Effects describe the terminal state AFTER every action in the beat, including NPC actions. A handoff
@@ -413,7 +417,20 @@ def validate_narrative(plan, *, world, player_character_id, message, duration, m
                     raise ValueError('A player choice cannot decide another character\'s response.')
     if len({c['message'].strip().casefold() for c in value['choices']}) != 3:
         raise ValueError('The assistant repeated a next choice. Request three distinct actions.')
-    value['effects'] = validate_effects(world, value['effects'], player_character_id if mode == 'game' else None)
+    try:
+        value['effects'] = validate_effects(world, value['effects'], player_character_id if mode == 'game' else None)
+    except ValueError as exc:
+        if 'unknown object' not in str(exc):
+            raise
+        known = {entity['id'] for entity in world['entities']}
+        unknown = sorted({effect['entity_id'] for effect in value['effects']
+                          if effect.get('entity_id') is not None and effect['entity_id'] not in known})
+        # Give the single bounded repair its exact rejected target without
+        # exposing unseen world objects or dropping invalid effects silently.
+        raise ValueError('An effect targets an unknown object ID: ' + json.dumps(unknown[:3], ensure_ascii=False)
+                         + '. Each entity_id must match an existing object or an exact ID declared in discoveries.entities in this response. '
+                           'A location discovery or narrative description does not register an object. Remove unsupported object actions/effects, '
+                           'or declare a valid newly visible entity with the same ID.') from exc
     if direction is not None:
         _validate(direction, DIRECTION_SCHEMA, 'The scene direction is incomplete')
         value['direction'] = direction
@@ -538,7 +555,8 @@ def _effect_schema(world, *, allow_discovery_ids=False):
         return {'type': ['string', 'null'] if nullable else 'string', 'enum': values + ([None] if nullable else [])}
     def variant(kind, fields):
         variants.append(_obj({'kind': {'type': 'string', 'enum': [kind]}, **fields}))
-    entity_id = copy.deepcopy(ID) if allow_discovery_ids else enum(entities)
+    entity_id = ({**ID, 'description': 'Exact existing object ID or ID declared in discoveries.entities in this same response; a location discovery or prose mention does not register an object.'}
+                 if allow_discovery_ids else enum(entities))
     location_id = {**ID, 'type': ['string', 'null']} if allow_discovery_ids else enum(locations, True)
     if entities or allow_discovery_ids:
         for kind in ('holder', 'worn_by', 'owner'):

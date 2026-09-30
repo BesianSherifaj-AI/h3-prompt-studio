@@ -293,6 +293,35 @@ def test_holder_effect_schema_cannot_emit_objective_fields_or_unknown_identity()
     assert not validator.is_valid([{'kind': 'holder', 'entity_id': 'key'}])
 
 
+@pytest.mark.parametrize('declare_entity', [False, True])
+def test_unknown_effect_repair_names_exact_target_and_requires_entity_discovery(declare_entity):
+    _, w = setup_scene()
+    value = narrative()
+    value['effects'] = [{'kind': 'entity_state', 'entity_id': 'workshop-door', 'key': 'open', 'value': True}]
+    value['discoveries'] = {'locations': [{'id': 'courtyard', 'name': 'Courtyard', 'description': 'A newly visible courtyard.'}]}
+    if declare_entity:
+        value['discoveries']['entities'] = [{'id': 'workshop-door', 'name': 'Workshop door', 'kind': 'door',
+                                            'description': 'An actual door visible beside the workshop table.'}]
+        result = validate_narrative(value, world=w, player_character_id='player', message='"Ku jemi?"', duration=5)
+        assert result['effects'] == value['effects']
+    else:
+        with pytest.raises(ValueError) as failure:
+            validate_narrative(value, world=w, player_character_id='player', message='"Ku jemi?"', duration=5)
+        assert 'unknown object ID: ["workshop-door"]' in str(failure.value)
+        assert 'discoveries.entities' in str(failure.value)
+        assert 'location discovery' in str(failure.value)
+    assert w['entities'] == [] and value['effects'], 'Validation must preserve the saved world and rejected proposal.'
+
+
+def test_discovery_effect_schema_explains_same_response_object_registration():
+    from backend.game_director import _effect_schema
+    _, w = setup_scene()
+    schema = _effect_schema(w, allow_discovery_ids=True)
+    entity_fields = [variant['properties']['entity_id'] for variant in schema['items']['oneOf']
+                     if 'entity_id' in variant['properties']]
+    assert entity_fields and all('discoveries.entities in this same response' in field['description'] for field in entity_fields)
+
+
 def test_named_player_suggestions_are_valid_but_npc_decisions_are_not():
     _, w = setup_scene()
     value = narrative()

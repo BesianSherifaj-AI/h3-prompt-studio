@@ -25,13 +25,16 @@ try {
   let settings={lm_url:'http://127.0.0.1:1234/v1',comfy_urls:['http://127.0.0.1:8188'],model:'large',context_length:32768,ai_memory_mode:'exclusive',assistant_profiles:{studio:{model:'large',context_length:32768,ai_memory_mode:'exclusive'},game:{model:'small',context_length:8192,ai_memory_mode:'resident_cpu'}}};
   const models=[{id:'large',name:'Large vision',vision:true,loaded:false,size_bytes:16_000_000_000},{id:'other',name:'Other vision',vision:true,loaded:false,size_bytes:15_000_000_000},{id:'small',name:'Small vision',vision:true,loaded:true,size_bytes:3_000_000_000}];
   const project={schema_version:1,id:'fixture-project',workspace:'studio',title:'Fixture film',mode:'t2va',duration:5,aspect_ratio:'16:9',profile:'director',authoring_mode:'ai',story:{text:'A lantern glows in a quiet garden.',locked:false},style:{},assets:[],subjects:[],shots:[{id:'shot',duration:5,action:'A lantern glows',setting:'Garden',camera:{framing:'medium',movement:'static',height:'eye level',speed:'slow',focus:''},performance:'',final_state:'',visible_subject_ids:[],offscreen_subject_ids:[],dialogue:[],sound:'',transition:'continuous'}],soundscape:'',music:'',custom_instructions:''};
-  const saves=[];let failSave=false;
+  const saves=[];let failSave=false, failConnection=false;
   await page.route('**/api/**',async route=>{
     const request=route.request(),url=new URL(request.url()),path=url.pathname.replace('/api','');
     const body=request.method()==='GET'?null:request.postDataJSON();
     let result={};
     if(path==='/bootstrap') result={token:'a'.repeat(43),resource_token:'b'.repeat(43),project,projects:[project],settings,personas:[]};
-    else if(path==='/connections') result={lm:{online:true,models},comfy:[],busy:false,stage:'idle',assistant_profiles:settings.assistant_profiles,active_profile:settings.assistant_profiles.game};
+    else if(path==='/connections') {
+      if(failConnection){await route.fulfill({status:503,json:{detail:'Fixture connection check failed.'}});return;}
+      result={lm:{online:true,models},comfy:[],busy:false,stage:'idle',assistant_profiles:settings.assistant_profiles,active_profile:settings.assistant_profiles.game,assistant_ready:true};
+    }
     else if(path==='/settings') {
       saves.push(body);
       if(failSave){await route.fulfill({status:400,json:{detail:'Fixture settings save failed.'}});return;}
@@ -55,7 +58,7 @@ try {
   await page.getByRole('button',{name:'Connections',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Connections & GPU'});
   await dialog.getByRole('combobox',{name:'Prompt assistant model',exact:true}).selectOption('large');
-  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
   await expect(studio.getByRole('combobox',{name:'Studio assistant',exact:true})).toHaveValue('other');
   await page.getByRole('button',{name:'Connections',exact:true}).click();
   await expect(dialog.getByRole('combobox',{name:'Prompt assistant model',exact:true})).toHaveValue('other');
@@ -63,7 +66,7 @@ try {
   failSave=true;
   await dialog.getByRole('button',{name:'Save connection',exact:true}).click();
   await expect(dialog.getByRole('alert')).toContainText('Fixture settings save failed.');
-  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
   await expect(studio.getByRole('combobox',{name:'Studio assistant',exact:true})).toHaveValue('other');
   failSave=false;
   await page.getByRole('link',{name:'Game Play & explore'}).click();
@@ -71,6 +74,17 @@ try {
   await expect(game).toBeVisible();
   assert.ok((await game.boundingBox()).height<230,'Desktop Game assistant keeps room for the preview');
   await expect(game.getByRole('combobox',{name:'Game assistant',exact:true})).toHaveValue('small');
+  await expect(game.getByRole('status')).toContainText('Ready · CPU');
+  failConnection=true;
+  await game.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect(game.getByRole('status')).toContainText('readiness unverified');
+  await expect(game.getByRole('button',{name:'Reconnect',exact:true})).toBeEnabled();
+  await expect(game.getByRole('button',{name:'Prepare assistant',exact:true})).toBeDisabled();
+  await expect(game.getByRole('combobox',{name:'Game assistant',exact:true})).toHaveValue('small');
+  failConnection=false;
+  await game.getByRole('button',{name:'Reconnect',exact:true}).click();
+  await expect(game.getByRole('status')).toContainText('Ready · CPU');
+  await expect(page.locator('.workspace-feedback').getByRole('alert')).toHaveCount(0);
   failSave=true;
   await game.getByRole('combobox',{name:'Context',exact:true}).selectOption('16384');
   await expect(page.locator('.workspace-feedback').getByRole('alert')).toContainText('Fixture settings save failed.');
@@ -91,7 +105,15 @@ try {
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await expect(editor).toBeVisible();
+  await editor.getByRole('button',{name:'Connection',exact:true}).click();
+  await expect(dialog.getByRole('combobox',{name:'Context length',exact:true})).toHaveValue('16384');
+  await dialog.getByRole('combobox',{name:'Context length',exact:true}).selectOption('32768');
+  await dialog.getByRole('button',{name:'Save connection',exact:true}).click();
+  await expect(dialog.getByRole('status')).toHaveText('Connections saved.');
+  assert.equal(settings.assistant_profiles.studio.context_length,32768);
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
   await editor.getByRole('button',{name:'Close game editor',exact:true}).click();
+  await expect(game.getByRole('combobox',{name:'Context',exact:true})).toHaveValue('32768');
   await page.setViewportSize({width:390,height:844});
   await expect(game).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,'Game must fit a narrow viewport');
@@ -99,5 +121,5 @@ try {
   await expect(studio).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,'Studio must fit a narrow viewport');
   assert.deepEqual(errors,[],'No browser runtime errors');
-  console.log('PASS: independent profiles, context preservation, cancel, failed save, visible Game error, reload, 390px layout, zero runtime errors.');
+  console.log('PASS: independent profiles, context preservation, cancel, failed/successful Save, verified readiness, reconnect recovery, visible Game error, reload, 390px layout, zero runtime errors.');
 }finally{await browser.close();await new Promise(done=>server.close(done));}
