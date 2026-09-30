@@ -279,7 +279,14 @@ class ResourceManager:
             found = [m for m in loaded if instance_id(m) == pending['instance_id']
                      and m.get('model_key', m.get('model')) == pending.get('model')]
             if len(found) == 1 and pending.get('endpoint') == self._client_endpoint(client):
+                config = found[0].get('config', {})
+                config = config if isinstance(config, dict) else {}
+                context = self._loaded_context(found[0])
+                if (context is None or not MIN_CONTEXT_TOKENS <= context <= MAX_CONTEXT_TOKENS
+                        or config.get('offload_kv_cache_to_gpu', config.get('offloadKVCacheToGpu')) is not True):
+                    raise ResourceError('The previous assistant instance is visible, but its context and GPU KV cache are unverified. Inspect its load settings in LM Studio before retrying; no duplicate load was started.')
                 self.instance_id, self.model_key = pending['instance_id'], pending['model']
+                self.instance_profile = {'model': pending['model'], 'context_length': context, 'ai_memory_mode': 'exclusive'}
                 self._remember_exclusive(client)
                 self.pending_load = None
                 self._save_state()

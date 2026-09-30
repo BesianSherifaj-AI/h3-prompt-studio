@@ -108,6 +108,26 @@ def test_load_owned_model_rejects_context_beyond_262k():
         client.load_owned_model("local-vision", context_length=262_145)
 
 
+@pytest.mark.parametrize('stage', ['inventory', 'submit', 'confirmation'])
+def test_authenticated_load_marks_only_actual_post_as_submitted(stage):
+    client = LMStudioClient(api_key='test-token')
+    calls = []
+    def exchange(method, path, payload=None):
+        calls.append((method, path))
+        if method == 'GET':
+            if len(calls) == 2 and stage == 'inventory':
+                raise LMStudioError('Inventory became unavailable', code='connection_error')
+            return {'models': [{**MODEL, 'loaded_instances': []}]}
+        if stage == 'submit':
+            raise LMStudioError('No confirmed load response', code='request_timeout')
+        return {'status': 'loaded', 'instance_id': 'rest-selected-instance', 'load_config': {'context_length': 8192}}
+    client._request = exchange
+    with pytest.raises(LMStudioError) as failure:
+        client.load_owned_model('local-vision', instance_id='h3-studio-assistant-test')
+    assert failure.value.load_submitted is (stage != 'inventory')
+    assert sum(method == 'POST' for method, _ in calls) == (stage != 'inventory')
+
+
 def test_read_only_discovery_normalizes_capability_and_load_state():
     client, calls = client_with_replies()
     assert client.models()[0]["id"] == "local-vision"

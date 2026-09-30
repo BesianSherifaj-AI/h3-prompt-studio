@@ -149,3 +149,38 @@ def test_legacy_resume_keeps_original_model_and_acquires_context_once(rig):
     assert first == {**profiles()['game'], 'model': 'fake-local-vision'}
     rig.manager.get_settings = lambda: {'model': 'unrelated', 'context_length': 65536}
     assert rig.manager._assistant_profile(record, turn) == first
+
+
+@pytest.mark.parametrize('change', ['none', 'unloaded', 'foreign_instance', 'wrong_model', 'wrong_context', 'unknown_context', 'null_config', 'wrong_kv', 'offline'])
+def test_connections_only_reports_exact_configured_owned_assistant_ready(server, monkeypatch, change):
+    module, http, fake = server
+    module.RESOURCES.instance_id = 'owned-studio'
+    module.RESOURCES.model_key = 'large-studio'
+    module.RESOURCES.instance_profile = profiles()['studio']
+    loaded = {'id': 'owned-studio', 'model_key': 'large-studio',
+              'config': {'context_length': 16384, 'offload_kv_cache_to_gpu': True}}
+    fake.loaded = [loaded]
+    if change == 'unloaded':
+        fake.loaded = []
+    elif change == 'foreign_instance':
+        loaded['id'] = 'manually-loaded-same-model'
+    elif change == 'wrong_model':
+        loaded['model_key'] = 'another-model'
+    elif change == 'wrong_context':
+        loaded['config']['context_length'] = 8192
+    elif change == 'unknown_context':
+        loaded['config'].pop('context_length')
+    elif change == 'null_config':
+        loaded['config'] = None
+    elif change == 'wrong_kv':
+        loaded['config']['offload_kv_cache_to_gpu'] = False
+    elif change == 'offline':
+        def fail():
+            raise ConnectionError('Server stopped')
+        monkeypatch.setattr(fake, 'loaded_instances', fail)
+    result = http.get('/api/connections').json()
+    assert result['assistant_ready'] is (change == 'none')
+    assert result['active_profile'] == (profiles()['studio'] if change == 'none' else None)
+    assert result['effective_context_length'] == (16384 if change == 'none' else None)
+    assert result['lm']['online'] is (change != 'offline')
+    assert module.RESOURCES.instance_profile == profiles()['studio'], 'Diagnostics must not mutate ownership or saved choices.'

@@ -244,6 +244,7 @@ export default function App() {
   const [connectionDraft, setConnectionDraft] = useState<any>(null);
   const [connectionWorkspace, setConnectionWorkspace] = useState(workspaceMode);
   const connectionRefresh = useRef<Promise<void> | null>(null);
+  const connectionFailure = useRef('');
   const operationLock = useRef(false);
   const [projectSearch, setProjectSearch] = useState('');
   const [libraryLoading, setLibraryLoading] = useState(false);
@@ -349,8 +350,19 @@ export default function App() {
   const refresh = () => {
     if (connectionRefresh.current) return connectionRefresh.current;
     const request = (async () => {
-      try { setConnection(await api("/connections")); }
-      catch (e) { setError(String((e as Error).message)); }
+      try {
+        const checked = await api("/connections");
+        setConnection(checked);
+        const previousFailure = connectionFailure.current;
+        connectionFailure.current = '';
+        if (previousFailure) setError(current => current === previousFailure ? '' : current);
+      }
+      catch (e) {
+        const message = String((e as Error).message);
+        connectionFailure.current = message;
+        setConnection(current => ({...current, check_error:message, assistant_ready:false, busy:false}));
+        setError(message);
+      }
       finally { connectionRefresh.current = null; }
     })();
     connectionRefresh.current = request;
@@ -1119,7 +1131,7 @@ export default function App() {
     const result = await api('/ai/prepare', {workspace}, undefined, undefined, {timeoutMs:180_000});
     toast(prepareStatusMessage(result, `${workspace === 'game' ? 'Game' : 'Studio'} assistant prepared.`));
   };
-  const promptModelPicker=<ModelPicker settings={selectedProfile} workspace={workspaceMode} models={connection.lm?.models} online={!!connection.lm?.online} busy={busy||videos.active||connection.busy} stage={connection.stage} activeProfile={connection.active_profile}
+  const promptModelPicker=<ModelPicker settings={selectedProfile} workspace={workspaceMode} models={connection.lm?.models} online={!!connection.lm?.online} busy={busy||videos.active||connection.busy} stage={connection.stage} activeProfile={connection.active_profile} assistantReady={connection.assistant_ready === true} connectionError={connection.check_error}
     onRefresh={refresh} onConnections={()=>{void refresh();setModal('connections');}}
     onLoad={()=>run('Preparing the assistant',()=>prepareAssistant())} onChange={changeAssistant}/>;
   const draftSettings = connectionDraft || settings;
@@ -1253,7 +1265,7 @@ export default function App() {
           >
             <span
               className={
-                "status-dot " + (connection.lm?.online ? "online" : "")
+                "status-dot " + (connection.lm?.online && !connection.check_error ? "online" : "")
               }
             />
             {connection.lm?.online ? "LM Studio" : "Connect LM Studio"}
@@ -2728,16 +2740,16 @@ export default function App() {
           <div className="connection-status">
             <span
               className={
-                "status-dot " + (connection.lm?.online ? "online" : "")
+                "status-dot " + (connection.lm?.online && !connection.check_error ? "online" : "")
               }
             />
             <strong>
-              {connection.lm?.online
+              {connection.check_error ? "Connection check unavailable" : connection.lm?.online
                 ? "LM Studio is online"
                 : "LM Studio is offline"}
             </strong>
             <button className="text-button" onClick={refresh}>
-              <RefreshCw size={13} /> Refresh
+              <RefreshCw size={13} /> {connection.check_error || !connection.lm?.online ? 'Reconnect' : 'Refresh'}
             </button>
           </div>
           {error && <p className="project-modal-error" role="alert">{error}</p>}
@@ -2842,7 +2854,7 @@ export default function App() {
             >
               Prepare H3
             </button>
-            <button type="button" className="quiet" onClick={()=>setModal('')}>Close</button>
+            <button type="button" className="quiet" onClick={()=>setModal('')}>Cancel</button>
           </div>
         </Modal>
       )}

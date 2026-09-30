@@ -13,5 +13,6 @@
 .workspace-feedback-error>svg,.workspace-feedback-notice>svg{flex-shrink:0}.workspace-feedback-error>button{display:grid;place-items:center;min-height:36px;min-width:36px;padding:5px}
 .workspace-feedback-notice{background:#17372b;border-color:#476e5b;color:#c4eddb}
 .studio .modal-backdrop{z-index:200}
+.studio .game-editor{z-index:150}
 @media(max-width:800px){.workspace-feedback{top:70px;padding:0 10px}}
 @media(max-width:480px){.workspace-feedback{top:64px;padding:0 6px}.workspace-feedback-error,.workspace-feedback-notice{font-size:13px;padding:9px}}

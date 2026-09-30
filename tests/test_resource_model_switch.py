@@ -136,3 +136,20 @@ def test_profile_model_mismatch_fails_without_touching_model(setup):
     with pytest.raises(resources.ResourceError, match='requested model'):
         manager.run_ai('new-model', profile={'model': 'other', 'context_length': 8192, 'ai_memory_mode': 'exclusive'})
     assert models.calls == [] and not manager.lock.locked()
+
+
+@pytest.mark.parametrize('kv_gpu', [True, False, None])
+def test_uncertain_named_load_reconciliation_requires_verified_context_and_kv(setup, kv_gpu):
+    manager, models = setup
+    manager._forget_instance()
+    manager.pending_load = {'instance_id': 'h3-studio-assistant-pending', 'model': 'old-model', 'endpoint': None}
+    models.instances = [{'id': manager.pending_load['instance_id'], 'model': 'old-model',
+                         'config': {'context_length': 8192, 'offload_kv_cache_to_gpu': kv_gpu}}]
+    if kv_gpu is True:
+        assert manager.run_ai('old-model')['context_length'] == 8192
+        assert manager.pending_load is None
+    else:
+        with pytest.raises(resources.ResourceError, match='unverified'):
+            manager.run_ai('old-model')
+        assert manager.pending_load is not None and manager.instance_id is None
+    assert not any(call[0] in ('load', 'unload') for call in models.calls)
