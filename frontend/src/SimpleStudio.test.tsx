@@ -60,7 +60,7 @@ describe('Simple editor workspace', () => {
     const html=renderStudio(project([photo('face')]));
     expect(html).toContain('role="tablist" aria-label="Scene editor"');
     expect(html).toContain('id="simple-tab-story" type="button" role="tab" aria-selected="true"');
-    expect(html).toContain('Story &amp; Dialogue');
+    expect(html).toContain('>Write</button>');
     expect(html).toContain('id="simple-panel-photos" hidden=""');
     expect(html).toContain('id="simple-panel-settings" hidden=""');
     expect(html).toContain('Render settings fixture');
@@ -70,24 +70,42 @@ describe('Simple editor workspace', () => {
     expect(html).not.toContain('Continue the story in another clip');
     expect(html).not.toContain('Start next');
     expect(html).not.toContain('Plan a separate scene');
-    const settings=html.split('id="simple-panel-settings"')[1].split('</section>')[0];
-    expect(settings).toContain('Video length'); expect(settings).toContain('Shape');
+    const writing=html.split('id="simple-panel-story"')[1].split('</section>')[0];
+    expect(writing).toContain('Video length'); expect(writing).toContain('Shape');
   });
-  it('starts a project without photos on the Photos tab', () => {
-    expect(renderStudio(project([]))).toContain('id="simple-tab-photos" type="button" role="tab" aria-selected="true"');
+  it('starts every project on Write, with photos optional', () => {
+    const html=renderStudio(project([]));
+    expect(html).toContain('id="simple-tab-story" type="button" role="tab" aria-selected="true"');
+    expect(html).toContain('id="simple-panel-photos" hidden=""');
+    expect(html).toContain('Photos · optional');
   });
 });
 
 
-describe('Studio save feedback', () => {
-  it('reports failed saves and provides a recovery action instead of claiming success', () => {
+describe('Video writing workflow', () => {
+  it('leaves project identity and saving to the shared project bar', () => {
     const html=renderStudio(project([]), {savedStatus:'Not saved',onSaveProject:()=>{}});
-    expect(html).toContain('Not saved');expect(html).toContain('Retry save');
+    expect(html).not.toContain('aria-label="Project name"');
+    expect(html).not.toContain('Saved projects');
+    expect(html).not.toContain('Save now');
     expect(html).not.toContain('Saved automatically');
+    expect(html).toContain('aria-label="Video creation steps"');
   });
-  it('exposes a text-first path for empty projects and disables save while saving', () => {
-    const html=renderStudio(project([]), {savedStatus:'Saving…',onSaveProject:()=>{}});
-    expect(html).toContain('Write your idea');
-    expect(html).toMatch(/disabled="">Save now/);
+  it('keeps optional tools closed and puts the prompt before video playback on mobile', () => {
+    const html=renderStudio(project([]), {modelPicker:<div>Local model fixture</div>});
+    expect(html).toContain('<details class="simple-writing-tools">');
+    expect(html).toContain('<details class="simple-scene-controls">');
+    expect(html).toContain('<details class="simple-ai-settings">');
+    expect(html).toContain('<details class="simple-editor-tools">');
+    expect(html.indexOf('id="simple-result"')).toBeLessThan(html.indexOf('id="simple-video"'));
+    expect(html).toContain('Qwen 3.8 27B');
+  });
+  it('cannot prepare an empty idea or export a stale prompt', () => {
+    const p=project([]);p.story.text='';
+    const html=renderStudio(p, {currentPrompt:'An older prompt',resultFresh:false});
+    expect(html).toMatch(/class="simple-generate" disabled=""/);
+    expect(html).toMatch(/disabled=""><svg[^]*?<\/svg> Copy prompt<\/button>/);
+    expect(html).toContain('Your idea changed. Prepare the prompt again');
+    expect(html).not.toContain('<span class="simple-ready">');
   });
 });

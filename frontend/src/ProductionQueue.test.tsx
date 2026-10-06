@@ -46,12 +46,18 @@ describe('Production queue progress and recovery', () => {
     expect(html).toContain('does not accept Game actions');
     expect(productionStatus('succeeded')).toBe('Rendered · review takes');
   });
-  it('keeps creation and saved project selection inside Studio', () => {
+  it('keeps creation and saved project selection in the advanced Video editor', () => {
     const html = renderToStaticMarkup(<ProductionQueue active currentProjectId="p1" currentProjectTitle="Opening" onSaveCurrent={async () => {}} onOpenProject={async () => {}}/>);
     expect(html).toContain('Production queue');
     expect(html).toContain('Queue current project');
     expect(html).toContain('Create batch · 0 selected');
     expect(html).toContain('one video at a time');
+  });
+  it('renders a clip title as text when no project-opening action is available', () => {
+    const html=renderToStaticMarkup(<ProductionBatchView batch={fixture} onAction={noop} onRetry={noop} onPreview={noop}/>);
+    expect(html).toContain('<strong>Opening</strong>');expect(html).not.toContain('production-project-link');
+    expect(html).toContain('aria-label="Play Opening"');
+    expect(render()).toContain('class="production-project-link"');
   });
   it('offers film and clip exports only after all planned items succeeded', () => {
     const props = { pending: false, onAction: noop, onRetry: noop, onPreview: noop, onOpenProject: noop, onExport: noop };

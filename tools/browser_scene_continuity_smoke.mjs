@@ -14,7 +14,7 @@ const contract = {
   environment: 'Warm café; table and doorway fixed in place', background_activity: 'No other foreground movement',
 };
 let project = {
-  schema_version: 1, id: 'scene-smoke-project', title: 'One cup, two people', mode: 't2va', duration: 10,
+  schema_version: 1, id: 'scene-smoke-project', workspace: 'video', title: 'One cup, two people', mode: 't2va', duration: 10,
   aspect_ratio: '16:9', profile: 'director', authoring_mode: 'full', story: { text: 'Mira lifts the cup while Nora stays seated.', locked: true },
   style: {}, assets: [], subjects: [{ id: 'mira', name: 'Mira', description: 'Left actor', asset_ids: [] }, { id: 'nora', name: 'Nora', description: 'Right actor', asset_ids: [] }],
   shots: [{ id: 'shot', duration: 10, action: 'Mira lifts the cup while Nora stays seated.', setting: 'Café', camera: {}, performance: '', final_state: 'Mira holds the cup',
@@ -26,7 +26,7 @@ const requests = [], errors = [], forbidden = [];
 const server = createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url, 'http://localhost').pathname;
-    const filename = path.resolve(root, 'dist', ['/', '/studio', '/game'].includes(pathname.replace(/\/$/, '') || '/') ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, ''));
+    const filename = path.resolve(root, 'dist', ['/', '/video', '/studio', '/game'].includes(pathname.replace(/\/$/, '') || '/') ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, ''));
     if (!filename.startsWith(path.join(root, 'dist') + path.sep)) throw new Error('Invalid path');
     response.setHeader('Content-Type', filename.endsWith('.js') ? 'text/javascript' : filename.endsWith('.css') ? 'text/css' : 'text/html');
     response.end(await readFile(filename));
@@ -37,19 +37,22 @@ const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
   page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => { localStorage.setItem('h3-workspace-mode', 'studio'); localStorage.setItem('h3-studio-view', 'simple'); });
+  await page.addInitScript(() => { localStorage.setItem('h3-workspace-mode', 'video'); localStorage.setItem('h3-studio-view', 'simple'); });
   await page.route('**/api/**', async route => {
     const request = route.request(), pathname = new URL(request.url()).pathname.replace(/^\/api/, '');
     requests.push({ path: pathname, method: request.method() });
     const json = value => route.fulfill({ json: structuredClone(value) });
-    if (!['GET', 'HEAD'].includes(request.method()) && !['/projects', '/compile'].includes(pathname)) {
+    const activate = pathname === `/projects/${project.id}/activate`;
+    if (!['GET', 'HEAD'].includes(request.method()) && !['/projects', '/compile'].includes(pathname) && !activate) {
       forbidden.push(`${request.method()} ${pathname}`);
       return route.fulfill({ status: 503, json: { detail: 'Only local project saving and compilation are allowed in this smoke test.' } });
     }
-    if (pathname === '/bootstrap') return json({ token: 'a'.repeat(43), project, projects: [], settings: { model: 'test', persona: 'universal' }, personas: [] });
+    const summaries = [{ id: project.id, title: project.title, mode: project.mode, duration: project.duration, prompt_summary: project.story.text }];
+    if (pathname === '/bootstrap') return json({ token: 'a'.repeat(43), project, projects: summaries, settings: { model: 'test', persona: 'universal' }, personas: [] });
+    if (pathname === `/projects/${project.id}` || activate) return json(project);
     if (pathname === '/projects') {
       if (request.method() === 'POST') project = request.postDataJSON();
-      return json(request.method() === 'POST' ? project : []);
+      return json(request.method() === 'POST' ? project : summaries);
     }
     if (pathname === '/compile') return json({ valid: true, prompt: 'Mock preview', issues: [], references: [], timeline: [] });
     if (pathname === '/connections') return json({ lm: { online: true, models: [] }, comfy: { online: false } });
@@ -57,8 +60,10 @@ try {
     if (pathname === '/stories') return json({ stories: [] });
     return json({});
   });
-  await page.goto(`http://127.0.0.1:${server.address().port}/`);
-  await page.getByRole('tab', { name: 'Story & Dialogue', exact: true }).click();
+  await page.goto(`http://127.0.0.1:${server.address().port}/video`);
+  await page.getByRole('button', { name: /One cup, two people.*Resume/ }).click();
+  await page.getByRole('tab', { name: 'Write', exact: true }).click();
+  await page.locator('.simple-scene-controls > summary').click();
   await page.getByText('Scenes, camera & spoken words', { exact: false }).click();
   const continuity = page.locator('.scene-continuity').first();
   await expect(continuity).not.toHaveAttribute('open');
@@ -90,7 +95,9 @@ try {
   expect(newObjectId).not.toBe('cup');
   const editedContract = structuredClone(project.shots[0].scene_contract);
   await page.reload();
-  await page.getByRole('tab', { name: 'Story & Dialogue', exact: true }).click();
+  await page.getByRole('button', { name: /One cup, two people.*Resume/ }).click();
+  await page.getByRole('tab', { name: 'Write', exact: true }).click();
+  await page.locator('.simple-scene-controls > summary').click();
   await page.getByText('Scenes, camera & spoken words', { exact: false }).click();
   await page.locator('.scene-continuity').first().locator('summary').click();
   await expect(page.getByLabel('Scene 1 Object 2 name', { exact: true })).toHaveValue('Blue plate');
@@ -109,7 +116,8 @@ try {
   await mkdir(path.join(root, 'test-results'), { recursive: true });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: path.join(root, 'test-results/frontend-scene-continuity-smoke.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+  await page.locator('.simple-editor-tools > summary').click();
+  await page.getByRole('button', { name: 'Advanced editor', exact: true }).click();
   await page.getByRole('button', { name: 'Continuity', exact: true }).click();
   await expect(page.locator('.scene-continuity')).toBeVisible();
   await page.locator('.scene-continuity summary').click();

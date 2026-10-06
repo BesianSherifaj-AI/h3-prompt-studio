@@ -6,6 +6,7 @@ import { loadContinuationDraft, saveContinuationDraft } from "./continuationDraf
 import "./VideoWorkspace.css";
 import LiveRenderProgress from "./LiveRenderProgress";
 import UpscaleButton from "./UpscaleButton";
+import VideoReview from "./VideoReview";
 
 export type VideoJob = {
   id: string;
@@ -43,6 +44,7 @@ export type VideoJob = {
 };
 
 export type VideoWorkspaceProps = {
+  singleClip?: boolean;
   project: Project;
   promptReady: boolean;
   busy: boolean | string;
@@ -59,6 +61,7 @@ export type VideoWorkspaceProps = {
   onReroll: (job: VideoJob) => void | Promise<void>;
   onContinue: (job: VideoJob, nextIdea: string, duration: number, renderPreset?: ContinuationRenderPreset, options?: { planned?: boolean }) => void | Promise<void>;
   onUpdateTake?: (job: VideoJob, patch: { title?: string; favorite?: boolean }) => void | Promise<void>;
+  onUseReviewPrompt?: (prompt: string) => void;
   onSuggest?: (job: VideoJob, duration: number, direction?: string) => Promise<ContinuationSuggestions>;
   onCombine?: (job: VideoJob) => void | Promise<void>;
   onResolve?: (job: VideoJob) => void | Promise<void>;
@@ -164,7 +167,7 @@ export function videoWorkspaceState(projectId: string, jobs: VideoJob[] = [], se
     canCombine: !!playable && !working && continuationChain && current?.operation !== "combine" };
 }
 
-export default function VideoWorkspace({ project, promptReady, busy, jobs, currentJob, storyId, activeEndpointId, storyClips, onBranch, onPlayGame, onConnections, onSelectJob, onGenerate, onReroll, onContinue, onSuggest, onCombine, onResolve, onUpdateTake, advanced }: VideoWorkspaceProps) {
+export default function VideoWorkspace({ project, promptReady, busy, jobs, currentJob, storyId, activeEndpointId, storyClips, onBranch, onPlayGame, onConnections, onSelectJob, onGenerate, onReroll, onContinue, onSuggest, onCombine, onResolve, onUpdateTake, onUseReviewPrompt, advanced, singleClip = false }: VideoWorkspaceProps) {
   const id = useId();
   const [continuing, setContinuing] = useState(false), [idea, setIdea] = useState(""), [length, setLength] = useState(5);
   const [renderPreset, setRenderPreset] = useState<ContinuationRenderPreset>("inherit");
@@ -182,6 +185,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
   const [mediaLength, setMediaLength] = useState<{id:string;seconds:number}|null>(null);
   const [mediaError, setMediaError] = useState(false), [mediaAttempt, setMediaAttempt] = useState(0);
   const autoplayNext = useRef(false), directionRef = useRef<HTMLTextAreaElement>(null);
+  const reviewPlayer = useRef<HTMLVideoElement>(null);
   const suggestionRevision = useRef(0);
   const suggestionInFlight = useRef<number | null>(null);
   const state = videoWorkspaceState(project.id, jobs, currentJob, busy || submitting || suggesting, {storyId, activeEndpointId});
@@ -285,14 +289,14 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
     {renaming && current && <form className="video-workspace-rename" onSubmit={event => { event.preventDefault(); void updateTake({ title: takeTitle.trim() }); }}><label htmlFor={`${id}-take-title`}>Take name</label><input id={`${id}-take-title`} value={takeTitle} maxLength={80} placeholder={`Take ${takeNumber(current)}`} onChange={event => setTakeTitle(event.target.value)} disabled={metadataBusy} autoFocus /><button type="submit" disabled={metadataBusy}>Save name</button><button type="button" aria-label="Cancel rename" disabled={metadataBusy} onClick={() => setRenaming(false)}><X size={15} aria-hidden="true" /></button></form>}
     {metadataError && <p className="video-workspace-error" role="alert">{metadataError}</p>}
 
-    {!!playlist.length && <div className="video-workspace-playback-tabs" role="group" aria-label="Playback view">
+    {!!playlist.length && !singleClip && <div className="video-workspace-playback-tabs" role="group" aria-label="Playback view">
       <button type="button" aria-pressed={playback === 'scene' && (!source || current?.id === source.id)} onClick={() => {setPlayback('scene'); autoplayNext.current = false; if(source)onSelectJob(source);}}>Latest scene</button>
       <button type="button" aria-pressed={playback === 'story'} onClick={() => {setPlayback('story'); setPlaylistIndex(0); autoplayNext.current = false;}}>Whole story · {playlist.length} scenes</button>
       {storyId && <a href={`/api/stories/${storyId}/video`} download>Save whole story</a>}
     </div>}
     {playback === 'story' && playing && <p className="video-workspace-help" role="status">Scene {Math.min(playlistIndex + 1, playlist.length)} of {playlist.length} · {videoTakeTitle(playing)}. Plays the accepted clips in order.</p>}
     <div className={`video-workspace-preview ${playing?.status === 'succeeded' && playingUrl ? "has-video" : ""}`}>
-      {playing?.status === 'succeeded' && playingUrl ? <video key={`${playing.id}:${playingUrl}:${mediaAttempt}`} src={playingUrl} controls playsInline preload="metadata" aria-label="Selected video" onError={()=>setMediaError(true)} onLoadedData={()=>setMediaError(false)}
+      {playing?.status === 'succeeded' && playingUrl ? <video ref={reviewPlayer} key={`${playing.id}:${playingUrl}:${mediaAttempt}`} src={playingUrl} controls playsInline preload="metadata" aria-label="Selected video" onError={()=>setMediaError(true)} onLoadedData={()=>setMediaError(false)}
         onEnded={() => {if(playback === 'story' && playlistIndex < playlist.length - 1) {autoplayNext.current = true; setPlaylistIndex(index => index + 1);} else autoplayNext.current = false;}}
         onLoadedMetadata={event => {if(Number.isFinite(event.currentTarget.duration))setMediaLength({id:playing.id,seconds:event.currentTarget.duration});if(autoplayNext.current) {autoplayNext.current = false; void event.currentTarget.play().catch(() => {});}}} /> :
         <div className="video-workspace-empty">
@@ -302,26 +306,28 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
         </div>}
     </div>
 
+    {playback === 'scene' && playable && current && <details className="video-workspace-raw-details"><summary>Review this take · good or needs work?</summary><VideoReview key={current.id} kind="run" videoId={current.id} title={videoTakeTitle(current, takeNumber(current))} aiDisabled={working} onUsePrompt={onUseReviewPrompt} onSeek={seconds => {if (reviewPlayer.current) {reviewPlayer.current.currentTime = Math.min(seconds, Number.isFinite(reviewPlayer.current.duration) ? reviewPlayer.current.duration : seconds); reviewPlayer.current.pause(); reviewPlayer.current.scrollIntoView({block: 'nearest', behavior: 'smooth'});}}}/></details>}
+
     <div className="video-workspace-actions">
-      {hasResult && <><button className="video-workspace-generate" type="button" disabled={!canContinue} onClick={() => {
+      {hasResult && <>{!singleClip && <button className="video-workspace-generate" type="button" disabled={!canContinue} onClick={() => {
         setContinuing(true); setActionError('');
         if (!continuing && !suggested?.suggestions.length) void requestSuggestions();
-      }} title="Continue the active story ending. Previewing history does not change this source."><ArrowRight size={17} aria-hidden="true" /><span>Continue from this ending</span></button>
+      }} title="Continue the active story ending. Previewing history does not change this source."><ArrowRight size={17} aria-hidden="true" /><span>Continue from this ending</span></button>}
       <button type="button" disabled={!canReroll} onClick={() => current && void runAction(() => onReroll(current))} title="Keep this take's prompt, photos and settings, and render with a new seed."><Shuffle size={17} aria-hidden="true" /><span>Try another take</span></button></>}
       <button className={!hasResult ? 'video-workspace-generate' : ''} type="button" disabled={working} onClick={() => void runAction(() => onGenerate(generatePreset))}><Play size={17} fill="currentColor" aria-hidden="true" /><span>Generate video</span></button>
     </div>
     {current && ["queued", "running"].includes(current.status) && <LiveRenderProgress runId={current.id}/>}
-    {source && <div className="video-workspace-source" aria-label="Continuation source">
+    {source && !singleClip && <div className="video-workspace-source" aria-label="Continuation source">
       {endingUrl && <img src={endingUrl} alt="Ending frame used for continuation" />}
       <div><strong>Continuing after {videoTakeTitle(source, takeNumber(source))}</strong><span>{source.id !== current?.id ? 'You are previewing history. Your story still continues from this ending.' : 'The saved ending and motion carry into the next scene automatically.'}</span></div>
       {onPlayGame && <button type="button" disabled={!canContinue} onClick={() => void runAction(() => onPlayGame(source))}>Play from here</button>}
     </div>}
-    {storyId && !source && <p className="video-workspace-help">{activeEndpointId ? 'Loading the saved story ending. Continuation will be ready when it is available.' : 'Generate your opening scene to start this story.'}</p>}
+    {storyId && !singleClip && !source && <p className="video-workspace-help">{activeEndpointId ? 'Loading the saved story ending. Continuation will be ready when it is available.' : 'Generate your opening scene to start this story.'}</p>}
     {onBranch && current && current.id !== source?.id && <button className="video-workspace-branch" type="button"
       disabled={working || !videoWorkspaceState(current.project_id, [current], current).canContinue}
       onClick={() => void runAction(() => onBranch(current))}>Branch from this preview</button>}
 
-    {continuing && source && <div className="video-workspace-continue" role="region" aria-label="Continue selected video">
+    {continuing && !singleClip && source && <div className="video-workspace-continue" role="region" aria-label="Continue selected video">
       <div className="video-workspace-continue-heading"><div><span className="video-workspace-eyebrow"><Sparkles size={13} aria-hidden="true" /> INTERACTIVE STORY</span><h4>What happens after this ending?</h4></div><button type="button" aria-label="Cancel continuation" className="video-workspace-close" onClick={() => {
         invalidateSuggestions(); suggestionContext.current = { ...suggestionContext.current, open: false }; setContinuing(false);
       }} disabled={submitting}><X size={17} aria-hidden="true" /></button></div>
@@ -388,7 +394,7 @@ export default function VideoWorkspace({ project, promptReady, busy, jobs, curre
     }}><RefreshCw size={15}/> Check &amp; unlock</button><span>Recover its result if available. If this request is no longer running, unlock new generations. Existing videos are kept.</span></div>}
 
     <label className="video-workspace-preset" htmlFor={`${id}-generate-preset`}><span>Video quality<small>{project.comfy_render?.continuation_source ? "Uses the saved clip size; preview presets change steps." : "Applies to Generate video."}</small></span><select id={`${id}-generate-preset`} aria-label="Video quality" value={generatePreset} onChange={event => setGeneratePreset(event.target.value as ContinuationRenderPreset)} disabled={working}><option value="inherit">Current video settings</option><option value="draft">Quick draft · {generationPresetSize} / 4 steps</option><option value="quality">Quality preview · {generationPresetSize} / 8 steps</option></select></label>
-    {onCombine && showCombine && <div className="video-workspace-combine"><button type="button" disabled={!canCombine} onClick={() => current && void runAction(() => onCombine(current))}><Layers2 size={15} aria-hidden="true" /> Combine clips</button><span>{current?.operation === "combine" ? current.can_continue===true&&current.continue_from_run_id ? "Your joined film is ready in the player. Continue from this ending picks up from the final clip automatically." : "Your joined film is ready in the player. Select an individual take to continue its story." : "Join this continuation with its earlier clips into one video."}</span></div>}
+    {onCombine && !singleClip && showCombine && <div className="video-workspace-combine"><button type="button" disabled={!canCombine} onClick={() => current && void runAction(() => onCombine(current))}><Layers2 size={15} aria-hidden="true" /> Combine clips</button><span>{current?.operation === "combine" ? current.can_continue===true&&current.continue_from_run_id ? "Your joined film is ready in the player. Continue from this ending picks up from the final clip automatically." : "Your joined film is ready in the player. Select an individual take to continue its story." : "Join this continuation with its earlier clips into one video."}</span></div>}
     <p className="video-workspace-help">{!promptReady ? "Generate makes your prompt first, then renders your video." : "Generate uses your current prompt and settings."} {playable ? "Try another take keeps the selected take’s prompt, photos and settings." : "After a take finishes, compare a new seed or continue its story."}</p>
     {playable && !current?.continuation_source && !current?.warning && current?.operation !== "combine" && <p className="video-workspace-help">This take has no saved motion state. Enable Save continuation state in generation settings for videos you want to extend.</p>}
 

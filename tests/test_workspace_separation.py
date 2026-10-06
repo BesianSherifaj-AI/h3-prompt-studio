@@ -20,7 +20,7 @@ def test_studio_and_game_projects_have_independent_indexes_and_resume_pointers(s
     game = client.post('/api/projects/new?workspace=game', headers=auth(module)).json()
     assert game['workspace'] == 'game' and game['id'] != studio['id']
     assert game['story']['text'] == '' and game['assets'] == []
-    assert module.SETTINGS['last_project'] == studio['id']
+    assert module.SETTINGS['last_video_project'] == studio['id']
     assert module.SETTINGS['last_game_project'] == game['id']
     assert [p['id'] for p in client.get('/api/projects').json()] == [studio['id']]
     assert [p['id'] for p in client.get('/api/projects?workspace=game').json()] == [game['id']]
@@ -63,7 +63,7 @@ def test_legacy_game_save_does_not_replace_studio_resume_target(server):
     atomic_json(module.DATA / 'stories' / (game['story_session_id'] + '.json'), {'mode': 'game'})
     response = client.post('/api/projects', headers=auth(module), json=game)
     assert response.status_code == 200
-    assert module.SETTINGS['last_project'] == studio['id']
+    assert module.SETTINGS['last_video_project'] == studio['id']
     assert module.SETTINGS['last_game_project'] == game['id']
 
 
@@ -135,14 +135,14 @@ def test_concurrent_workspace_and_settings_saves_keep_both_resume_pointers(serve
                for snapshot in snapshots)
     settings = json.loads((module.DATA / 'settings.json').read_text(encoding='utf-8'))
     assert settings == module.SETTINGS
-    assert settings['last_project'] in {p['id'] for p in projects if p['workspace'] == 'studio'}
+    assert settings['last_video_project'] in {p['id'] for p in projects if p['workspace'] == 'studio'}
     assert settings['last_game_project'] in {p['id'] for p in projects if p['workspace'] == 'game'}
     previous = copy.deepcopy(snapshots[-1]['settings'])
     module.save_project(new_project())
     assert snapshots[-1]['settings'] == previous
 
 
-@pytest.mark.parametrize('route', ['/studio', '/game', '/studio/', '/game/'])
+@pytest.mark.parametrize('route', ['/video', '/studio', '/game', '/video/', '/studio/', '/game/'])
 def test_workspace_deep_links_serve_the_built_app(route, server, tmp_path, monkeypatch):
     module, client, _ = server
     root = tmp_path / 'app'

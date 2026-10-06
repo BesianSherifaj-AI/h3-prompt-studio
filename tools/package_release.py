@@ -19,7 +19,7 @@ STAMP = (1980, 1, 1, 0, 0, 0)
 ROOT_FILES = (
     'README.md', 'CHANGELOG.md', 'VERIFICATION.md', 'VERIFICATION_V1.1.md', 'THIRD_PARTY_NOTICES.md', 'LICENSE',
     'COMFY_BRIDGE_SETUP.md', 'COMFY_FLOW.md', 'CREATIVE_TOOLS.md', 'CONTRACT.md',
-    'Launch.ps1', 'Setup.ps1', 'requirements.txt', 'requirements.lock.txt', 'pytest.ini',
+    'Launch.ps1', 'Launch.cmd', 'Setup.ps1', 'requirements.txt', 'requirements.lock.txt', 'pytest.ini',
     'frontend/package.json', 'frontend/package-lock.json', 'frontend/index.html',
     'frontend/tsconfig.json', 'frontend/vite.config.ts', 'frontend/vitest.config.ts',
     'comfy_extension/__init__.py', 'comfy_extension/README.md',
@@ -27,6 +27,7 @@ ROOT_FILES = (
     'VERIFICATION_V1.2.md', 'AUDIO_SETUP.md', 'UPSCALE_SETUP.md', 'requirements-audio.txt',
     'tools/browser_game_smoke.mjs',
     'tools/browser_scene_continuity_smoke.mjs',
+    'tools/browser_film_smoke.mjs',
 )
 # A folder is included only for these source or reviewed demo file types.
 # Runtime directories and ad hoc workflow/export directories are never roots.

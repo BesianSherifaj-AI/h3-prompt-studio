@@ -16,6 +16,8 @@ const project = { schema_version: 1, id: 'smoke-project', title: 'Pixel street',
   style: {}, assets: [], subjects: [{ id: 'player', name: 'Alex', description: 'Pixel adventurer', asset_ids: [] }],
   shots: [{ id: 'shot', duration: 3, action: '', setting: '', camera: {}, performance: '', final_state: '', visible_subject_ids: [], offscreen_subject_ids: [], dialogue: [], sound: '', transition: '' }],
   soundscape: '', music: '', custom_instructions: '', comfy_render: { experimental_preview: true, resolution: '0.2', steps: 8 } };
+const videoProject = { ...structuredClone(project), id:'video-smoke-project', workspace:'video', title:'Saved single video',
+  story:{text:'A paper boat drifts across a pond.',locked:false}, subjects:[] };
 const person = (id, name, state = {}) => ({ id, name, state, control: id === 'player' ? 'player' : 'npc', location_id: 'street',
   description: id === 'player' ? 'Pixel adventurer' : '', personality: '', goals: [], speaking_style: '', private_knowledge: [], relationships: {}, asset_ids: [], witnessed_events: [] });
 const entity = (id, name, fields = {}) => ({ id, name, kind: 'object', asset_ids: [], affordances: [], state: {}, location_id: 'street', owner_id: null, holder_id: null, worn_by_id: null, ...fields });
@@ -87,7 +89,7 @@ function catalog() {
 const server = createServer(async (request, response) => {
   try {
     const pathname = new URL(request.url, 'http://localhost').pathname;
-    const relative = ['/', '/studio', '/game'].includes(pathname.replace(/\/$/, '') || '/') ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
+    const relative = ['/', '/video', '/studio', '/game'].includes(pathname.replace(/\/$/, '') || '/') ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
     const filename = path.resolve(root, 'dist', relative);
     if (!filename.startsWith(path.join(root, 'dist') + path.sep)) throw new Error('Invalid path');
     const data = await readFile(filename);
@@ -106,7 +108,7 @@ try {
     const request = route.request(), pathname = new URL(request.url()).pathname.replace(/^\/api/, '');
     if (!['GET', 'HEAD'].includes(request.method())) mutationPaths.push(pathname);
     const json = value => route.fulfill({ json: structuredClone(value) });
-    if (pathname === '/bootstrap') return json({ token: 'a'.repeat(43), project, projects: [], settings: { model: 'test', persona: 'universal' }, personas: [] });
+    if (pathname === '/bootstrap') return json({ token: 'a'.repeat(43), project:videoProject, projects:[videoProject], game_project:project, settings: { model: 'test', persona: 'universal' }, personas: [] });
     if (pathname === '/stories') return json({ stories: [story] });
     if (pathname === `/stories/${story.id}`) {
       if (request.method() === 'PATCH') {
@@ -155,7 +157,9 @@ try {
         : { generators: [{ id: 'h3-frame', name: 'H3 frame', available: true }], default_model: 'h3-frame', errors: [] });
     }
     if (pathname === '/compile') return json({ valid: true, prompt: 'Mock preview', issues: [], references: [], timeline: [] });
-    if (pathname === '/projects') return json(request.method() === 'POST' ? request.postDataJSON() : []);
+    if (pathname === '/projects') return json(request.method() === 'POST' ? request.postDataJSON() : [videoProject]);
+    if (pathname === '/projects/'+videoProject.id || pathname === '/projects/'+videoProject.id+'/activate') return json(videoProject);
+    if (pathname === '/films') return json({films:[]});
     if (pathname === '/video/runs') return json({ runs: [] });
     if (pathname.startsWith('/mock-video/')) { mediaReads++; return route.fulfill({ status: 502, contentType: 'application/json', body: '{"detail":"ComfyUI is unavailable"}' }); }
     if (pathname.startsWith('/mock-ending/')) return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="608" height="320"><rect width="608" height="320" fill="#263c35"/><text x="28" y="55" fill="#fff" font-size="22">Synthetic saved ending fixture</text><rect x="100" y="130" width="75" height="130" fill="#9971d5"/><circle cx="138" cy="108" r="25" fill="#edc394"/></svg>' });
@@ -209,12 +213,17 @@ try {
     await expect(visibleTarget).toBeVisible();
     await expect(visibleTarget.locator('strong')).toBeVisible();
     await workspaceNav.getByRole('link', { name: /Studio/ }).click();
+    await expect(page.locator('.film-studio')).toBeVisible();
+    await expect(page.getByRole('heading',{name:'From scenes to a story.'})).toBeVisible();
+    await expect(page.locator('.game-studio')).toBeHidden();
+    await workspaceNav.getByRole('link', { name: /Video/ }).click();
+    await page.getByRole('button',{name:/Saved single video/}).click();
     await expect(page.locator('.simple-studio')).toBeVisible();
     await expect(page.locator('.game-studio')).toBeHidden();
     await workspaceNav.getByRole('link', { name: /Game/ }).click();
     await expect(page.getByLabel('Saved game', { exact: true })).toHaveValue(story.id);
     await page.goBack();
-    await expect(workspaceNav.getByRole('link', { name: /Studio/ })).toHaveAttribute('aria-current', 'page');
+    await expect(workspaceNav.getByRole('link', { name: /Video/ })).toHaveAttribute('aria-current', 'page');
     await page.goForward();
     await expect(workspaceNav.getByRole('link', { name: /Game/ })).toHaveAttribute('aria-current', 'page');
     await page.reload();
@@ -222,7 +231,7 @@ try {
     expect(requests).toHaveLength(0); expect(sceneRequests).toHaveLength(0);
     expect(mutationPaths.filter(path => path.startsWith('/stories'))).toEqual([]);
     expect(errors).toEqual([]);
-    console.log(JSON.stringify({ passed: true, scenario: 'workspace-scenes', legacyGameLinkRestored: true, filmNavigation: true, transcriptDownload: true, unavailableMediaRetry: true, mobileTargetNames: true, mobileHistoryWatch: true, browserNavigation: true, storyMutations: 0, pageErrors: errors }, null, 2));
+    console.log(JSON.stringify({ passed: true, scenario: 'workspace-scenes', legacyGameLinkRestored: true, threeWorkspaceNavigation: true, videoResume:true, filmNavigation: true, transcriptDownload: true, unavailableMediaRetry: true, mobileTargetNames: true, mobileHistoryWatch: true, browserNavigation: true, storyMutations: 0, pageErrors: errors }, null, 2));
   } else if (playerPickerRecovery) {
     const dialog = page.getByRole('dialog', { name: 'Who are you playing?' });
     await page.getByRole('button', { name: 'Choose character & continue', exact: true }).click();

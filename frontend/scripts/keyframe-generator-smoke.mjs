@@ -24,7 +24,7 @@ try {
   const errors = [], writes = [];
   page.on('pageerror', error => errors.push(error.message));
   const settings = { assistant_profiles: { studio: { model: 'large', context_length: 8192, ai_memory_mode: 'exclusive' }, game: { model: 'small', context_length: 8192, ai_memory_mode: 'resident_cpu' } } };
-  const project = { schema_version: 1, id: 'fixture-project', workspace: 'studio', title: 'Opening scene', mode: 't2va', duration: 5, aspect_ratio: '16:9', profile: 'director', authoring_mode: 'ai', story: { text: 'A lantern lights up.', locked: false }, style: {}, assets: [], subjects: [], shots: [{ id: 'shot', duration: 5, action: 'A lantern glows', setting: 'Garden', camera: {}, visible_subject_ids: [], offscreen_subject_ids: [], dialogue: [] }], soundscape: '', music: '', custom_instructions: '' };
+  const project = { schema_version: 1, id: 'fixture-project', workspace: 'video', title: 'Opening scene', mode: 't2va', duration: 5, aspect_ratio: '16:9', profile: 'director', authoring_mode: 'ai', story: { text: 'A lantern lights up.', locked: false }, style: {}, assets: [], subjects: [], shots: [{ id: 'shot', duration: 5, action: 'A lantern glows', setting: 'Garden', camera: {}, visible_subject_ids: [], offscreen_subject_ids: [], dialogue: [] }], soundscape: '', music: '', custom_instructions: '' };
   const first = {id:'reference-one',name:'Character',media_type:'image',role:'first_frame',semantic_role:'character',enabled:true,locked_order:false,description:'Same character',observation:'',approved_observation:'',prompt_tag:'character'};
   project.assets=[first]; project.mode='i2va';
   const mage='mage_flow_edit_turbo_int8_convrot.safetensors';
@@ -38,6 +38,7 @@ try {
     else if(path==='/connections')result={lm:{online:true,models:[]},comfy:[],busy:false,stage:'idle'};
     else if(path==='/compile')result={valid:true,prompt:'A lantern glows.',issues:[],references:[],timeline:[]};
     else if(path==='/projects'){if(body)Object.assign(project,body);result=body||[project];}
+    else if(path==='/projects/'+project.id || path==='/projects/'+project.id+'/activate')result=project;
     else if(path==='/video/runs')result={runs:[]};
     else if(path==='/production')result={batches:[]};
     else if(path==='/assets/generators')result={generators:[{id:mage,name:'MageFlow',available:true,supports_references:true},{id:'z_image_turbo_bf16.safetensors',name:'Z-Image',available:true}]};
@@ -50,7 +51,8 @@ try {
     }else if(path.startsWith('/assets/')){await route.fulfill({status:200,contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9GkAAAAASUVORK5CYII=','base64')});return;}
     await route.fulfill({json:result});
   });
-  await page.goto(`http://127.0.0.1:${server.address().port}/studio`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/video`);
+  await page.getByRole('button',{name:/Opening scene/}).click();
   await page.getByRole('tab',{name:'Photos',exact:true}).click();
   await page.locator('.keyframe-generator>summary').click();
   const form=page.locator('.keyframe-generator');
@@ -65,6 +67,7 @@ try {
   await expect(form.getByLabel('Keyframe prompt',{exact:true})).toHaveValue('Keep the same character and lamp; reach toward the switch.');
   const ticket=assetWrites[0].request_id;
   await page.reload();
+  await page.getByRole('button',{name:/Opening scene/}).click();
   await page.getByRole('tab',{name:'Photos',exact:true}).click();
   await page.locator('.keyframe-generator>summary').click();
   await expect(form.getByRole('button',{name:'Check saved request',exact:true})).toBeEnabled();

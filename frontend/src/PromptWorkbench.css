@@ -1,0 +1,15 @@
+.prompt-workbench { border:1px solid #38443e; background:#18221d; border-radius:12px; padding:14px; margin-bottom:16px; }
+.prompt-workbench summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px; cursor:pointer; font-weight:600; }
+.prompt-workbench summary span,.prompt-workbench>small { color:#a4b5ac; font-size:12px; font-weight:400; }
+.prompt-workbench>p { color:#b8c8bf; font-size:13px; }
+.prompt-presets { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0; }
+.prompt-direction-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.prompt-direction-grid label { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.prompt-direction-grid label:last-child { grid-column:1/-1; }
+.prompt-direction-grid textarea { width:100%; resize:vertical; box-sizing:border-box; }
+.prompt-apply { display:flex; align-items:center; gap:7px; margin-top:12px; }
+.prompt-writing-checks { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0; }
+.prompt-writing-checks p { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0; color:#e3bf8a; font-size:12px; }
+.prompt-writing-checks p.is-ready { color:#9bdfb6; }
+.prompt-writing-checks small { flex-basis:100%; color:#b8c8bf; }
+@media(max-width:560px) { .prompt-direction-grid,.prompt-writing-checks { grid-template-columns:1fr; } }

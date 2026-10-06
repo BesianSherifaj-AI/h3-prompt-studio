@@ -24,7 +24,7 @@ try {
   const errors = [], writes = [];
   page.on('pageerror', error => errors.push(error.message));
   const settings = { assistant_profiles: { studio: { model: 'large', context_length: 8192, ai_memory_mode: 'exclusive' }, game: { model: 'small', context_length: 8192, ai_memory_mode: 'resident_cpu' } } };
-  const project = { schema_version: 1, id: 'fixture-project', workspace: 'studio', title: 'Opening scene', mode: 't2va', duration: 5, aspect_ratio: '16:9', profile: 'director', authoring_mode: 'ai', story: { text: 'A lantern lights up.', locked: false }, style: {}, assets: [], subjects: [], shots: [{ id: 'shot', duration: 5, action: 'A lantern glows', setting: 'Garden', camera: {}, visible_subject_ids: [], offscreen_subject_ids: [], dialogue: [] }], soundscape: '', music: '', custom_instructions: '' };
+  const project = { schema_version: 1, id: 'fixture-project', workspace: 'video', title: 'Opening scene', mode: 't2va', duration: 5, aspect_ratio: '16:9', profile: 'director', authoring_mode: 'ai', story: { text: 'A lantern lights up.', locked: false }, style: {}, assets: [], subjects: [], shots: [{ id: 'shot', duration: 5, action: 'A lantern glows', setting: 'Garden', camera: {}, visible_subject_ids: [], offscreen_subject_ids: [], dialogue: [] }], soundscape: '', music: '', custom_instructions: '' };
   let batches = [], failCreate = true;
   await page.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname.replace('/api', '');
@@ -34,6 +34,7 @@ try {
     else if (path === '/connections') result = { lm: { online: true, models: [] }, comfy: [], busy: false, stage: 'idle' };
     else if (path === '/compile') result = { valid: true, prompt: 'A lantern glows.', issues: [], references: [], timeline: [] };
     else if (path === '/projects') result = body || [project];
+    else if (path === '/projects/'+project.id || path === '/projects/'+project.id+'/activate') result = project;
     else if (path === '/video/runs') result = { runs: [] };
     else if (path === '/production' && body) {
       writes.push(body);
@@ -57,7 +58,10 @@ try {
     }
     await route.fulfill({ json: result });
   });
-  await page.goto(`http://127.0.0.1:${server.address().port}/studio`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/video`);
+  await page.getByRole('button',{name:/Opening scene/}).click();
+  await page.locator('.simple-editor-tools > summary').click();
+  await page.getByRole('button',{name:'Advanced editor',exact:true}).click();
   await page.locator('.production-queue > summary').click();
   await page.locator('.production-create > summary').click();
   await page.getByLabel('Batch name', { exact: true }).fill('Film test');
@@ -70,6 +74,7 @@ try {
   await page.getByRole('button', { name: 'Start batch', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Stop queue', exact: true })).toBeEnabled();
   await page.reload();
+  await page.getByRole('button',{name:/Opening scene/}).click();
   await page.locator('.production-queue > summary').click();
   await expect(page.getByRole('button', { name: 'Stop queue', exact: true })).toBeEnabled();
   assert.equal(writes.filter(item => item.action === 'start').length, 1, 'Refreshing never starts another worker');

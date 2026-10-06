@@ -154,10 +154,21 @@ class ProductionManager:
                       'stop_on_error': body.get('stop_on_error', True),
                       'prepare_images_first': body.get('prepare_images_first', True)}
             folder = self.directory / ident
-            folder.mkdir(exist_ok=False)
-            for index, project in enumerate(snapshots):
-                atomic_json(folder / f'project-{index}.json', project)
-            self._save(record)
+            # Publish the complete durable queue in one directory rename.
+            # A crash during snapshot writes leaves a private staging folder,
+            # never an incomplete public request ID that blocks every retry.
+            staging = self.directory / ('.' + ident + '-' + uuid.uuid4().hex + '.building')
+            staging.mkdir(exist_ok=False)
+            try:
+                for index, project in enumerate(snapshots):
+                    atomic_json(staging / f'project-{index}.json', project)
+                atomic_json(staging / 'record.json', record)
+                staging.rename(folder)
+            finally:
+                if staging.is_dir():
+                    for created in staging.iterdir():
+                        created.unlink()
+                    staging.rmdir()
             self.records[ident] = record
             return self._public(record)
 

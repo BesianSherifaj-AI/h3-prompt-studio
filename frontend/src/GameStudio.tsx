@@ -1130,11 +1130,7 @@ export default function GameStudio({
                   Add photos
                 </button>
               </div>
-              <button type="button" className="quiet" onClick={() => {
-                setSetupBase(structuredClone(project)); setPremise(project.story?.text || "");
-                setSetupWorld(configurationFromStory({ project, settings, player_name: player, premise } as Story, project).world);
-                setSetupAssets([]); setReferenceEdits({}); setReferenceReplacements({});
-              }}>Import current Studio cast & photos</button>
+              <p className="game-help">Your game keeps its own cast and photos. Add references here for this story.</p>
               <input
                 ref={fileInput}
                 type="file"

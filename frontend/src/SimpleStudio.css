@@ -988,3 +988,87 @@
 @media(max-width:600px){.simple-editor .simple-options{grid-template-columns:1fr}.simple-editor .simple-section{padding:16px}.simple-editor .simple-count{flex-basis:100%;margin-left:0}.simple-editor .simple-photo-grid{grid-template-columns:1fr}.simple-workspace-layout{gap:8px}}
 
 .simple-empty-next{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 18px;padding:13px 15px;background:#1e3029;border:1px solid #365746;border-radius:10px;color:#c1d6c7;font-size:13px}.simple-project-line .workspace-status{white-space:nowrap}.simple-project-line>.simple-quiet{flex-shrink:0}@media(max-width:600px){.simple-empty-next{align-items:flex-start;flex-direction:column}.simple-project-line{flex-wrap:wrap}.simple-project-line input{flex:1;min-width:180px}}
+
+/* A single-clip path, with optional controls kept out of the writing task. */
+.simple-studio button { min-height: 44px; white-space: normal; }
+.simple-header { padding: 13px 24px; }
+.simple-main { padding-top: 24px; }
+.simple-intro { margin-bottom: 20px; }
+.simple-intro h1 { font-size: 27px; margin-bottom: 6px; }
+.simple-editor-tools { position: relative; }
+.simple-editor-tools > summary,
+.simple-ai-settings > summary,
+.simple-writing-tools > summary,
+.simple-scene-controls > summary,
+.simple-manual-build > summary {
+  cursor: pointer; min-height: 44px; display: flex; align-items: center;
+  gap: 8px; color: #c4d7cb; font-size: 13px;
+}
+.simple-editor-tools > summary { padding: 8px 12px; border: 1px solid #35443b; border-radius: 9px; }
+.simple-editor-tools > div { position: absolute; z-index: 5; right: 0; top: calc(100% + 6px); width: 220px;
+  display: grid; gap: 7px; padding: 10px; border: 1px solid #40564a; border-radius: 12px;
+  background: #1a2720; box-shadow: 0 12px 24px #0005; }
+.simple-editor-tools > div button { justify-content: flex-start; text-align: left; }
+.simple-workflow { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; margin-bottom: 20px; }
+.simple-workflow button { min-width: 0; padding: 13px 15px; gap: 12px; text-align: left; justify-content: flex-start;
+  background: #1b2720; border: 1px solid #3c5345; }
+.simple-workflow button > span { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: #344e3d; color: #d8eee0; flex-shrink: 0; }
+.simple-workflow button > div { min-width: 0; }
+.simple-workflow strong { display: block; color: #e2f0e7; font-size: 13px; }
+.simple-workflow small { display: block; color: #9fb7a8; font-size: 11px; margin-top: 2px; }
+.simple-ai-settings { margin: -6px 0 18px; }
+.simple-ai-settings > summary { width: fit-content; }
+.simple-writing-basics { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 14px; }
+.simple-writing-hint { font-size: 12px; color: #adc4b5; margin-top: -10px; }
+.simple-writing-tools,
+.simple-scene-controls { border-top: 1px solid #34483b; padding-top: 3px; }
+.simple-writing-tools > summary > span,
+.simple-scene-controls > summary > span { color: #8fab9a; font-size: 11px; margin-left: auto; }
+.simple-writing-tools[open] > summary,
+.simple-scene-controls[open] > summary { margin-bottom: 12px; }
+.simple-scene-controls > details + details { margin-top: 18px; }
+.simple-editor-footer { padding: 0 0 18px; scroll-margin-top: 85px; }
+.simple-generate-area { flex-wrap: wrap; padding: 5px 0 0; margin-top: 0; border-top: 0; gap: 12px; }
+.simple-generate-area > p { flex-basis: 100%; max-width: none; }
+.simple-manual-build > summary { font-size: 12px; }
+.simple-manual-build[open] button { margin-top: 5px; }
+.simple-result { scroll-margin-top: 85px; }
+.simple-result .simple-section-heading { margin-bottom: 15px; }
+.simple-video-heading { display: flex; gap: 12px; align-items: flex-start; padding: 5px 3px 15px; }
+.simple-video-heading h2 { color: #eef5f0; font-size: 21px; font-weight: 600; }
+.simple-video-heading p { color: #a9bfb1; font-size: 12px; margin-top: 5px; }
+.simple-video-column { scroll-margin-top: 85px; }
+.simple-studio .simple-icon { min-height: 44px; width: 44px; }
+.simple-studio input,
+.simple-studio textarea,
+.simple-studio select { min-width: 0; max-width: 100%; }
+@media(max-width:760px) {
+  .simple-header { padding: 12px 16px; flex-wrap: nowrap; gap: 10px; }
+  .simple-header nav { width: auto; justify-content: flex-end; }
+  .simple-header nav button { min-height: 44px; font-size: 12px; }
+  .simple-brand div > span { display: none; }
+  .simple-workflow { gap: 6px; }
+  .simple-workflow button { padding: 11px 7px; gap: 7px; align-items: flex-start; }
+  .simple-workflow button > span { width: 22px; height: 22px; font-size: 11px; }
+  .simple-workflow strong { font-size: 12px; }
+  .simple-workflow small { display: none; }
+  .simple-editor-tabs { position: static; }
+  .simple-studio input, .simple-studio textarea, .simple-studio select { font-size: 16px; }
+  .simple-studio .simple-photo-fields input, .simple-studio .simple-photo-fields select { font-size: 16px; }
+  .simple-generate-area { align-items: stretch; }
+  .simple-generate-area > .simple-generate { width: 100%; }
+  .simple-manual-build { width: 100%; }
+  .simple-editor .simple-photo { display: block; }
+  .simple-editor .simple-photo-preview { height: 180px; min-height: 0; border: 0; border-bottom: 1px solid #3c4a40; }
+  .simple-footer button { min-height: 44px; }
+}
+@media(max-width:380px) {
+  .simple-header { padding: 11px 12px; }
+  .simple-brand { gap: 7px; }
+  .simple-brand-mark { width: 32px; height: 32px; }
+  .simple-brand strong { font-size: 13px; }
+  .simple-workflow button { flex-direction: column; gap: 6px; }
+  .simple-writing-basics { grid-template-columns: minmax(0,1fr); }
+  .simple-intro h1 { font-size: 24px; }
+}

@@ -1,0 +1,327 @@
+.review-library-overlay {
+  position: fixed;
+  inset: 0;
+  background: #050a09df;
+  backdrop-filter: blur(10px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  z-index: 1200;
+}
+.review-library {
+  width: min(1240px, 100%);
+  height: min(880px, calc(100dvh - 48px));
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #181a1f);
+  border: 1px solid #46574c;
+  border-radius: 18px;
+  overflow: hidden;
+  outline: none;
+  box-shadow: 0 24px 90px #0008;
+}
+.review-library-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 25px 28px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.review-library-header > div > span {
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+.review-library h2 {
+  font-size: 29px;
+  letter-spacing: -0.03em;
+  margin: 9px 0;
+}
+.review-library-header p {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+.review-library-header > button {
+  padding: 9px;
+  background: transparent;
+}
+.review-library-body {
+  display: grid;
+  grid-template-columns: 275px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.review-library-sidebar {
+  padding: 18px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+.review-library-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: #1b2722;
+  border: 1px dashed #61796b;
+  border-radius: 12px;
+  padding: 20px 10px;
+  text-align: center;
+  color: var(--accent);
+}
+.review-library-drop.dragging {
+  background: #304c3d;
+  border: 2px solid var(--accent);
+}
+.review-library-drop > strong {
+  font-size: 13px;
+  color: #deeee4;
+}
+.review-library-drop > span {
+  font-size: 10px;
+  color: #a7b9ad;
+  line-height: 1.7;
+}
+.review-library-drop input {
+  width: 100%;
+  font-size: 10px;
+  color: #a5b9ad;
+}
+.review-library-upload-button {
+  padding: 9px 16px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #173027;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.review-library-upload-button.disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.review-library-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 18px 0 10px;
+  font-size: 11px;
+}
+.review-library-list-heading button {
+  min-height: 30px;
+  padding: 7px;
+}
+.review-library-search,
+.review-library-sidebar > select {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid #38433c;
+  background: #111917;
+  color: #dae4dd;
+  border-radius: 6px;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.review-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 8px;
+}
+.review-library-list > button {
+  display: flex;
+  justify-content: flex-start;
+  text-align: left;
+  align-items: flex-start;
+  white-space: normal;
+  width: 100%;
+  padding: 11px 9px;
+  border: 1px solid #34443b;
+  background: #1c2520;
+}
+.review-library-list > button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #2c4033;
+}
+.review-library-list > button > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: #a6c7b4;
+}
+.review-library-list > button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.review-library-list strong {
+  font-size: 12px;
+  font-weight: 550;
+  display: block;
+  line-height: 1.5;
+}
+.review-library-list small {
+  font-size: 10px;
+  color: #a8b9b0;
+  line-height: 1.7;
+  display: block;
+  margin-top: 4px;
+}
+.review-library-content {
+  padding: 22px 25px;
+  overflow: auto;
+  min-width: 0;
+}
+.review-library-selected {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 13px;
+}
+.review-library-selected h3 {
+  margin: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.review-library-selected a {
+  font-size: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.review-library-content > video {
+  width: 100%;
+  display: block;
+  max-height: 380px;
+  background: #060b08;
+  border-radius: 10px;
+}
+.review-library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 350px;
+  padding: 30px;
+  text-align: center;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.review-library-empty > svg {
+  color: var(--accent);
+}
+.review-library-empty h3 {
+  color: #d9eadd;
+  font-size: 23px;
+  line-height: 1.4;
+  max-width: 380px;
+}
+.review-library-empty p {
+  max-width: 380px;
+  font-size: 13px;
+}
+.review-library-empty > span {
+  font-size: 11px;
+  color: #a1b2a6;
+}
+.review-library-status {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.review-library-error {
+  color: #f4c79e;
+  border: 1px solid #756145;
+  background: #2b241b;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 14px;
+  white-space: pre-line;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.review-library :is(button, input, select, a):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 850px) {
+  .review-library-overlay {
+    padding: 12px;
+  }
+  .review-library {
+    height: calc(100dvh - 24px);
+  }
+  .review-library-body {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .review-library-content {
+    padding: 16px;
+  }
+  .review-library-header {
+    padding: 19px 20px;
+  }
+  .review-library-sidebar {
+    padding: 12px;
+  }
+  .review-library h2 {
+    font-size: 25px;
+  }
+}
+@media (max-width: 620px) {
+  .review-library-overlay {
+    padding: 0;
+  }
+  .review-library {
+    height: 100dvh;
+    border-radius: 0;
+    border: 0;
+  }
+  .review-library-body {
+    display: block;
+    overflow: auto;
+  }
+  .review-library-sidebar {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .review-library-drop {
+    padding: 13px;
+    gap: 7px;
+  }
+  .review-library-drop > svg {
+    display: none;
+  }
+  .review-library-drop > span br {
+    display: none;
+  }
+  .review-library-list {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .review-library-list > button {
+    min-width: 160px;
+    width: 160px;
+    flex-shrink: 0;
+  }
+  .review-library-content {
+    overflow: visible;
+  }
+  .review-library-list-heading {
+    margin-top: 12px;
+  }
+  .review-library-empty {
+    min-height: 240px;
+    padding: 15px;
+  }
+  .review-library h2 {
+    font-size: 24px;
+  }
+  .review-library-content > video {
+    max-height: 300px;
+  }
+}

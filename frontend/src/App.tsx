@@ -57,6 +57,8 @@ import MotionTools from "./MotionTools";
 import MotionLab from "./MotionLab";
 import FilesOutputs from "./FilesOutputs";
 import SimpleStudio from "./SimpleStudio";
+import ProjectHome, { ProjectBar, NewProjectForm } from './ProjectHome';
+const FilmStudio = lazy(() => import('./FilmStudio'));
 import ProductionQueue from "./ProductionQueue";
 import SceneContinuity from "./SceneContinuity";
 import { pruneSceneActors } from "./sceneContinuityState";
@@ -68,8 +70,11 @@ import VideoWorkspace, { type VideoJob, type ContinuationSuggestions } from './V
 import { useVideoRuns } from './useVideoRuns';
 import { useStudioStoryLinks, studioLinkDefinitive } from './useStudioStoryLinks';
 const GameStudio = lazy(() => import('./GameStudio'));
+const ReviewLibrary = lazy(() => import('./ReviewLibrary'));
 import WorkspaceNavigation from './WorkspaceNavigation';
 import { useWorkspaceRoute } from './workspaceRoutes';
+import { ProjectPersistence } from './projectPersistence';
+import { blankGameProject } from './gameConfiguration';
 import { ContinuationPlanner } from './TimelinePlanner';
 import './WorkspaceModes.css';
 import { completedVideoStory } from './videoStory';
@@ -240,11 +245,13 @@ function Modal({ title, subtitle, onClose, children, wide = false }: any) {
 
 export default function App() {
   const [workspaceMode, setWorkspaceMode] = useWorkspaceRoute();
+  const [studioScreen, setStudioScreen] = useState<'projects'|'editor'>('projects');
   const [gameVisited, setGameVisited] = useState(workspaceMode === 'game');
+  const [gameProject] = useState(blankGameProject);
   const [connectionDraft, setConnectionDraft] = useState<any>(null);
   const [connectionWorkspace, setConnectionWorkspace] = useState(workspaceMode);
   const connectionRefresh = useRef<Promise<void> | null>(null);
-  const connectionFailure = useRef('');
+  const connectionError = useRef('');
   const operationLock = useRef(false);
   const [projectSearch, setProjectSearch] = useState('');
   const [libraryLoading, setLibraryLoading] = useState(false);
@@ -297,7 +304,8 @@ export default function App() {
     projectRef = useRef<Project | null>(null),
     init = useRef(false),
     saveTimer = useRef<any>(null),
-    saveInFlight = useRef<Promise<any>|null>(null);
+    projectPersistence = useRef<ProjectPersistence<Project>|null>(null);
+  projectPersistence.current ||= new ProjectPersistence<Project>(snapshot=>api('/projects',snapshot));
   projectRef.current = p;
   const videos = useVideoRuns(p?.id || '', {storyId:studioStoryId || undefined,jobs:studioStory?.id===studioStoryId?studioStory.jobs:[]});
   const studioLinks = useStudioStoryLinks(story=>{
@@ -321,10 +329,7 @@ export default function App() {
       if(alive)timer=setTimeout(poll,2500);};void poll();return()=>{alive=false;clearTimeout(timer);};
   },[studioStoryId]);
   const queueProjectSave = (value:Project) => {
-    const snapshot=structuredClone(value);
-    const next=(saveInFlight.current||Promise.resolve()).catch(()=>{}).then(()=>api('/projects',snapshot));
-    saveInFlight.current=next;
-    return next;
+    return projectPersistence.current!.save(value);
   };
   const draftKey = p ? JSON.stringify(p) : "";
   const compileFresh = compileResult?.draft === draftKey;
@@ -336,6 +341,7 @@ export default function App() {
       fn(next);
       ensurePromptTags(next);
       if (promptDraftKey(next) !== promptDraftKey(current)) delete next.simple_generation;
+      projectRef.current = next;
       return next;
     });
   const updateShot = (field: string, value: any) =>
@@ -351,17 +357,14 @@ export default function App() {
     if (connectionRefresh.current) return connectionRefresh.current;
     const request = (async () => {
       try {
-        const checked = await api("/connections");
-        setConnection(checked);
-        const previousFailure = connectionFailure.current;
-        connectionFailure.current = '';
-        if (previousFailure) setError(current => current === previousFailure ? '' : current);
+        setConnection(await api('/connections'));
+        const previousError=connectionError.current;
+        if(previousError)setError(current=>current===previousError?'':current);
+        connectionError.current='';
       }
       catch (e) {
-        const message = String((e as Error).message);
-        connectionFailure.current = message;
-        setConnection(current => ({...current, check_error:message, assistant_ready:false, busy:false}));
-        setError(message);
+        const message=String((e as Error).message);connectionError.current=message;setError(message);
+        setConnection(current=>({...current,busy:false,verification_failed:true,assistant_ready:false,active_profile:null}));
       }
       finally { connectionRefresh.current = null; }
     })();
@@ -415,7 +418,7 @@ export default function App() {
     try { localStorage.setItem("h3-studio-view", view); } catch { /* Private browsing can disable storage. */ }
   }, [view]);
   useEffect(() => {
-    api("/bootstrap?workspace=studio")
+    api("/bootstrap?workspace=video")
       .then((data) => {
         setToken(data.token);
         ensurePromptTags(data.project);
@@ -426,7 +429,8 @@ export default function App() {
         setAiPersona(data.settings.persona || "universal");
         setSelectedShot(data.project.shots[0]?.id || "");
         setSelectedAsset(data.project.assets[0]?.id || "");
-        init.current = true;
+        init.current = data.projects.length > 0;
+        if(init.current)projectPersistence.current!.acknowledge(data.project);
         bridge.current = createBridge({
           resourceToken: data.resource_token,
           onImport: (payload: any) =>
@@ -460,9 +464,10 @@ export default function App() {
     if (!p || !init.current) return;
     let active = true;
     const draft = JSON.stringify(p);
-    setSaved("Saving…");
+    const alreadySaved = projectPersistence.current!.isSaved(p);
+    setSaved(alreadySaved ? 'Saved locally' : 'Saving…');
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(
+    if(!alreadySaved)saveTimer.current = setTimeout(
       () => {
         const request=queueProjectSave(p);
         request
@@ -538,15 +543,12 @@ export default function App() {
     setHistory((h) => [...h.slice(-11), structuredClone(p)]);
   const checkpointUpdate = (fn: (draft:Project)=>void) => { remember(); update(fn); };
   const restoreLibraryCopy = (source:Project) => run('Opening a saved copy',async()=>{
-    await saveNow();
-    const next=structuredClone(source);
-    next.id=uid(); next.title=(source.title || 'Saved setup')+' · copy';
-    next.workspace='studio'; delete next.story_session_id;
-    delete next.simple_generation;
-    ensurePromptTags(next);
-    bridgeProject.current=''; bridgeSnapshot.current=null;
-    setP(next); setSimpleResult(null);setProposal(null);
-    setSelectedShot(next.shots[0]?.id||'');setSelectedAsset(next.assets[0]?.id||'');
+    await switchStudioProject(async()=>{
+      const next=structuredClone(source);
+      next.id=uid(); next.title=(source.title || 'Saved setup')+' · copy';
+      next.workspace='video'; delete next.story_session_id;delete next.simple_generation;
+      return next;
+    });
     toast('Opened as a new project. The saved setup and previous project are still available.');
   });
   const commit = (next: Project) => {
@@ -555,12 +557,7 @@ export default function App() {
     setP(next);
   };
   const continueProject = (next:Project) => run('Saving this clip and preparing the next',async()=>{
-    await saveNow();
-    ensurePromptTags(next);
-    await queueProjectSave(next);
-    bridgeProject.current=''; bridgeSnapshot.current=null;
-    setP(next);setSimpleResult(null);setProposal(null);setHistory([]);
-    setSelectedShot(next.shots[0]?.id||'');setSelectedAsset(next.assets[0]?.id||'');
+    await switchStudioProject(async()=>next);
     toast('Next clip saved separately. Review its opening and choose Make my prompt.');
     window.scrollTo({top:0,behavior:'smooth'});
   });
@@ -573,11 +570,7 @@ export default function App() {
         validateContinuationAvailability(review.link!,review.source!,catalog);
         const next=createLinkedContinuation(review.source!,review.link!,values);
         ensurePromptTags(next);
-        await saveNow();
-        await queueProjectSave(next);
-        bridgeProject.current='';bridgeSnapshot.current=null;
-        setP(next);setSimpleResult(null);setProposal(null);setCompileResult(null);setHistory([]);
-        setSelectedShot(next.shots[0]?.id||'');setSelectedAsset(next.assets[0]?.id||'');
+        await switchStudioProject(async()=>next);
         setView('simple');closeContinuationReview();
         toast('Continuation saved as a separate clip. Review its action and render settings, then make your prompt.');
         window.scrollTo({top:0,behavior:'smooth'});
@@ -596,46 +589,56 @@ export default function App() {
   const saveNow = async () => {
     clearTimeout(saveTimer.current);
     // Finish an earlier autosave before setting the next active project.
-    if(projectRef.current) {
-      const snapshot=projectRef.current; setSaved('Saving…');
-      try { const result=await queueProjectSave(snapshot); if(projectRef.current===snapshot)setSaved('Saved locally'); return result; }
-      catch(e) { if(projectRef.current===snapshot)setSaved('Not saved'); throw e; }
+    if(projectRef.current && init.current) {
+      const id=projectRef.current.id;setSaved('Saving…');
+      try { const result=await projectPersistence.current!.flush(()=>projectRef.current); if(projectRef.current?.id===id)setSaved('Saved locally'); return result; }
+      catch(e) { if(projectRef.current?.id===id)setSaved('Not saved'); throw e; }
     }
   };
+  const switchStudioProject = async(prepare:()=>Promise<Project>, persist?: (next:Project)=>Promise<unknown>) => {
+    return projectPersistence.current!.transition(()=>projectRef.current, async()=>{
+      const next=await prepare();ensurePromptTags(next);return next;
+    }, next=>{
+      clearTimeout(saveTimer.current);projectRef.current=next;init.current=true;
+      setP(next);setSaved('Saved locally');setSimpleResult(null);setProposal(null);setCompileResult(null);setHistory([]);
+      setSelectedShot(next.shots[0]?.id||'');setSelectedAsset(next.assets[0]?.id||'');
+      bridgeProject.current='';bridgeSnapshot.current=null;setModal('');setStudioScreen('editor');
+    }, saveNow, persist);
+  };
   const openProjects = async () => {
-    setModal('projects'); setProjectSearch(''); setLibraryLoading(true); setError('');
-    try { await saveNow(); setProjects(await api('/projects?workspace=studio')); }
+    setModal(''); setProjectSearch(''); setLibraryLoading(true); setError('');
+    try { await saveNow(); setStudioScreen('projects'); setProjects(await api('/projects?workspace=video')); }
     catch(e) { setError((e as Error).message); }
     finally { setLibraryLoading(false); }
   };
   const duplicateProject = () => run('Duplicating project',async()=>{
-    await saveNow();
-    const next=structuredClone(p);next.id=uid();next.title=(p.title||'Untitled film')+' · copy';next.workspace='studio';
-    delete next.story_session_id;delete next.simple_generation;
-    await queueProjectSave(next);setP(next);setSimpleResult(null);setProposal(null);setModal('');
-    bridgeProject.current='';bridgeSnapshot.current=null;
+    await switchStudioProject(async()=>{
+      const next=structuredClone(projectRef.current!);next.id=uid();next.title=(next.title||'Untitled video')+' · copy';next.workspace='video';
+      delete next.story_session_id;delete next.simple_generation;return next;
+    });
     toast('Opened a separate copy. Your original project is saved.');
   });
-  const loadProject = async (id: string) => {
-    await saveNow();
-    const next = await api("/projects/" + id);
-    setP(next);
-    setSelectedShot(next.shots[0]?.id || "");
-    setSelectedAsset(next.assets[0]?.id || "");
-    setModal("");
-    setProposal(null);
-  };
-  const createNew = () =>
+  const loadProject = (id: string) => run('Opening project',async()=>{
+    const next=await switchStudioProject(()=>api('/projects/'+id),value=>api('/projects/'+value.id+'/activate',{}));
+    toast(`Opened ${next.title || 'your video'}.`);
+  });
+  const createNew = (options?:{title?:string;idea?:string}|React.MouseEvent) =>
     run("Creating project", async () => {
-      await saveNow();
-      const next = await api("/projects/new", {});
-      if (view === "simple") next.profile = "concise";
-      setP(next);
-      setSelectedAsset("");
-      setSelectedShot(next.shots[0].id);
-      setModal("");
-      setProposal(null);
+      const values=options && !('nativeEvent' in options) ? options : {};
+      const next=await switchStudioProject(async()=>{
+        const created=await api('/projects/new',{workspace:'video',...values});
+        if(view==='simple')created.profile='concise';return created;
+      });
+      toast(`Created ${next.title}. Your project is saved locally.`);
     });
+  const importProject = (file:File) => run('Importing project',async()=>{
+    await switchStudioProject(async()=>{
+      const form=new FormData();form.append('file',file);
+      const next=await api('/projects/import?workspace=video',undefined,form);
+      next.workspace='video';delete next.story_session_id;return next;
+    });
+    toast('Project imported and saved in Video.');
+  });
 
   async function replaceReference(id:string,file:File) {
     await run('Replacing photo',async()=>{
@@ -895,7 +898,8 @@ export default function App() {
     if (!bridgeImport) return;
     await run("Importing ComfyUI references", async () => {
       const data = bridgeImport;
-      const next: Project = await api("/projects/new", {});
+      const next: Project = await switchStudioProject(async()=>{
+      const next: Project = await api("/projects/new", {workspace:'video'});
       next.title = "ComfyUI · " + (data.mode || "H3").toUpperCase();
       next.mode = data.mode || "ref2va";
       next.duration = Math.max(4, Math.min(15, Math.round(data.duration || 5)));
@@ -921,10 +925,8 @@ export default function App() {
         const r = data.source.width / data.source.height;
         next.aspect_ratio = r > 1.5 ? "16:9" : r < 0.8 ? "9:16" : "1:1";
       }
-      await saveNow();
-      setP(next);
-      setSelectedShot(next.shots[0].id);
-      setSelectedAsset(next.assets[0]?.id || "");
+      return next;
+      });
       bridgeSnapshot.current = makeBridgeSnapshot(next);
       bridgeProject.current = next.id;
       bridgePending.current?.resolve();
@@ -1086,10 +1088,8 @@ export default function App() {
     }
     next.custom_instructions='Only the NEW action happens now. Do not replay completed actions or previous dialogue. Scene timings describe new footage after any saved motion context.';
     ensurePromptTags(next);
-    await saveNow();
-    setP(next);projectRef.current=next;setSimpleResult(null);setCompileResult(null);setHistory([]);setProposal(null);
-    setSelectedShot(next.shots[0]?.id||'');setSelectedAsset(ending.id);bridgeProject.current='';bridgeSnapshot.current=null;
-    await queueProjectSave(next);
+    await switchStudioProject(async()=>next);
+    setSelectedAsset(ending.id);
     // The assistant already supplied an editable next action. Compile the chosen
     // wording faithfully; another planner pass can change that choice.
     const exact=await generateSimplePrompt(false,false);
@@ -1131,7 +1131,7 @@ export default function App() {
     const result = await api('/ai/prepare', {workspace}, undefined, undefined, {timeoutMs:180_000});
     toast(prepareStatusMessage(result, `${workspace === 'game' ? 'Game' : 'Studio'} assistant prepared.`));
   };
-  const promptModelPicker=<ModelPicker settings={selectedProfile} workspace={workspaceMode} models={connection.lm?.models} online={!!connection.lm?.online} busy={busy||videos.active||connection.busy} stage={connection.stage} activeProfile={connection.active_profile} assistantReady={connection.assistant_ready === true} connectionError={connection.check_error}
+  const promptModelPicker=<ModelPicker settings={selectedProfile} modelPolicy={settings.assistant_model_policy} workspace={workspaceMode} models={connection.lm?.models} online={!!connection.lm?.online} verificationFailed={connection.verification_failed} busy={busy||videos.active||connection.busy} stage={connection.stage} activeProfile={connection.active_profile}
     onRefresh={refresh} onConnections={()=>{void refresh();setModal('connections');}}
     onLoad={()=>run('Preparing the assistant',()=>prepareAssistant())} onChange={changeAssistant}/>;
   const draftSettings = connectionDraft || settings;
@@ -1145,11 +1145,20 @@ export default function App() {
     const savedSettings = await api('/settings',connectionSettingsPatch(draftSettings,connectionWorkspace));
     setSettings(savedSettings);setConnectionDraft(structuredClone(savedSettings));
   };
+  const useReviewPrompt = (prompt: string) => {
+    checkpointUpdate(draft => { draft.story.text = prompt; draft.story.locked = true; });
+    setWorkspaceMode('video'); setStudioScreen('editor'); setView('simple'); setModal('');
+    toast('Review direction added to your idea. Edit it, then choose Prepare prompt.');
+    requestAnimationFrame(() => {
+      (document.getElementById('simple-tab-story') as HTMLButtonElement | null)?.click();
+      document.getElementById('simple-panel-story')?.scrollIntoView({behavior:'smooth',block:'start'});
+    });
+  };
 
   return (
     <div
       className={
-        "studio " + (workspaceMode === "game" ? "workspace-game-active " : "") + (view === "simple" ? "simple-view " : "") + (showAI ? "ai-open " : "") + (showRefs ? "refs-open" : "")
+        "studio " + (workspaceMode === "game" ? "workspace-game-active " : workspaceMode === 'studio' ? 'workspace-film-active ' : studioScreen === 'projects' ? 'workspace-home-active ' : '') + (view === "simple" ? "simple-view " : "") + (showAI ? "ai-open " : "") + (showRefs ? "refs-open" : "")
       }
     >
       <WorkspaceNavigation mode={workspaceMode} onNavigate={setWorkspaceMode}
@@ -1158,25 +1167,28 @@ export default function App() {
         {error && <div className="workspace-feedback-error" role="alert"><AlertCircle size={18}/><span>{error}</span><button type="button" aria-label="Dismiss message" onClick={()=>setError('')}><X size={17}/></button></div>}
         {notice && <div className="workspace-feedback-notice" role="status"><Check size={17}/><span>{notice}</span></div>}
       </div>}
-      <div id="game-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='game'}>{(gameVisited || workspaceMode==='game') && <Suspense fallback={<div className="boot" role="status">Opening Game…</div>}><GameStudio project={p} modelPicker={promptModelPicker} onUploadFiles={async files=>{const assets:Asset[]=[];for(const file of files){const form=new FormData();form.append('file',file);assets.push(await api('/assets',undefined,form));}return assets;}} onConnections={()=>{void refresh();setModal('connections');}} onStudio={()=>setWorkspaceMode('studio')} initialSourceRunId={gameSource} initialSourceKey={gameSourceKey}/></Suspense>}</div>
-      <div id="studio-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='studio'}>
-      <ProductionQueue active={workspaceMode === 'studio'} currentProjectId={p.id} currentProjectTitle={p.title} onSaveCurrent={saveNow} onOpenProject={loadProject}/>
-      {view === "simple" && <SimpleStudio
+      <div id="game-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='game'}>{(gameVisited || workspaceMode==='game') && <Suspense fallback={<div className="boot" role="status">Opening Game…</div>}><GameStudio project={gameProject} modelPicker={promptModelPicker} onUploadFiles={async files=>{const assets:Asset[]=[];for(const file of files){const form=new FormData();form.append('file',file);assets.push(await api('/assets',undefined,form));}return assets;}} onConnections={()=>{void refresh();setModal('connections');}} onStudio={()=>setWorkspaceMode('studio')} initialSourceRunId={gameSource} initialSourceKey={gameSourceKey}/></Suspense>}</div>
+      <div id="studio-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='studio'}><Suspense fallback={<div className="boot" role="status">Opening Film Studio…</div>}><FilmStudio active={workspaceMode==='studio'} onConnections={()=>{void refresh();setModal('connections');}}/></Suspense></div>
+      <div id="video-workspace" tabIndex={-1} className="workspace-pane" hidden={workspaceMode!=='video'}>
+      {studioScreen==='projects' && <ProjectHome projects={projects} currentId={p.id} loading={libraryLoading} busy={!!busy} error={error} onOpen={id=>void loadProject(id)} onNew={()=>setModal('new-project')} onImport={()=>setModal('projects')} onReview={()=>setModal('reviews')} onRefresh={()=>void openProjects()}/>}
+      <div className="video-editor-pane" hidden={studioScreen!=='editor'}>
+      <ProjectBar title={p.title} status={saved} busy={!!busy} onTitle={title=>update(d=>{d.title=title;})} onHome={()=>void openProjects()} onNew={()=>setModal('new-project')} onSave={()=>void run('Saving video',saveNow)} onBackup={()=>setModal('projects')}/>
+      {view === "simple" && <SimpleStudio key={p.id}
         project={p} update={update} checkpointUpdate={checkpointUpdate} onRestore={restoreLibraryCopy} onReplacePhoto={replaceReference} onAddFiles={(files) => addFiles(files)} onGenerate={()=>generateSimplePrompt()} onBuild={()=>generateSimplePrompt(false)}
         busy={busy} renderBusy={videos.active} progress={connection.stage && connection.stage !== "idle" ? connection.stage : busy}
-        error="" notice="" result={shownSimpleResult} currentPrompt={compiled.prompt} resultFresh={simpleResultFresh}
+        error="" notice="" result={shownSimpleResult} currentPrompt={compiled.prompt} resultFresh={simpleResultFresh} promptLoading={!compileFresh && !!p.simple_generation}
         referenceMap={compiled.references}
         onCopy={copyPrompt} onSave={() => compiled.valid && downloadText("h3-prompt.txt", compiled.prompt)}
         onAdvanced={() => { setView("advanced"); setError(""); }}
         onProjects={()=>void openProjects()} savedStatus={saved} onSaveProject={()=>void run("Saving project",saveNow)}
-        onNew={createNew} onConnections={() => { refresh(); setModal("connections"); }} onFiles={() => setModal("files")}
+        onNew={()=>setModal('new-project')} onConnections={() => { refresh(); setModal("connections"); }} onFiles={() => setModal("files")} onReviewVideos={()=>setModal('reviews')}
         onUndo={() => { if (history.length) { setP(history[history.length - 1]); setHistory((h) => h.slice(0, -1)); setSimpleResult(null); } }}
         canUndo={history.length > 0} connectionOnline={!!connection.lm?.online} onSendToComfy={sendToComfy} canReturn={canReturn}
         onContinue={continueProject}
         modelPicker={promptModelPicker}
-        comfyPanel={<><VideoWorkspace project={p} promptReady={simpleResultFresh} busy={busy||videos.submitting} jobs={videos.jobs} currentJob={videos.currentJob}
-          storyId={studioStoryId||undefined} activeEndpointId={studioStory?.id===studioStoryId?studioStory.active_run_id:undefined} storyClips={studioStory?.id===studioStoryId?studioStory.clips:undefined} onBranch={branchVideo} onPlayGame={playGame} onConnections={()=>{void refresh();setModal('connections');}}
-          onSelectJob={videos.onSelectJob} onGenerate={generateVideo} onReroll={rerollVideo} onContinue={continueVideo} onSuggest={suggestVideo} onCombine={combineVideo} onResolve={resolveVideo} onUpdateTake={videos.updateMetadata}
+        comfyPanel={<><VideoWorkspace singleClip project={p} promptReady={simpleResultFresh} busy={busy||videos.submitting} jobs={videos.jobs} currentJob={videos.currentJob}
+          storyId={studioStoryId||undefined} activeEndpointId={studioStory?.id===studioStoryId?studioStory.active_run_id:undefined} storyClips={studioStory?.id===studioStoryId?studioStory.clips:undefined} onBranch={branchVideo} onConnections={()=>{void refresh();setModal('connections');}}
+          onSelectJob={videos.onSelectJob} onGenerate={generateVideo} onReroll={rerollVideo} onContinue={continueVideo} onSuggest={suggestVideo} onCombine={combineVideo} onResolve={resolveVideo} onUpdateTake={videos.updateMetadata} onUseReviewPrompt={useReviewPrompt}
           />{videos.error&&<p className="comfy-error" role="alert">{videos.error}</p>}</>}
         settingsPanel={<ComfyPanel project={p} prompt={compiled.prompt} ready={simpleResultFresh} busy={!!busy||videos.active}
           onSettings={value=>setP(current=>current?{...current,comfy_render:value}:current)}
@@ -1209,6 +1221,7 @@ export default function App() {
         </div>
         <div className="top-actions">
           <button className="quiet" onClick={() => { setView("simple"); setError(""); }}>Simple view</button>
+          <button className="quiet" onClick={()=>setModal('reviews')}><Check size={15}/> Review videos</button>
           <button
             className="reference-toggle quiet"
             aria-label="References"
@@ -1265,7 +1278,7 @@ export default function App() {
           >
             <span
               className={
-                "status-dot " + (connection.lm?.online && !connection.check_error ? "online" : "")
+                "status-dot " + (connection.lm?.online ? "online" : "")
               }
             />
             {connection.lm?.online ? "LM Studio" : "Connect LM Studio"}
@@ -1273,6 +1286,8 @@ export default function App() {
           </button>
         </div>
       </header>
+      <ProductionQueue active={workspaceMode==='video' && view==='advanced' && studioScreen==='editor'}
+        currentProjectId={p.id} currentProjectTitle={p.title} onSaveCurrent={saveNow} onOpenProject={loadProject}/>
       <div className="projectbar">
         <div className="mode-group">
           <span className="eyebrow">GENERATION</span>
@@ -2665,7 +2680,8 @@ export default function App() {
       </div>
       </>}
       </div>
-      {workspaceMode === "studio" && view === "simple" && bridgeImport && <div className="banner bridge-banner">
+      </div>
+      {workspaceMode === "video" && view === "simple" && bridgeImport && <div className="banner bridge-banner">
         <span>ComfyUI sent photos and a prompt. Open them as a new project?</span>
         <button onClick={applyBridgeImport} disabled={!!busy}>Open from ComfyUI</button>
         <button onClick={() => { bridgePending.current?.reject(new Error("Import dismissed.")); bridgePending.current = null; setBridgeImport(null); }}>Dismiss</button>
@@ -2674,11 +2690,12 @@ export default function App() {
         onClose={closeContinuationReview}
         onRetry={()=>{if(continuationReview.link)void loadContinuationReview(continuationReview.link);}}
         onCreate={confirmLinkedContinuation} />}
-      {modal === 'help' && <Modal title="Your creative workspace" subtitle="Studio for directing. Game for playing." onClose={()=>setModal('')}>
+      {modal === 'help' && <Modal title="Three ways to create" subtitle="Each workspace keeps its own saved work." onClose={()=>setModal('')}>
         <div className="workspace-help">
-          <article><h3>Studio · Create a film</h3><ol><li>Add references in Photos, or start with a written idea.</li><li>Write your scene in Story &amp; Dialogue; choose its length and quality in Settings.</li><li>Generate, compare takes, then continue from the accepted ending.</li></ol><p>Projects save locally. Saved projects includes search, duplicate, import and export with images.</p><button onClick={()=>{setWorkspaceMode('studio');setModal('');}}>Open Studio</button></article>
-          <article><h3>Game · Play a character</h3><ol><li>Start a new game or select one of your saved stories.</li><li>Describe a move, speak, or use the movement and interaction controls.</li><li>Use Scenes to replay or save your story; History shows what happened.</li></ol><p>Game keeps its own cast, settings and saves. Use Play from here on a Studio take to deliberately start a game from it.</p><button onClick={()=>{setWorkspaceMode('game');setModal('');}}>Open Game</button></article>
-          <article><h3>Local services &amp; keyboard</h3><p>LM Studio writes and inspects scenes. ComfyUI renders them. Check Connections when either service is unavailable. GPU work starts when you request generation.</p><p>Use Tab to move through controls, arrow keys within editor tabs, and Escape to close dialogs. Browser Back and Forward switch workspaces.</p><button onClick={()=>{void refresh();setModal('connections');}}>Check connections</button></article>
+          <article><h3>Video · One clip up to 15 seconds</h3><p>Open My videos, start a named video or resume saved work. Write your idea, prepare its prompt, make the video and review the take. Your edits save automatically. Backup & copy creates a portable backup or separate duplicate.</p><button onClick={()=>{setWorkspaceMode('video');setModal('');}}>Open Video</button></article>
+          <article><h3>Studio · A film from 1 to 10 minutes</h3><p>Create a named film and choose its length. Write a storyboard yourself or let Qwen 27B plan it. Edit each 15-second clip, create the render queue, then explicitly start rendering. Review the clips, adjust export trims, and download one film or a ZIP of clips.</p><button onClick={()=>{setWorkspaceMode('studio');setModal('');}}>Open Studio</button></article>
+          <article><h3>Game · An interactive story</h3><p>Start or resume a separate game. Choose your character, describe a move or speak, and watch the next scene. Scenes and history stay with that game. Switching tabs does not turn a video or film into a game.</p><button onClick={()=>{setWorkspaceMode('game');setModal('');}}>Open Game</button></article>
+          <article><h3>Saving, local services & keyboard</h3><p>All changes saved means the latest edits reached this computer's local storage. Not saved means keep the app open and retry. Download backups before moving to another computer. Qwen 3.8 27B in LM Studio writes and reviews; ComfyUI renders. Connections shows service readiness.</p><p>Use Tab for controls, arrow keys within editor tabs, and Escape to close dialogs. Browser Back and Forward switch workspaces.</p><button onClick={()=>{void refresh();setModal('connections');}}>Check connections</button></article>
         </div>
       </Modal>}
       {modal === "tools" && (
@@ -2731,6 +2748,7 @@ export default function App() {
           </button>
         </Modal>
       )}
+      {modal === 'reviews' && <Suspense fallback={<div role="status">Opening video review…</div>}><ReviewLibrary active onClose={()=>setModal('')} onUsePrompt={useReviewPrompt}/></Suspense>}
       {modal === "connections" && (
         <Modal
           title="Connections & GPU"
@@ -2740,16 +2758,16 @@ export default function App() {
           <div className="connection-status">
             <span
               className={
-                "status-dot " + (connection.lm?.online && !connection.check_error ? "online" : "")
+                "status-dot " + (connection.lm?.online ? "online" : "")
               }
             />
             <strong>
-              {connection.check_error ? "Connection check unavailable" : connection.lm?.online
+              {connection.lm?.online
                 ? "LM Studio is online"
                 : "LM Studio is offline"}
             </strong>
             <button className="text-button" onClick={refresh}>
-              <RefreshCw size={13} /> {connection.check_error || !connection.lm?.online ? 'Reconnect' : 'Refresh'}
+              <RefreshCw size={13} /> Refresh
             </button>
           </div>
           {error && <p className="project-modal-error" role="alert">{error}</p>}
@@ -2759,12 +2777,12 @@ export default function App() {
             value={draftSettings.lm_url}
             onChange={(v: string) => setConnectionDraft({ ...draftSettings, lm_url: v })}
           />
-          <p className="callout">Editing the {connectionWorkspace === 'game' ? 'Game' : 'Studio'} assistant. Each workspace keeps its own model, context and memory mode. Changes take effect when saved.</p>
+          <p className="callout">Editing the {connectionWorkspace === 'game' ? 'Game' : 'Studio'} assistant. {settings.assistant_model_policy === 'qwen3.8-27b' ? 'Qwen 3.8 27B is required for prompt writing, Game and video review. Each workspace keeps its context setting.' : 'Each workspace keeps its own model, context and memory mode.'} Changes take effect when saved.</p>
           <Select
             label="Prompt assistant model"
             value={draftProfile.model}
             onChange={(v: string) => changeDraftProfile({model:v})}
-            options={modelPickerOptions(connection.lm?.models,draftProfile.model).map(model=>[model.id,model.label])}
+            options={modelPickerOptions(connection.lm?.models,draftProfile.model).filter(model=>settings.assistant_model_policy!=='qwen3.8-27b'||/qwen3[._-]?8.*27b/i.test(model.id)).map(model=>[model.id,model.label])}
           />
           <Select
             label="Context length"
@@ -2778,7 +2796,7 @@ export default function App() {
             onChange={(v:string)=>changeDraftProfile({ai_memory_mode:v as AssistantProfile['ai_memory_mode']})}
             options={[
               ['exclusive','GPU · automatic H3 handoff'],
-              ...((draftProfile.ai_memory_mode !== 'exclusive' || residentModelOptions(connection.lm?.models).some(model=>model.id===draftProfile.model)) ? [['resident_cpu','CPU · keep ready with H3']] : []),
+              ...((settings.assistant_model_policy !== 'qwen3.8-27b' && (draftProfile.ai_memory_mode !== 'exclusive' || residentModelOptions(connection.lm?.models).some(model=>model.id===draftProfile.model))) ? [['resident_cpu','CPU · keep ready with H3']] : []),
             ]}
           />
           <p className="callout">
@@ -2854,7 +2872,7 @@ export default function App() {
             >
               Prepare H3
             </button>
-            <button type="button" className="quiet" onClick={()=>setModal('')}>Cancel</button>
+            <button type="button" className="quiet" onClick={()=>setModal('')}>Close</button>
           </div>
         </Modal>
       )}
@@ -2867,76 +2885,19 @@ export default function App() {
           <FilesOutputs />
         </Modal>
       )}
-      {modal === "projects" && (
-        <Modal
-          title="Studio projects"
-          subtitle="Your films and scene drafts. Saved games are in the Game workspace."
-          onClose={() => setModal("")}
-        >
-          <button className="quiet" onClick={() => setModal("files")}>
-            <FolderOpen size={14} /> Files & outputs
-          </button>
-          <label className="field project-library-search"><span>Find a project</span><input type="search" value={projectSearch} onChange={event=>setProjectSearch(event.target.value)} placeholder="Search by name or video mode"/></label>
-          {error && <p className="project-modal-error" role="alert">{error} <button onClick={()=>void openProjects()}>Try again</button></p>}
-          <p className="project-library-count" role="status">{libraryLoading?'Loading Studio projects…':`${projects.length} Studio project${projects.length===1?'':'s'} · saved locally`}</p>
-          <div className="project-list" aria-busy={libraryLoading}>
-            {projects.filter(item=>`${item.title} ${item.mode}`.toLowerCase().includes(projectSearch.toLowerCase())).map((item) => (
-              <button key={item.id} disabled={!!busy || libraryLoading} aria-current={item.id===p.id ? true : undefined} onClick={() => void run('Opening project',()=>loadProject(item.id))}>
-                <Clapperboard size={17} />
-                <span>
-                  <strong>{item.title}</strong>
-                  <small>
-                    {String(item.mode || "").toUpperCase()} · {item.duration}s {item.id===p.id ? " · Current project" : ""}
-                  </small>
-                </span>
-                <ArrowUpRight size={14} />
-              </button>
-            ))}
-            {!libraryLoading && !projects.filter(item=>`${item.title} ${item.mode}`.toLowerCase().includes(projectSearch.toLowerCase())).length && <p className="help">{projectSearch?'No projects match this search. Try another name.':'Your first Studio project will appear here as you edit.'}</p>}
-          </div>
-          <input
-            ref={projectInput}
-            hidden
-            type="file"
-            accept=".zip,.json"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file)
-                run("Importing project", async () => {
-                  const form = new FormData();
-                  form.append("file", file);
-                  await saveNow();
-                  const next = await api("/projects/import?workspace=studio", undefined, form);
-                  next.workspace='studio';delete next.story_session_id;
-                  await queueProjectSave(next);setP(next);
-                  setSelectedShot(next.shots[0]?.id);
-                  setSelectedAsset(next.assets[0]?.id || '');setModal("");
-                  toast("Project imported into Studio.");
-                });
-              e.target.value = "";
-            }}
-          />
-          <div className="modal-actions">
-            <button className="primary" onClick={createNew} disabled={!!busy || libraryLoading}>
-              <Plus size={14} /> New project
-            </button>
-            <button disabled={!!busy || libraryLoading} onClick={() => projectInput.current?.click()}>
-              <Upload size={14} /> Import project
-            </button>
-            <button disabled={!!busy || libraryLoading} onClick={duplicateProject}><Copy size={14}/> Duplicate current</button>
-            <button disabled={!!busy || libraryLoading}
-              onClick={() =>
-                run("Exporting project", async () => {
-                  await saveNow();
-                  window.location.href = "/api/projects/" + p.id + "/export";
-                })
-              }
-            >
-              <Download size={14} /> Export with images
-            </button>
-          </div>
-        </Modal>
-      )}
+      {modal === 'new-project' && <Modal title="New video" subtitle="Give this work a name so it is easy to find later." onClose={()=>{if(!busy)setModal('');}}>
+        <NewProjectForm busy={!!busy} onCreate={value=>void createNew(value)} onCancel={()=>setModal('')}/>
+        {error && <p role="alert" className="project-modal-error">{error}</p>}
+      </Modal>}
+      {modal === "projects" && <Modal title="Backup & copy" subtitle={`Current video: ${p.title}. Edits save automatically; a backup is a portable copy.`} onClose={()=>setModal('')}>
+        <div className="workspace-help">
+          <article><h3>Import a video backup</h3><p>Open a .zip or .json project as a separate saved video.</p><button disabled={!!busy} onClick={()=>projectInput.current?.click()}><Upload size={16}/>Choose backup file</button></article>
+          <article><h3>Keep a copy of this video</h3><p>Duplicate creates separate work in My videos. Download backup includes the project and reference photos.</p><div className="modal-actions"><button disabled={!!busy} onClick={duplicateProject}><Copy size={16}/>Duplicate video</button><button disabled={!!busy} onClick={()=>void run('Downloading backup',async()=>{await saveNow();window.location.href='/api/projects/'+p.id+'/export';})}><Download size={16}/>Download backup</button></div></article>
+          <button onClick={()=>setModal('files')}><FolderOpen size={16}/>Open local output folders</button>
+        </div>
+        {error && <p role="alert" className="project-modal-error">{error}</p>}
+        <input ref={projectInput} hidden type="file" accept=".zip,.json" onChange={e=>{const file=e.target.files?.[0];if(file)void importProject(file);e.target.value='';}}/>
+      </Modal>}
       {modal === "proposal" && proposal && (
         <Modal
           wide
