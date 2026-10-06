@@ -32,8 +32,8 @@ def shot(duration=5):
             'dialogue': [], 'sound': '', 'transition': 'continuous'}
 
 def project_workspace(value):
-    if value not in ('studio', 'game'):
-        raise ValueError('Choose Studio or Game as the workspace.')
+    if value not in ('video', 'studio', 'game'):
+        raise ValueError('Choose Video, Studio or Game as the workspace.')
     return value
 
 

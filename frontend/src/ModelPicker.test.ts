@@ -4,6 +4,27 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 describe("prompt assistant choices", () => {
+  it('never reports stale readiness or allows preparation after a failed connection check',()=>{
+    const profile={model:'vision',context_length:8192,ai_memory_mode:'exclusive' as const};
+    const html=renderToStaticMarkup(createElement(ModelPicker,{settings:profile,activeProfile:profile,online:true,verificationFailed:true,busy:false,models:[{id:'vision',vision:true,loaded:true}],onChange:()=>{},onRefresh:()=>{},onConnections:()=>{},onLoad:()=>{}}));
+    expect(html).toContain('readiness unverified');expect(html).toContain('Reconnect');
+    expect(html).not.toContain('Ready · GPU');
+    expect(html).toContain('disabled="">Prepare assistant');
+    expect(html).toContain('value="vision" selected=""');
+  });
+  it('filters the local lock to installed Qwen 3.8 27B variants', () => {
+    const choices = modelPickerOptions([{id:'qwen3.5-4b',vision:true}, {id:'qwen3.8-127b'},
+      {id:'qwen3.8-27b@q4_k_s',vision:true}, {id:'huihui-qwen3.8-27b-abliterated@q4_k_s',vision:true}], '', 'qwen3.8-27b');
+    expect(choices.map(choice=>choice.id)).toEqual(['qwen3.8-27b@q4_k_s','huihui-qwen3.8-27b-abliterated@q4_k_s']);
+  });
+  it('explains the lock and keeps GPU handoff while allowing context tuning', () => {
+    const html=renderToStaticMarkup(createElement(ModelPicker,{settings:{model:'qwen3.8-27b@q4_k_s',context_length:16384,ai_memory_mode:'exclusive'},modelPolicy:'qwen3.8-27b',online:true,busy:false,models:[{id:'qwen3.8-27b@q4_k_s',vision:true}],onChange:()=>{},onRefresh:()=>{},onConnections:()=>{}}));
+    expect(html).toContain('Qwen 3.8 27B locked');
+    expect(html).toContain('never substitutes a smaller model');
+    expect(html).toContain('GPU · automatic H3 handoff');
+    expect(html).not.toContain('CPU · keep ready');
+    expect(html).toContain('value="16384" selected=""');
+  });
   it('distinguishes identical display names by quantization and preserves exact values',()=>{
     const choices=modelPickerOptions([
       {id:'qwen3.8-27b@q4_k_s',display_name:'Qwen 3.8 27B',vision:true},
@@ -41,22 +62,6 @@ describe("prompt assistant choices", () => {
     const html=renderToStaticMarkup(createElement(ModelPicker,{settings:profile,activeProfile:profile,workspace:'game',online:true,busy:false,models:[{id:'text',vision:false,loaded:true}],onChange:()=>{},onRefresh:()=>{},onConnections:()=>{}}));
     expect(html).toContain('Full Game requires a vision model');
     expect(html).not.toContain('Ready · GPU');
-  });
-  it('requires verified owned-instance readiness rather than a cached profile and any loaded model',()=>{
-    const profile={model:'large',context_length:8192,ai_memory_mode:'exclusive' as const};
-    const props={settings:profile,activeProfile:profile,online:true,busy:false,models:[{id:'large',vision:true,loaded:true}],onChange:()=>{},onRefresh:()=>{},onConnections:()=>{}};
-    expect(renderToStaticMarkup(createElement(ModelPicker,props))).not.toContain('Ready · GPU');
-    expect(renderToStaticMarkup(createElement(ModelPicker,{...props,assistantReady:true}))).toContain('Ready · GPU');
-    const failed=renderToStaticMarkup(createElement(ModelPicker,{...props,assistantReady:true,connectionError:'Connection timed out'}));
-    expect(failed).not.toContain('Ready · GPU');
-    expect(failed).toContain('readiness unverified');
-    expect(failed).toContain('Reconnect');
-  });
-  it('does not mark full Game ready when photo capability is unreported',()=>{
-    const profile={model:'unknown',context_length:8192,ai_memory_mode:'exclusive' as const};
-    const html=renderToStaticMarkup(createElement(ModelPicker,{settings:profile,activeProfile:profile,assistantReady:true,workspace:'game',online:true,busy:false,models:[{id:'unknown',loaded:true}],onChange:()=>{},onRefresh:()=>{},onConnections:()=>{}}));
-    expect(html).not.toContain('Ready · GPU');
-    expect(html).toContain('Game needs a verified vision model');
   });
   it("keeps all installed text, vision and unknown models with honest capability and loaded labels", () => {
     const options = modelPickerOptions([

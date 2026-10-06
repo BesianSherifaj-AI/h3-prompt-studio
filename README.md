@@ -1,8 +1,8 @@
 # H3 Prompt Studio
 
-A local workspace for turning reference photos and a plain-language idea into MiniMax H3 video. **Studio** gives you direct control of shots, references and dialogue. **Game** lets you play a character: describe what you do or say, let the local assistant respond, and watch that response as the next video scene.
+A local creative app with three separate workspaces: **Video** creates and reviews one clip up to 15 seconds; **Studio** directs a 1–10 minute film from connected 15-second clips; **Game** runs an interactive story with its own character and world state.
 
-Version **1.6.1** adds saved production downloads and validated crop cuts for film and clip exports. **Studio** and **Game** have their own addresses, projects and navigation. Open `/studio` to direct videos or `/game` to play a saved story. Switch workspaces without replacing your Studio draft, use the browser's Back and Forward buttons, and find playback and film export in Game's **Scenes** view on desktop or mobile. LM Studio handles requested vision and creative writing; ComfyUI generates the video.
+Version **1.7.0** adds named project creation, a clear saved-work home, explicit save status, a simpler responsive editor and a dedicated film storyboard with serial rendering, take review and final export. Qwen 3.8 **27B** in LM Studio writes and inspects; ComfyUI generates the footage. [Read the workspace and saving guide](docs/WORKSPACES.md).
 
 **[Game scene and movement guide](docs/GAME_SCENE_MOVEMENT.md)** · **[Scene continuity](docs/SCENE_CONTINUITY.md)** · **[Research: H3 and 2025–2026 methods](docs/H3_SCENE_CONTROL_RESEARCH.md)** · **[Workspace validation](docs/WORKSPACE_SEPARATION_VALIDATION.md)** · **[Scene validation](docs/SCENE_CONTINUITY_VALIDATION.md)** · **[Changelog](CHANGELOG.md)**
 
@@ -24,31 +24,27 @@ The showreel combines clearly labeled captures of the working app with real gene
 
 Studio now includes **Production queue**. Queue saved projects, inspect individual receipts and videos, stop future work or explicitly resume after a restart. The API also supports optional Z-Image first frames, generated before the video phase to reduce model switching. Export a completed batch as a joined film or a ZIP of individually trimmed clips. Rendering success is separate from creative approval; review motion, identity and sound before publishing. See [production workflow](docs/PRODUCTION.md).
 
-In a completed batch, open **Trim timing** and set each take's **In** and **Out** points in original-video seconds. Export film or clips to save the selected ranges; video and audio follow the same cuts, aligned to 24 fps. The saved export records its timing and duration. Existing crop edits are retained, with crop cut times still relative to the original take. Source videos remain unchanged.
-
-## Create and edit keyframes
-
-Open **Studio → Photos → Create or edit a keyframe**. Choose an installed Z-Image model for a new image, or explicitly select **MageFlow · edit from references** and one to four existing project images. Preview the generated result before adding it as a first frame, last frame, or reference image. Image requests retain their identifiers across refresh; an uncertain submission is checked rather than automatically submitted again.
-
-Local Mage editing requires `mage_flow_edit_turbo_int8_convrot.safetensors`, `qwen3vl_4b_bf16.safetensors`, `mage_flow_vae_bf16.safetensors`, and ComfyUI's native `TextEncodeMageFlowEdit` node. Studio checks availability without downloading models. It uses the [official four-step Euler/simple recipe](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_mage_flow_edit_turbo_int8.json), CFG 1, with dimensions from 512 to 2048 in multiples of 16. Selected reference files are validated, copied into the job, and checked by SHA256 before submission. Generated identity, geometry, and motion still require visual review.
-
 ## What you can do
 
-- Keep Studio projects separate from Game sessions, with independent resume choices and direct links to each workspace.
-- Search your Studio project library, duplicate a project, import a portable backup, or export your work with its reference images. Save status reports whether your latest changes were saved.
+- Write precise opening/action/ending direction with the guided prompt writer and editable scene presets.
+- Review imported local videos and generated takes, save verdicts and quality notes, and ask Qwen 3.8 27B for time-linked frame evidence and a repair prompt. See [local review guide](docs/LOCAL_VIDEO_REVIEW.md).
+
+- Keep Video projects, Studio films and Game sessions separate, with independent resume choices and direct links to each workspace.
+- Search saved videos, duplicate a project, import a portable backup, or export your work with its reference images. Save status reports whether your latest changes were saved.
+- Plan a 1–10 minute film in Studio, edit its four-to-forty scenes, freeze a render queue, review each take and export the complete film.
 - Recover unavailable saved videos with **Retry playback** and **Open Connections**. The player explains when the original ComfyUI server or video is unavailable.
 - Assign faces, clothes, props, places, palettes, and styles to named characters. Reorder or replace images while keeping their tags and assignments.
 - Write exact dialogue by speaker. Give each scene its own duration, framing, camera movement, transition, and ending.
 - Direct each visible character's starting pose, action or hold, and ending. Track important props by stable identity, quantity, appearance and placement. Opening the continuity editor and inventory requires no model call.
-- Keep the Studio editor beside the video, with **Photos**, **Story & Dialogue**, and **Settings** tabs.
+- Keep the Video editor beside playback, with **Write**, **Photos · optional**, and **Settings** tabs; detailed authoring tools remain available under **More tools**.
 - Generate a fresh video or **Try another take** from an existing take's exact prompt and settings.
-- **Continue from this ending** uses the active story endpoint, its saved motion, actual final frame and completed history. Browsing an older take does not move that endpoint; choose **Branch from this preview** to start another path.
+- The advanced Video editor's **Continue from this ending** uses the active story endpoint, its saved motion, actual final frame and completed history. Browsing an older take does not move that endpoint; choose **Branch from this preview** to start another path.
 - In Game, write a move or choose one of three suggested player actions. The assistant writes the other characters' actions and speaker-bound dialogue. Responses render automatically by default; optional review lets you edit them first.
 - Select an inspected person, door or object beside the video, then approach it or talk. New games remember the player from their opening; **Change character** offers an explicit correction. Basic arrows use direct movement instructions; old scene positions are labelled until you request a fresh inspection.
 - Generate needed character, outfit, prop or location references with an installed Z-Image-Turbo model. Existing identities and reference tags are reused; new visual elements use an explicit scene cut.
 - Switch between the latest scene and the whole accepted story. Sequential playback needs no ComfyUI join job. Save the active branch as one film; compatible legacy continuation chains can still use **Combine clips**.
 - Use named takes, favorites, side-by-side comparison, saved setups, and portable project ZIPs with references.
-- Save a separate LM Studio model, context, and CPU/GPU choice for Studio and Game. GPU hand-off lets larger assistants and H3 take turns; compatible vision models up to 8 GB can use verified CPU placement alongside H3. See [assistant profiles](docs/ASSISTANT_PROFILES.md).
+- Video and Studio share one local Qwen 3.8 27B profile; Game keeps its own model/context settings. Choose an installed 27B variant by its exact key; GPU hand-off lets the assistant and H3 take turns. See [assistant profiles](docs/ASSISTANT_PROFILES.md).
 - Sketch a guide or plan simple movement, then add it as a reference or scene instruction.
 
 No cloud account is required by this app. Reference photos, prompt drafts, stories and projects remain in the configured local data folder; the app sends them to the local LM Studio and ComfyUI services you configure.
@@ -64,34 +60,34 @@ powershell -ExecutionPolicy Bypass -File .\Setup.ps1
 powershell -ExecutionPolicy Bypass -File .\Launch.ps1
 ```
 
-Setup creates a separate Python 3.12 environment and builds the frontend. Launch opens [localhost:8766](http://127.0.0.1:8766); it does not start a render or load a model. Keep the folder after setup: it also holds your private project data.
+Setup creates a separate Python 3.12 environment and builds the frontend. After setup, double-click **Launch.cmd** to open [localhost:8766](http://127.0.0.1:8766). Launch also starts LM Studio's loopback server when its installed CLI is available and the server is offline. It does not start a render or load a model. Keep the folder after setup: it also holds your private project data. Use `Launch.ps1 -NoBrowser` to start without opening the browser or `-SkipLMStudio` to manage the LM Studio server yourself.
 
-1. Start the local server in [LM Studio](https://lmstudio.ai/). In **Settings → Prompt assistant**, refresh and choose an installed model. Choose a model marked **Reads photos** for image analysis. No particular prompt model is required or downloaded automatically.
+1. Install Qwen 3.8 **27B** in [LM Studio](https://lmstudio.ai/) if it is not already installed. The local launcher locks all assistant operations to this family, with `qwen3.8-27b@q4_k_s` as the initial exact key. In **Connection**, refresh and select another installed 27B variant if necessary. Choose a variant marked **Reads photos** for video frame review and Game inspection. The app never downloads models or substitutes a smaller model. Select **Prepare assistant** to verify the saved context and GPU placement before using AI.
 2. Open ComfyUI with the H3 runtime described in [ComfyUI setup](COMFY_BRIDGE_SETUP.md). In **Connection**, keep only the local ComfyUI addresses you intend to use. The defaults cover standard ComfyUI (`8188`), Desktop (`8000`), and an alternate instance (`8010`). The app does not install ComfyUI, H3 models, LoRAs, or attention kernels.
-3. Add a few photos, assign their roles, write your idea, and start with **0.3 MP / 5 seconds**. Select **Build without AI** for a deterministic prompt using your own descriptions, or **Make my prompt** to have the selected assistant improve it.
+3. Open **Video**, start a named project, and begin with **0.3 MP / 5 seconds**. Write your idea, then select **Prepare prompt**. Photos and detailed camera controls are optional. Manual prompt building is available under the optional controls.
 
 The application also uses ordinary Python and Node tooling on other platforms, but the supplied launchers and GPU hand-off have been tested on Windows with an NVIDIA RTX 4090. A fresh macOS/Linux GPU installation has not been verified.
 
-## Use Studio
+## Create a video or film
 
-1. Open **Studio** at [localhost:8766/studio](http://127.0.0.1:8766/studio). Create a project or find one in the searchable project library. Add photos and name each person. Use **Clothes → Worn by** and **Object → Starts with** to make ownership explicit.
-2. Enter a short action. Use **Scenes & spoken words** to add cuts, camera choices, and exact speech.
-3. Select **Generate video**. The assistant prepares the prompt if needed, then H3 renders. Review the result in **Video**.
-4. Select **Try another take** for another version, or **Continue from this ending** for the next event. Choose an unchanged suggestion to render it, or write your own direction for the assistant to develop into actions and dialogue.
-5. Use **Whole story** to play the accepted scenes in order. Preview older takes freely; **Branch from this preview** deliberately changes the story path. The separate-scene planner remains an Advanced authoring tool.
+Open **Video** at [localhost:8766/video](http://127.0.0.1:8766/video) for one clip. Start a named video or resume work from **My videos**. Write your idea, choose up to 15 seconds, select **Prepare prompt**, and generate/review the take. Edits save automatically; **Backup & copy** provides duplication, import and portable export.
+
+Open **Studio** at [localhost:8766/studio](http://127.0.0.1:8766/studio) for a film. Name it, choose 1–10 minutes, and plan its storyboard with Qwen 27B or write each clip yourself. Edit/reorder scenes, share reference photos and continuity notes, then **Create render queue**. Press **Start batch** to render. Review footage before using **Export film** or **Export clips ZIP**; optional trims refine delivery. Saving, planning and creating a queue never start rendering.
+
+Old standalone Studio projects appear in Video. Existing files are preserved. Game keeps its own sessions. See [the full guide](docs/WORKSPACES.md) for saving, workspaces and the distinction between planned direction and approved footage.
 
 The 0.3 MP preset is 736 × 416 in landscape. Quick drafts use a compatible four-step recipe; the quality preset uses eight steps. Those labels are practical comparison presets, not promises of fidelity. Actual timing depends on your hardware, prompt, reference count, model cache, and duration. See [workflow details](COMFY_FLOW.md) and [creative tools](CREATIVE_TOOLS.md).
 
 ## Play a story in Game
 
-1. Open **Game** at [localhost:8766/game](http://127.0.0.1:8766/game), resume a saved game or enter a premise and choose the character you play. Start from a Studio ending with **Play from here**, or begin a new story. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. **Create extra reference images** is off by default; enable it when you want the assistant to request separate reference images. That option requires an available image generator and adds a generation step. Existing references remain usable with it off.
+1. Open **Game** at [localhost:8766/game](http://127.0.0.1:8766/game), resume a saved game or enter a premise and choose the character you play. Video and Studio drafts are separate from Game. Reference photos are optional: a text-only premise can establish a location, nearby objects and new characters directly. **Create extra reference images** is off by default; enable it when you want the assistant to request separate reference images. That option requires an available image generator and adds a generation step. Existing references remain usable with it off.
 2. New games default to **2D pixel art / 0.2 MP / three seconds / eight steps**. Landscape is 608 × 320; a fresh clip has 73 frames (3.04 seconds). Change style, quality, duration and viewpoint freely in the editor. Existing games retain their saved settings. Turn on **Review before rendering** to inspect the response before rendering.
 3. Write a move such as `I look at the note and ask what it means.` Put exact spoken words in double quotes, for example `I say "Who sent this?"`. A response that changes quoted player speech is rejected before rendering.
 4. Your player is established during the opening and remembered. If an older game has no saved player appearance, pressing Move opens **Who are you playing?** with the current picture and automatically finds people. Pick one to continue, or describe your character instead. **In this frame** provides other visible targets; visible objects are separate from saved inventory.
 5. Basic directional arrows prepare movement directly from an accepted ending without a language-model call. Other item actions, dialogue, combat and situations governed by custom rules retain their appropriate planning path. Creative endings are inspected; basic movement endings are marked **not inspected**, with earlier positions shown as stale. Review the footage and refresh the scene inventory when needed.
 6. Open **Scenes** to watch **Latest scene** or **Whole story**, inspect previous takes, and save the active branch as a film. This view is available on narrow screens too. A reroll replaces the current take within that turn; it does not append the same event twice. Compatible saved views can guide a return to an earlier position without restoring old inventory or character state.
 
-The workspace switcher and the browser's Back and Forward controls move between Studio and Game. Each workspace keeps its own selection. **Connections** and **Help** are shared, so service setup and usage guidance stay available from either workspace. Game's interface loads as a separate bundle when first opened; returning to Studio preserves the mounted game's state.
+The workspace switcher and the browser's Back and Forward controls move between Video, Studio and Game. Each workspace keeps its own selection. **Connections** and **Help** are shared, so service setup and usage guidance stay available from every workspace. Returning to a workspace preserves its mounted state.
 
 The vision assistant distinguishes intended actions from what it sees in the final frame and records uncertainties. It cannot verify speech or lip sync from an image. Object ownership, handoffs and character consistency can still drift; review the video before building a long story on a mistaken result.
 
@@ -123,7 +119,7 @@ models/vae/ae.safetensors
 
 The optional FP8 file belongs in `models/diffusion_models/` too. The generator checks that the model, encoder, VAE and required nodes exist together on a configured ComfyUI instance. New reference images default to 512 × 512, eight steps and CFG 1. Missing requirements appear in Game's **New scene images** settings. The app does not download these model files.
 
-The assistant, image model and H3 use the existing automatic GPU hand-off. Larger assistants are unloaded before ComfyUI rendering, and ComfyUI releases its models when the assistant needs the GPU. A selected small resident assistant is a separate memory option. Opening settings or reading saved story state does not start generation.
+The assistant, image model and H3 use the existing automatic GPU hand-off. Qwen 3.8 27B is unloaded before ComfyUI rendering, and ComfyUI releases its models when the assistant needs the GPU. The local 27B lock disables CPU residency. Opening settings or reading saved story state does not start generation.
 
 ## Continue, recover and measure duration
 

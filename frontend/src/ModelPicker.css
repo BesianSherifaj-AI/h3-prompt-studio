@@ -34,6 +34,7 @@
 }
 .simple-model-controls button { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; min-height: 37px; }
 .simple-model-help { margin: 9px 0 4px; color: var(--muted, #bec9d8); font-size: 12px; line-height: 1.5; }
+.simple-model-lock { margin: 8px 0 0; padding: 8px 10px; border-radius: 7px; color: #b9efd8; background: #16312a; font-size: 12px; line-height: 1.5; }
 .simple-model-handoff { display: block; color: var(--muted, #a7b6ca); font-size: 11px; line-height: 1.5; }
 .simple-model-key{display:block;margin-top:6px;color:var(--muted,#a7b6ca);font-size:11px;line-height:1.4;overflow-wrap:anywhere}.simple-model-key code{font-size:inherit;color:inherit}
 .simple-model-resident { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
@@ -52,8 +53,9 @@
   .game-assistant-strip .simple-model-heading{grid-column:1/-1;grid-row:1}
   .game-assistant-strip .simple-model-controls{grid-column:1;grid-row:2}
   .game-assistant-strip .simple-model-key{grid-column:1;grid-row:3}
+  .game-assistant-strip .simple-model-lock{grid-column:1/-1;grid-row:4}
   .game-assistant-strip .simple-model-profile{grid-column:2;grid-row:2/4;grid-template-columns:minmax(95px,.7fr) minmax(150px,1fr) auto;align-self:start;margin-top:0;gap:8px}
-  .game-assistant-strip .simple-model-help{grid-column:1/-1;grid-row:4;margin-top:8px}
+  .game-assistant-strip .simple-model-help{grid-column:1/-1;margin-top:8px}
   .game-assistant-strip .simple-model-handoff{grid-column:1/-1}
 }
 @media (max-width: 600px) {

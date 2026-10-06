@@ -24,9 +24,11 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .projects import new_project, project_workspace, safe_id, atomic_json, check_project, merge_plan, merge_assist, ALLOWED_SHOT_FIELDS
 from .resources import ResourceManager, ResourceError, local_url, gpu_snapshot
-from .assistant_profiles import migrate_profiles, merge_profile_settings, resolve_profile, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS
+from .assistant_profiles import migrate_profiles, merge_profile_settings, resolve_profile, enforce_model_policy, QWEN_MODEL_POLICY, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS
+from .runtime_identity import runtime_fingerprint
 
 ROOT = Path(__file__).resolve().parents[1]
+CODE_FINGERPRINT = runtime_fingerprint(ROOT)
 DATA = Path(os.environ.get('H3_STUDIO_DATA', ROOT / 'data')).resolve()
 for folder in ('projects', 'assets', 'history', 'exports', 'library/templates', 'library/versions'):
     (DATA / folder).mkdir(parents=True, exist_ok=True)
@@ -40,28 +42,36 @@ STORIES = None
 ASSET_RUNS = None
 MOTION_LAB = None
 PRODUCTION = None
+FILMS = None
 VIDEO_FILE_LOCKS = {}
 DEFAULT_SETTINGS = {'lm_url': 'http://127.0.0.1:1234/v1', 'model': '', 'context_length': 8192,
                     'comfy_urls': ['http://127.0.0.1:8188', 'http://127.0.0.1:8000', 'http://127.0.0.1:8010'], 'persona': 'universal', 'last_project': '',
-                    'last_game_project': '', 'ai_memory_mode': 'exclusive'}
+                    'last_game_project': '', 'last_video_project': '', 'ai_memory_mode': 'exclusive'}
 SETTINGS = {**DEFAULT_SETTINGS}
 if (DATA / 'settings.json').exists():
     SETTINGS.update(json.loads((DATA / 'settings.json').read_text(encoding='utf-8')))
+# Direct uvicorn starts follow the same family lock as the normal launcher.
+# An explicitly empty environment value is reserved for legacy/dev fixtures;
+# a missing value always overrides an unlocked legacy settings file.
+SETTINGS['assistant_model_policy'] = os.environ.get('H3_STUDIO_MODEL_POLICY', QWEN_MODEL_POLICY)
 SETTINGS = migrate_profiles(SETTINGS)
+if SETTINGS['assistant_model_policy']:
+    # Persist the enforced family and migrated profiles without loading a model.
+    atomic_json(DATA / 'settings.json', SETTINGS)
 
 @lru_cache(maxsize=4)
-def _assistant_client(base_url):
+def _assistant_client(base_url, model_policy=''):
     from .lmstudio import LMStudioClient
-    return LMStudioClient(base_url=base_url, timeout=180)
+    return LMStudioClient(base_url=base_url, timeout=180, model_policy=model_policy)
 
 
 def client():
     # Keep capability knowledge across stages; diagnostics are context-local.
     # A changed endpoint gets a separate client and never inherits its cache.
-    return _assistant_client(SETTINGS['lm_url'])
+    return _assistant_client(SETTINGS['lm_url'], SETTINGS.get('assistant_model_policy', ''))
 
 RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client, state_path=DATA / 'resource_state.json')
-app = FastAPI(title='H3 Prompt Studio', version='1.6.1', docs_url='/api/docs')
+app = FastAPI(title='H3 Prompt Studio', version='1.7.0', docs_url='/api/docs')
 BRIDGE_PORTS = ('8188', '8000', '8010')
 LOCAL_ORIGINS = [f'http://{host}:{port}' for host in ('127.0.0.1', 'localhost') for port in (8766, 8188, 8010, 8000)]
 app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'PATCH'], allow_headers=['Content-Type', 'X-H3-Bridge', 'X-H3-Token'])
@@ -111,9 +121,16 @@ async def unexpected_error(request, exc):
 
 def load_project(project_id):
     path = DATA / 'projects' / (safe_id(project_id) + '.json')
-    if not path.exists():
-        raise HTTPException(404, 'Project not found.')
-    return check_project(json.loads(path.read_text(encoding='utf-8')))
+    with STATE_LOCK:
+        if not path.exists():
+            raise HTTPException(404, 'Project not found.')
+        try:
+            project = check_project(json.loads(path.read_text(encoding='utf-8')))
+            if safe_id(project['id']) != safe_id(project_id):
+                raise ValueError('Project identifier does not match its saved file.')
+            return project
+        except (OSError, ValueError) as exc:
+            raise HTTPException(409, 'This saved project could not be read. Its local file is preserved; restore a portable backup or a history copy.') from exc
 
 def workspace_for_project(project):
     # Generated turns from older releases had a story link but no workspace.
@@ -123,29 +140,70 @@ def workspace_for_project(project):
         try:
             story_path = DATA / 'stories' / (safe_id(story_id) + '.json')
             story = json.loads(story_path.read_text(encoding='utf-8'))
-            if story.get('mode') in ('studio', 'game'):
-                return story['mode']
+            if story.get('mode') == 'game':
+                return 'game'
         except (OSError, ValueError, TypeError, AttributeError):
             pass
-    return project.get('workspace', 'studio')
+    if project.get('workspace') == 'game':
+        return 'game'
+    return 'studio' if project.get('film_id') else 'video'
 
 
-def list_projects(workspace='studio'):
+def project_video_summaries():
+    summaries, latest = {}, {}
+    # Inspect immutable local metadata only; initializing the video manager
+    # would resume monitoring workers during a library-only request.
+    for path in (DATA / 'video_runs').glob('*/record.json'):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+            if record.get('status') != 'succeeded' or not record.get('video'):
+                continue
+            project_id = safe_id(record['project_id'])
+            run_id = safe_id(record['id'])
+            created = float(record.get('created_at', 0))
+            summaries[project_id] = summaries.get(project_id, 0) + 1
+            if project_id not in latest or created > latest[project_id][0]:
+                latest[project_id] = (created, run_id)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            continue
+    verdicts = {}
+    for project_id, (_, run_id) in latest.items():
+        try:
+            review = json.loads((DATA / 'reviews' / 'run' / run_id / 'review.json').read_text(encoding='utf-8'))
+            verdict = review.get('verdict', 'unreviewed')
+            if verdict in ('unreviewed', 'approved', 'needs_changes', 'rejected'):
+                verdicts[project_id] = verdict
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return summaries, verdicts
+
+
+def list_projects(workspace='video'):
     project_workspace(workspace)
     values = []
-    for path in (DATA / 'projects').glob('*.json'):
-        try:
-            value = check_project(json.loads(path.read_text(encoding='utf-8')))
-            if workspace_for_project(value) != workspace:
+    with STATE_LOCK:
+        video_counts, verdicts = project_video_summaries()
+        for path in (DATA / 'projects').glob('*.json'):
+            try:
+                value = check_project(json.loads(path.read_text(encoding='utf-8')))
+                if safe_id(value['id']) != safe_id(path.stem) or workspace_for_project(value) != workspace:
+                    continue
+                simple = value.get('simple', {})
+                idea = simple.get('idea', '') if isinstance(simple, dict) else ''
+                summary = idea if isinstance(idea, str) and idea else value['story']['text'] or value['shots'][0].get('action', '')
+                stamp = path.stat().st_mtime
+                values.append({'id': value['id'], 'title': value['title'], 'mode': value['mode'],
+                               'workspace': workspace, 'duration': value['duration'], 'updated': stamp,
+                               'updated_at': datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+                               'reference_count': len(value['assets']), 'shot_count': len(value['shots']),
+                               'prompt_summary': summary[:240], 'video_count': video_counts.get(safe_id(value['id']), 0),
+                               'last_review_verdict': verdicts.get(safe_id(value['id']))})
+            except (OSError, ValueError, TypeError, KeyError):
                 continue
-            values.append({'id': value['id'], 'title': value['title'], 'mode': value['mode'],
-                           'workspace': workspace, 'duration': value['duration'], 'updated': path.stat().st_mtime})
-        except (ValueError, KeyError):
-            continue
     return sorted(values, key=lambda item: item['updated'], reverse=True)
 
 def save_project(project):
-    check_project(project)
+    project = copy.deepcopy(check_project(project))
     with STATE_LOCK:
         path = DATA / 'projects' / (safe_id(project['id']) + '.json')
         if path.exists():
@@ -156,24 +214,27 @@ def save_project(project):
                 history.parent.mkdir(parents=True, exist_ok=True)
                 history.write_bytes(previous)
         atomic_json(path, project)
-        key = 'last_game_project' if workspace_for_project(project) == 'game' else 'last_project'
-        SETTINGS[key] = project['id']
-        atomic_json(DATA / 'settings.json', SETTINGS)
-    return {'saved': True, 'id': project['id']}
+        key = {'game': 'last_game_project', 'video': 'last_video_project', 'studio': 'last_project'}[workspace_for_project(project)]
+        proposed = {**SETTINGS, key: project['id']}
+        atomic_json(DATA / 'settings.json', proposed)
+        SETTINGS.update(proposed)
+        updated = path.stat().st_mtime
+    return {'saved': True, 'id': project['id'], 'updated': updated, 'workspace': workspace_for_project(project)}
 
 @app.get('/api/bootstrap')
 def bootstrap():
     from .prompts import PERSONAS
     with STATE_LOCK:
-        projects = list_projects()
-        last = SETTINGS.get('last_project')
-        project = load_project(last) if last and any(p['id'] == last for p in projects) else (load_project(projects[0]['id']) if projects else new_project())
+        projects = list_projects('video')
+        last = SETTINGS.get('last_video_project') or SETTINGS.get('last_project')
+        project = load_project(last) if last and any(p['id'] == last for p in projects) else (load_project(projects[0]['id']) if projects else new_project('video'))
         game_projects = list_projects('game')
         last_game = SETTINGS.get('last_game_project')
         game_project = load_project(last_game) if last_game and any(p['id'] == last_game for p in game_projects) else new_project('game')
         settings = copy.deepcopy(SETTINGS)
-    return {'version': app.version, 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': settings,
-            'project': project, 'projects': projects, 'game_project': game_project, 'personas': PERSONAS}
+    return {'version': app.version, 'workspace_root': str(ROOT), 'code_fingerprint': CODE_FINGERPRINT, 'token': TOKEN, 'resource_token': BRIDGE_TOKEN, 'settings': settings,
+            'project': project, 'projects': projects, 'video_project': project, 'video_projects': projects,
+            'game_project': game_project, 'personas': PERSONAS}
 
 def output_locations():
     # Only these application-owned locations can be opened; never accept a path
@@ -224,18 +285,42 @@ def open_files(body: dict):
     return {'opened': True, 'id': body['id'], 'title': title}
 
 @app.post('/api/projects/new')
-def create_project(workspace: str = 'studio'):
-    project = new_project(workspace)
+def create_project(workspace: str = 'video', body: dict | None = None):
+    body = body or {}
+    if set(body) - {'title', 'idea', 'workspace'}:
+        raise ValueError('Supply only a project title and an optional idea.')
+    project = new_project(body.get('workspace', workspace))
+    project['profile'] = 'concise'
+    if 'title' in body:
+        title = body['title']
+        if not isinstance(title, str) or not 1 <= len(title.strip()) <= 160 or '\x00' in title:
+            raise ValueError('Give the project a name between 1 and 160 characters.')
+        project['title'] = title.strip()
+    if 'idea' in body:
+        idea = body['idea']
+        if not isinstance(idea, str) or len(idea) > 20000 or '\x00' in idea:
+            raise ValueError('Keep the project idea within 20000 characters.')
+        project['story']['text'] = idea
     save_project(project)
     return project
 
 @app.get('/api/projects')
-def projects_index(workspace: str = 'studio'):
+def projects_index(workspace: str = 'video'):
     return list_projects(workspace)
 
 @app.get('/api/projects/{project_id}')
 def project_get(project_id: str):
     return load_project(project_id)
+
+@app.post('/api/projects/{project_id}/activate')
+def project_activate(project_id: str):
+    with STATE_LOCK:
+        project = load_project(project_id)
+        key = {'game': 'last_game_project', 'video': 'last_video_project', 'studio': 'last_project'}[workspace_for_project(project)]
+        proposed = {**SETTINGS, key: project['id']}
+        atomic_json(DATA / 'settings.json', proposed)
+        SETTINGS.update(proposed)
+        return project
 
 @app.post('/api/projects')
 def project_save(project: dict):
@@ -264,11 +349,14 @@ def library_index():
     with STATE_LOCK:
         for kind in result:
             for path in library_folder(kind).glob('*.json'):
-                record = json.loads(path.read_text(encoding='utf-8'))
-                project = record['project']
-                result[kind].append({k: record[k] for k in ('id', 'name', 'created_at', 'notes', 'rating')} |
-                    {'mode': project['mode'], 'duration': project['duration'], 'shot_count': len(project['shots']),
-                     'asset_count': len(project['assets']), 'prompt_preview': record.get('prompt', '')[:240]})
+                try:
+                    record = load_library_record(path)
+                    project = record['project']
+                    result[kind].append({k: record[k] for k in ('id', 'name', 'created_at', 'notes', 'rating')} |
+                        {'mode': project['mode'], 'duration': project['duration'], 'shot_count': len(project['shots']),
+                         'asset_count': len(project['assets']), 'prompt_preview': record.get('prompt', '')[:240]})
+                except (OSError, ValueError, TypeError, KeyError):
+                    continue
             result[kind].sort(key=lambda value: value['created_at'], reverse=True)
     return result
 
@@ -277,7 +365,24 @@ def library_get(kind: str, record_id: str):
     path = library_folder(kind) / (safe_id(record_id) + '.json')
     if not path.is_file():
         raise HTTPException(404, 'This saved item no longer exists.')
-    return json.loads(path.read_text(encoding='utf-8'))
+    with STATE_LOCK:
+        try:
+            return load_library_record(path)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(409, 'This saved library item could not be read. Its local file is preserved.') from exc
+
+
+def load_library_record(path):
+    record = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(record, dict) or safe_id(record.get('id')) != safe_id(path.stem):
+        raise ValueError('Invalid saved library identifier.')
+    check_project(record.get('project'))
+    for key, limit in (('name', 120), ('notes', 5000), ('prompt', 250000), ('created_at', 100)):
+        library_text(record, key, limit)
+    if not record.get('name', '').strip() or not record.get('created_at'):
+        raise ValueError('Invalid saved library name or date.')
+    library_rating(record)
+    return {**record, 'notes': record.get('notes', ''), 'rating': record.get('rating', 0), 'prompt': record.get('prompt', '')}
 
 @app.post('/api/library/{kind}')
 def library_save(kind: str, body: dict):
@@ -319,9 +424,11 @@ def library_update_version(record_id: str, body: dict):
 
 @app.post('/api/settings')
 def save_settings(body: dict):
+    if 'assistant_model_policy' in body and body['assistant_model_policy'] != SETTINGS.get('assistant_model_policy', ''):
+        raise ValueError('The local Qwen 3.8 27B model lock cannot be changed from the browser.')
     if RESOURCES.lock.locked() and body.get('lm_url', SETTINGS['lm_url']) != SETTINGS['lm_url']:
         raise ResourceError('Wait for AI to finish before changing its connection.')
-    allowed = {k: body[k] for k in (*DEFAULT_SETTINGS, 'assistant_profiles') if k in body and k not in ('last_project', 'last_game_project')}
+    allowed = {k: body[k] for k in (*DEFAULT_SETTINGS, 'assistant_profiles') if k in body and k not in ('last_project', 'last_game_project', 'last_video_project')}
     if 'lm_url' in allowed:
         allowed['lm_url'] = local_url(allowed['lm_url'])
     if 'comfy_urls' in allowed:
@@ -343,6 +450,7 @@ def connections():
               'gpu': gpu_snapshot(), 'instance_id': RESOURCES.instance_id, 'model': RESOURCES.model_key,
               'ai_memory_mode': SETTINGS['ai_memory_mode'],
               'assistant_profiles': copy.deepcopy(SETTINGS['assistant_profiles']),
+              'assistant_model_policy': SETTINGS.get('assistant_model_policy', ''),
               'active_profile': copy.deepcopy(getattr(RESOURCES, 'instance_profile', None)),
               'effective_context_length': None, 'assistant_ready': False}
     try:
@@ -623,8 +731,7 @@ def video_run_suggest(run_id: str, body: dict):
 def prepare_ai(body: dict):
     profile = resolve_profile(SETTINGS, body.get('workspace', 'studio'))
     if body.get('model'):
-        from .assistant_profiles import validate_profile
-        profile = validate_profile({**profile, 'model': body['model']})
+        profile = enforce_model_policy(SETTINGS, {**profile, 'model': body['model']})
     return RESOURCES.run_ai(profile['model'], profile=profile)
 
 def asset_manager():
@@ -642,6 +749,75 @@ def production_manager():
             from .production import ProductionManager
             PRODUCTION = ProductionManager(DATA, load_project, video_manager, asset_manager)
         return PRODUCTION
+
+def film_manager():
+    global FILMS
+    with STATE_LOCK:
+        if FILMS is None:
+            from .films import FilmManager
+            def reference_meta(ident):
+                meta = asset_meta(ident)
+                filename = meta.get('filename', '')
+                if not isinstance(filename, str) or Path(filename).name != filename or '/' in filename or '\\' in filename:
+                    raise ValueError('Invalid local film reference filename.')
+                if not (DATA / 'assets' / safe_id(ident) / filename).is_file():
+                    raise ValueError('This film reference file is missing. Add it again before saving or rendering.')
+                return meta
+            FILMS = FilmManager(DATA, reference_meta)
+        return FILMS
+
+
+@app.get('/api/films')
+def film_list():
+    return {'films': film_manager().list()}
+
+
+@app.post('/api/films')
+def film_create(body: dict):
+    return film_manager().create(body)
+
+
+@app.get('/api/films/{film_id}')
+def film_get(film_id: str):
+    return film_manager().get(film_id)
+
+
+@app.patch('/api/films/{film_id}')
+def film_save(film_id: str, body: dict):
+    from .films import FilmConflict
+    try:
+        return film_manager().save(film_id, body)
+    except FilmConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post('/api/films/{film_id}/plan')
+def film_plan(film_id: str, body: dict):
+    from .films import FilmConflict, plan_storyboard
+    if set(body) != {'expected_revision'}:
+        raise ValueError('Plan the saved film with its expected revision.')
+    profile = resolve_profile(SETTINGS, 'studio')
+    def generate(film):
+        def operation(model):
+            RESOURCES.stage = 'Planning the complete film storyboard'
+            return plan_storyboard(client(), model, film)
+        return RESOURCES.run_ai(profile['model'], operation, profile=profile)
+    try:
+        return film_manager().plan(film_id, body['expected_revision'], generate)
+    except FilmConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post('/api/films/{film_id}/produce')
+def film_produce(film_id: str, body: dict):
+    from .films import FilmConflict
+    if set(body) != {'expected_revision', 'request_id'}:
+        raise ValueError('Create the film render queue using its saved revision and a unique request ID.')
+    try:
+        return film_manager().produce(film_id, body['expected_revision'], body['request_id'], production_manager())
+    except FilmConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+
 
 @app.get('/api/production')
 def production_list():
@@ -899,6 +1075,182 @@ def scene_video_path(run_id):
 def video_scene_preview(run_id: str):
     return FileResponse(scene_video_path(run_id), media_type='video/mp4')
 
+def review_store():
+    # One process-wide store shares its locks across routes and request threads.
+    from .video_review import VideoReviewStore
+    with STATE_LOCK:
+        if not hasattr(review_store, 'store') or review_store.store.root.parent != DATA:
+            review_store.store = VideoReviewStore(DATA)
+        return review_store.store
+
+
+def review_source(kind, ident, *, include_video=False):
+    ident = safe_id(ident)
+    if kind == 'run':
+        manager = video_manager()
+        record = manager.get(ident)
+        if record.get('status') != 'succeeded':
+            raise ValueError('Review a completed take with available video.')
+        project = manager.snapshot(ident)
+        request = manager._load(ident, 'request.json')
+        source = {'kind': kind, 'id': ident, 'name': record.get('title') or project['title'],
+                  'source_prompt': request.get('prompt', ''), 'workspace': workspace_for_project(project),
+                  'video_url': f'/api/video/runs/{ident}/scene'}
+        if include_video:
+            source['path'] = scene_video_path(ident)
+        return source
+    if kind != 'asset':
+        raise ValueError('Choose a generated take or an imported video.')
+    meta = asset_meta(ident)
+    if meta.get('media_type') != 'video':
+        raise ValueError('Select an imported video for review.')
+    filename = meta.get('filename')
+    if not isinstance(filename, str) or Path(filename).name != filename or '/' in filename or '\\' in filename:
+        raise ValueError('Invalid local video filename.')
+    source = {'kind': kind, 'id': ident, 'name': meta.get('name', 'Imported video'),
+              'source_prompt': '', 'workspace': 'studio', 'video_url': f'/api/assets/{ident}/file',
+              **{key: meta.get(key) for key in ('duration', 'width', 'height')}}
+    if include_video:
+        source['path'] = DATA / 'assets' / ident / filename
+    return source
+
+
+@app.get('/api/reviews/library')
+def review_library():
+    from .video_review import CRITERIA, VERDICTS
+    videos = []
+    for metadata in (DATA / 'assets').glob('*/metadata.json'):
+        try:
+            meta = json.loads(metadata.read_text(encoding='utf-8'))
+            if meta.get('media_type') != 'video':
+                continue
+            source = review_source('asset', metadata.parent.name)
+            videos.append({**source, 'review': review_store().get('asset', source['id']),
+                           'imported_at': metadata.stat().st_mtime})
+        except (OSError, ValueError, TypeError, KeyError, HTTPException):
+            continue
+    return {'videos': sorted(videos, key=lambda item: item['imported_at'], reverse=True),
+            'criteria': list(CRITERIA), 'verdicts': list(VERDICTS)}
+
+
+@app.post('/api/reviews/import')
+async def review_import(file: UploadFile = File(...)):
+    from starlette.concurrency import run_in_threadpool
+    from .video_review import probe_video
+    name = file.filename or 'video.mp4'
+    extension = Path(name).suffix.lower()
+    if extension not in ('.mp4', '.webm', '.mov'):
+        raise ValueError('Import an MP4, WebM or MOV video for local review.')
+    ident = str(uuid.uuid4())
+    folder = DATA / 'assets' / ident
+    folder.mkdir()
+    path = folder / ('source' + extension)
+    completed = False
+    try:
+        size, digest = 0, hashlib.sha256()
+        with path.open('wb') as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > 128 * 1024 * 1024:
+                    raise ValueError('Review videos must be no larger than 128 MB.')
+                digest.update(chunk)
+                output.write(chunk)
+        media = await run_in_threadpool(probe_video, path)
+        meta = {'id': ident, 'name': Path(name).stem[:100] or 'Imported video', 'media_type': 'video',
+                'filename': path.name, 'mime': 'video/webm' if extension == '.webm' else 'video/mp4',
+                'duration': media['duration'], 'width': media['width'], 'height': media['height'],
+                'sha256': digest.hexdigest(), 'review_only': True}
+        atomic_json(folder / 'metadata.json', meta)
+        completed = True
+        return {**meta, 'role': 'reference_video', 'semantic_role': 'other', 'enabled': False,
+                'description': '', 'observation': '', 'approved_observation': '', 'locked_order': False}
+    finally:
+        if not completed:
+            # This folder was just created under DATA/assets with a fresh UUID.
+            # Remove only known files; never recursively remove a supplied path.
+            path.unlink(missing_ok=True)
+            (folder / 'metadata.json').unlink(missing_ok=True)
+            (folder / 'metadata.tmp').unlink(missing_ok=True)
+            folder.rmdir()
+
+
+@app.get('/api/reviews/{kind}/{ident}')
+def review_get(kind: str, ident: str):
+    source = review_source(kind, ident)
+    return {**review_store().get(kind, ident, source['source_prompt']), 'video_url': source['video_url']}
+
+
+@app.put('/api/reviews/{kind}/{ident}')
+def review_save(kind: str, ident: str, body: dict):
+    source = review_source(kind, ident)
+    return review_store().save(kind, ident, body, source['source_prompt'])
+
+
+@app.post('/api/reviews/{kind}/{ident}/analyze')
+def review_analyze(kind: str, ident: str, body: dict):
+    from .video_review import analyze_frames, bounded_text, sample_video
+    if set(body) - {'source_prompt', 'intent', 'sample_count'}:
+        raise ValueError('Supply only source_prompt, intent and sample_count for video review.')
+    source = review_source(kind, ident)
+    store = review_store()
+    previous = store.get(kind, ident, source['source_prompt'])
+    prompt = bounded_text(body.get('source_prompt', previous['source_prompt']), 'source_prompt', 16000)
+    intent = bounded_text(body.get('intent', ''), 'intent', 2000)
+    count = body.get('sample_count', 6)
+    if type(count) is not int or not 4 <= count <= 8:
+        raise ValueError('Choose between four and eight review frames.')
+    lock = store.analysis_lock(kind, ident)
+    if not lock.acquire(blocking=False):
+        raise ResourceError('This video already has a review in progress. Wait for it to finish.')
+    samples = []
+    started = time.monotonic()
+    try:
+        # Resolve/decode the displayed scene, including its continuation trim.
+        path = review_source(kind, ident, include_video=True)['path']
+        media, samples = sample_video(path, store.folder(kind, ident), kind, ident, count)
+        profile = resolve_profile(SETTINGS, source['workspace'])
+        def generate(model):
+            RESOURCES.stage = 'Reviewing sampled video frames'
+            result = analyze_frames(client(), model, media, samples, prompt, intent, previous['notes'])
+            result.update(model_key=profile['model'], source_prompt=prompt, intent=intent,
+                          seconds=round(time.monotonic() - started, 3))
+            return result
+        result = RESOURCES.run_ai(profile['model'], generate, profile=profile)
+        return store.record_ai(kind, ident, result, prompt, previous['updated'])
+    except Exception:
+        for sample in samples:
+            (store.folder(kind, ident) / 'frames' / sample['url'].rsplit('/', 1)[-1]).unlink(missing_ok=True)
+        raise
+    finally:
+        lock.release()
+
+
+@app.get('/api/reviews/{kind}/{ident}/frames/{filename}')
+def review_frame(kind: str, ident: str, filename: str):
+    review_source(kind, ident)
+    try:
+        store = review_store()
+        with store.lock:
+            path = store.frame_path(kind, ident, filename)
+            if not path.is_file():
+                raise FileNotFoundError()
+            # Frames are <=2 MB. Read them while cleanup holds the same lock,
+            # so a concurrent reanalysis cannot remove a deferred response file.
+            return Response(path.read_bytes(), media_type='image/jpeg')
+    except FileNotFoundError:
+        raise HTTPException(404, 'Review frame not found.')
+
+
+@app.get('/api/reviews/{kind}/{ident}/prompt')
+def review_prompt(kind: str, ident: str):
+    review_source(kind, ident)
+    review = review_store().get(kind, ident)
+    prompt = (review.get('ai') or {}).get('improved_prompt')
+    if not prompt:
+        raise HTTPException(404, 'Analyze this video to create a repair prompt first.')
+    return Response(prompt, media_type='text/plain; charset=utf-8',
+                    headers={'Content-Disposition': f'attachment; filename="H3-review-{safe_id(ident)}.txt"'})
+
 @app.get('/api/stories/{story_id}/video')
 def story_film(story_id: str):
     story = story_manager().get(story_id)
@@ -963,6 +1315,18 @@ def store_asset(data, name, content_type=''):
     asset_id = str(uuid.uuid4())
     folder = DATA / 'assets' / asset_id
     folder.mkdir()
+    try:
+        return _write_asset(data, name, content_type, asset_id, folder)
+    except BaseException:
+        # This fresh UUID directory belongs only to this rejected upload.
+        # Existing library assets are never visited or removed.
+        for created_file in folder.iterdir():
+            created_file.unlink()
+        folder.rmdir()
+        raise
+
+
+def _write_asset(data, name, content_type, asset_id, folder):
     ext = Path(name).suffix.lower()
     if ext in ('.png', '.jpg', '.jpeg', '.webp', '.bmp') or content_type.startswith('image/'):
         try:
@@ -1160,15 +1524,30 @@ def assist(body: dict):
 def export_project(project_id: str):
     project = load_project(project_id)
     project['workspace'] = workspace_for_project(project)
-    destination = DATA / 'exports' / f'{safe_id(project_id)}.h3studio.zip'
-    with zipfile.ZipFile(destination, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr('project.json', json.dumps(project, ensure_ascii=False, indent=2))
-        for asset in project['assets']:
-            meta = asset_meta(asset['id'])
-            folder = DATA / 'assets' / safe_id(asset['id'])
-            for name in (meta['filename'], 'metadata.json', 'thumbnail.jpg'):
-                if (folder / name).exists():
-                    archive.write(folder / name, f'assets/{asset["id"]}/{name}')
+    destination = DATA / 'exports' / f'{safe_id(project_id)}-{uuid.uuid4().hex}.h3studio.zip'
+    temporary = destination.with_suffix('.building')
+    try:
+        with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('project.json', json.dumps(project, ensure_ascii=False, indent=2))
+            seen = set()
+            for asset in project['assets']:
+                ident = safe_id(asset['id'])
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                meta = asset_meta(ident)
+                filename = meta.get('filename', '')
+                if not isinstance(filename, str) or not filename or Path(filename).name != filename or '/' in filename or '\\' in filename:
+                    raise ValueError('Invalid local reference filename. The export was not saved.')
+                folder = DATA / 'assets' / ident
+                if not (folder / filename).is_file():
+                    raise ValueError('A reference file is missing. Restore it before making a portable backup.')
+                for name in (filename, 'metadata.json', 'thumbnail.jpg'):
+                    if (folder / name).is_file():
+                        archive.write(folder / name, f'assets/{ident}/{name}')
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
     return FileResponse(destination, filename=(project['title'][:80] or 'H3 project') + '.h3studio.zip')
 
 @app.post('/api/projects/import')

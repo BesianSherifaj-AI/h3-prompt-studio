@@ -1,0 +1,307 @@
+.video-review {
+  margin: 16px 0;
+  padding: 18px;
+  border: 1px solid #426151;
+  border-radius: 12px;
+  background: #17231e;
+  color: #e0eee7;
+  min-width: 0;
+}
+.video-review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.video-review-heading > div > span {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+}
+.video-review h4 {
+  margin: 6px 0 0;
+  font-size: 18px;
+}
+.video-review-help {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #b2c6bb;
+  margin: 12px 0;
+}
+.video-review-verdict {
+  font-size: 10px;
+  border-radius: 20px;
+  border: 1px solid #476454;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+.video-review .verdict-approved {
+  background: #284d3a;
+  border-color: #72b590;
+}
+.video-review .verdict-needs_changes,
+.video-review .verdict-rejected {
+  color: #f4d2a0;
+  border-color: #8d6c45;
+}
+.video-review fieldset {
+  border: 0;
+  padding: 0;
+  margin: 14px 0;
+}
+.video-review legend {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 9px;
+}
+.video-review-decision > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.video-review button {
+  min-height: 35px;
+  font-size: 11px;
+  white-space: normal;
+}
+.video-review button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #355440;
+  color: #f1fff5;
+}
+.video-review-checklist {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.video-review-checklist label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  min-width: 0;
+}
+.video-review select,
+.video-review input,
+.video-review textarea {
+  background: #111c17;
+  border: 1px solid #425d4d;
+  color: #e2eee6;
+  border-radius: 6px;
+  padding: 8px;
+  width: 100%;
+  min-width: 0;
+  line-height: 1.5;
+}
+.video-review-checklist select {
+  width: 105px;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.video-review-field {
+  display: grid;
+  gap: 7px;
+  margin: 13px 0;
+  font-size: 12px;
+  font-weight: 550;
+}
+.video-review textarea {
+  resize: vertical;
+  max-height: 440px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.video-review-save {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.video-review-save > span {
+  font-size: 11px;
+  color: #b4cbbb;
+  line-height: 1.5;
+}
+.video-review-ai {
+  border-top: 1px solid #385042;
+  margin-top: 15px;
+  padding-top: 13px;
+}
+.video-review-ai > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+.video-review-ai > summary svg {
+  vertical-align: middle;
+  margin-right: 7px;
+}
+.video-review-ai-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.video-review-ai-actions label {
+  font-size: 11px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.video-review-ai-actions select {
+  width: 65px;
+}
+.video-review button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #163126;
+}
+.video-review-result {
+  margin-top: 18px;
+  overflow-wrap: anywhere;
+}
+.video-review-result-heading {
+  display: grid;
+  gap: 5px;
+  font-size: 13px;
+}
+.video-review-result-heading small {
+  font-size: 10px;
+  color: #a8c3b3;
+  font-weight: 400;
+}
+.video-review-result > p {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.video-review-samples {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin: 14px 0;
+}
+.video-review .video-review-samples button {
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  min-width: 0;
+  background: #0e1712;
+}
+.video-review-samples img {
+  width: 100%;
+  display: block;
+  aspect-ratio: 16/9;
+  object-fit: contain;
+}
+.video-review-samples span {
+  display: block;
+  padding: 5px;
+  color: #bfdbc9;
+  font-size: 10px;
+}
+.video-review-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.video-review-issues li {
+  padding: 12px 0;
+  border-top: 1px solid #344d3e;
+}
+.video-review-issues li > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.video-review-issues li > div > span {
+  font-size: 10px;
+  text-transform: capitalize;
+  color: #bdcdbc;
+}
+.video-review-issues li > div > span.major {
+  color: #f4ca91;
+}
+.video-review-issues li p,
+.video-review-issues li small {
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 0;
+}
+.video-review-issues li small {
+  display: block;
+  color: #a8d1b9;
+}
+.video-review-limits {
+  padding: 12px;
+  background: #202b24;
+  border: 1px solid #4f634b;
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 13px 0;
+}
+.video-review-limits ul {
+  padding-left: 18px;
+  margin: 7px 0 0;
+}
+.video-review-repair > label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.video-review-repair > div {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 9px;
+}
+.video-review-error {
+  color: #ffcfab;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  margin-top: 12px;
+}
+.video-review-spin {
+  animation: video-review-spin 1.2s linear infinite;
+}
+@keyframes video-review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.video-review :is(button, textarea, input, select):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 620px) {
+  .video-review {
+    padding: 13px;
+  }
+  .video-review-checklist {
+    grid-template-columns: 1fr;
+  }
+  .video-review-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .video-review-ai-actions > .primary {
+    width: 100%;
+  }
+  .video-review-samples {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .video-review-save {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .video-review-spin {
+    animation: none;
+  }
+}

@@ -5,7 +5,6 @@ import {
   ChevronDown,
   Copy,
   Download,
-  FolderOpen,
   ImagePlus,
   LoaderCircle,
   MessageSquare,
@@ -38,6 +37,7 @@ import TemplateShelf from './TemplateShelf';
 import PhotoTools, { ReferenceInsert } from './PhotoTools';
 import KeyframeGenerator from './KeyframeGenerator';
 import IdeaBuilder from './IdeaBuilder';
+import PromptWorkbench from './PromptWorkbench';
 import { TimelinePlanner } from './TimelinePlanner';
 import { ensurePromptTags } from './tags';
 
@@ -66,6 +66,7 @@ export type SimpleStudioProps = {
   onNew: () => void;
   onConnections: () => void;
   onFiles: () => void;
+  onReviewVideos?: () => void;
   onUndo: () => void;
   canUndo: boolean;
   connectionOnline: boolean;
@@ -76,6 +77,7 @@ export type SimpleStudioProps = {
   comfyPanel?: React.ReactNode;
   settingsPanel?: React.ReactNode;
   savedStatus?: string;
+  promptLoading?: boolean;
   onSaveProject?: () => void;
 };
 
@@ -117,14 +119,14 @@ export default function SimpleStudio(props: SimpleStudioProps) {
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<Asset | null>(null);
   const [uploadError, setUploadError] = useState("");
-  const [editorTab, setEditorTab] = useState<'photos' | 'story' | 'settings'>(p.assets.length ? 'story' : 'photos');
+  const [editorTab, setEditorTab] = useState<'photos' | 'story' | 'settings'>('story');
   const [showScenes, setShowScenes] = useState(
     p.shots.length > 1 || p.shots.some((s) => s.dialogue.length > 0),
   );
   useEffect(() => {
     setShowScenes(p.shots.length > 1 || p.shots.some((s) => s.dialogue.length > 0));
     setPreview(null);
-    setEditorTab(p.assets.length ? 'story' : 'photos');
+    setEditorTab('story');
   }, [p.id]);
   useEffect(()=>{if(p.shots.length>1)setShowScenes(true);},[p.shots.length]);
   const images = p.assets.filter((a) => a.media_type === "image");
@@ -181,38 +183,28 @@ export default function SimpleStudio(props: SimpleStudioProps) {
             <Video size={19} />
           </span>
           <div>
-            <strong>Studio</strong>
-            <span>Scene &amp; film editor</span>
+            <strong>Video editor</strong>
+            <span>Your idea, prompt and video</span>
           </div>
         </div>
-        <nav aria-label="Project tools">
+        <nav aria-label="Editor tools">
           {props.canUndo&&<button onClick={props.onUndo} disabled={unavailable}><Undo2 size={15}/> Undo last change</button>}
-          <button onClick={props.onNew} disabled={unavailable}>
-            <Plus size={15} /> New
-          </button>
-          <button onClick={props.onProjects} disabled={unavailable}>
-            <FolderOpen size={15} /> Saved projects
-          </button>
-          <button onClick={props.onFiles}>
-            <Download size={15} /> Outputs
-          </button>
-          <button onClick={() => document.querySelector('.video-workspace')?.scrollIntoView({behavior:'smooth',block:'start'})}>
-            <Video size={15} /> Video
-          </button>
-          <button className="simple-quiet" onClick={props.onAdvanced}>
-            <Settings2 size={15} /> Advanced
-          </button>
+          <details className="simple-editor-tools">
+            <summary><Settings2 size={15} /> More tools</summary>
+            <div>
+              <button onClick={props.onFiles}><Download size={15} /> Output folders</button>
+              {props.onReviewVideos && <button onClick={props.onReviewVideos}><Check size={15} /> Review other videos</button>}
+              <button onClick={props.onAdvanced}><Settings2 size={15} /> Advanced editor</button>
+            </div>
+          </details>
         </nav>
       </header>
 
       <main className="simple-main">
         <div className="simple-intro">
           <div>
-            <p className="simple-eyebrow">YOUR IMAGES. YOUR IDEA.</p>
-            <h1>Make your scene.</h1>
-            <p>
-              Add photos, say who does what, and generate your video here.
-            </p>
+            <h1>Bring your idea to life.</h1>
+            <p>Write a scene, prepare its prompt, then generate and review your video.</p>
           </div>
           <button
             className={
@@ -221,40 +213,34 @@ export default function SimpleStudio(props: SimpleStudioProps) {
             onClick={props.onConnections}
           >
             <span />
-            {props.connectionOnline ? "Local AI connected" : "Connect local AI"}
+            {props.connectionOnline ? "Qwen 3.8 · 27B connected" : "Connect Qwen 3.8 · 27B"}
             <ChevronDown size={14} />
           </button>
         </div>
 
-        <div className="simple-project-line">
-          <label htmlFor="simple-project-title">Project</label>
-          <input
-            id="simple-project-title"
-            aria-label="Project name"
-            value={p.title}
-            onChange={(e) =>
-              update((d) => {
-                d.title = e.target.value;
-              })
-            }
-            disabled={unavailable}
-          />
-          <span className={'workspace-status'+(props.savedStatus==='Not saved'?' is-error':'')} role="status" aria-live="polite">{props.savedStatus || 'Saved automatically'}</span>
-          {props.onSaveProject && <button className="simple-quiet" onClick={props.onSaveProject} disabled={unavailable || props.savedStatus==='Saving…'}>{props.savedStatus==='Not saved'?'Retry save':'Save now'}</button>}
-        </div>
-
-        <div className="simple-assistant-strip">{props.modelPicker}</div>
+        <nav className="simple-workflow" aria-label="Video creation steps">
+          <button type="button" onClick={()=>{setEditorTab('story');requestAnimationFrame(()=>storyRef.current?.focus());}}>
+            <span>1</span><div><strong>Write</strong><small>Describe your scene</small></div>
+          </button>
+          <button type="button" onClick={()=>document.getElementById('simple-prepare')?.scrollIntoView({behavior:'smooth',block:'center'})}>
+            <span>2</span><div><strong>Prepare prompt</strong><small>{props.resultFresh ? 'Prompt ready' : 'Improve with Qwen'}</small></div>
+          </button>
+          <button type="button" onClick={()=>document.getElementById('simple-video')?.scrollIntoView({behavior:'smooth',block:'start'})}>
+            <span>3</span><div><strong>Render &amp; review</strong><small>Watch your result</small></div>
+          </button>
+        </nav>
+        {props.modelPicker && <details className="simple-ai-settings"><summary>Local AI settings</summary><div className="simple-assistant-strip">{props.modelPicker}</div></details>}
         <div className="simple-workspace-layout">
         <div className="simple-editor">
         <div className="simple-editor-tabs" role="tablist" aria-label="Scene editor">
-          {([['photos', 'Photos'], ['story', 'Story & Dialogue'], ['settings', 'Settings']] as const).map(([tab, label], index) =>
+          {([['story', 'Write'], ['photos', `Photos${images.length ? ` · ${images.length}` : ' · optional'}`], ['settings', 'Settings']] as const).map(([tab, label], index) =>
             <button key={tab} id={`simple-tab-${tab}`} type="button" role="tab" aria-selected={editorTab === tab}
               aria-controls={`simple-panel-${tab}`} tabIndex={editorTab === tab ? 0 : -1}
               onClick={() => setEditorTab(tab)} onKeyDown={event => {
                 const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
                 if (!offset && event.key !== 'Home' && event.key !== 'End') return;
                 event.preventDefault();
-                const next = (['photos', 'story', 'settings'] as const)[event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + offset + 3) % 3];
+                const next = (['story', 'photos', 'settings'] as const)[event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + offset + 3) % 3];
                 setEditorTab(next); document.getElementById(`simple-tab-${next}`)?.focus();
               }}>{label}</button>)}
         </div>
@@ -262,7 +248,7 @@ export default function SimpleStudio(props: SimpleStudioProps) {
           className="simple-section"
         >
           <div className="simple-section-heading">
-            <span className="simple-step">1</span>
+            <span className="simple-step"><ImagePlus size={16}/></span>
             <div>
               <h2 id="simple-photos-title">Add your photos</h2>
               <p>
@@ -621,24 +607,20 @@ export default function SimpleStudio(props: SimpleStudioProps) {
           className="simple-section"
         >
           <div className="simple-section-heading">
-            <span className="simple-step">2</span>
+            <span className="simple-step">1</span>
             <div>
-              <h2 id="simple-idea-title">Tell your story</h2>
-              <p>
-                Simple words are enough. You choose the people and dialogue; AI
-                improves the scene.
-              </p>
+              <h2 id="simple-idea-title">What should happen?</h2>
+              <p>Describe who is there, one main action and how the scene ends. Photos are optional.</p>
             </div>
           </div>
           <fieldset className="simple-story-fields" disabled={unavailable}>
-            <IdeaBuilder project={p} update={props.checkpointUpdate}/>
-            <Field label="What should happen?">
+            <Field label="Your scene">
               <textarea
                 ref={storyRef}
                 className="simple-idea-input"
-                rows={3}
+                rows={5}
                 value={p.story.text}
-                placeholder="e.g. Mira shows Nora a gift, gives it to her, and they smile together in the room."
+                placeholder="A red paper lantern hangs in a quiet garden at dusk. A breeze moves it gently, then it settles. The camera stays still."
                 onChange={(e) =>
                   update((d) => {
                     d.story.text = e.target.value;
@@ -646,7 +628,22 @@ export default function SimpleStudio(props: SimpleStudioProps) {
                 }
               />
             </Field>
+            {!p.story.text.trim() && <p className="simple-writing-hint">Start with a few sentences. You can revise the idea after watching your first video.</p>}
+            <div className="simple-writing-basics">
+              <Field label="Video length"><select value={p.duration} onChange={e=>update(d=>{d.duration=Number(e.target.value);d.shots=retime(d.shots,d.duration);})}>
+                {Array.from(new Set([5,7,10,15,p.duration])).sort((a,b)=>a-b).map(n=><option key={n} value={n}>{n} seconds</option>)}
+              </select></Field>
+              <Field label="Shape"><select value={p.aspect_ratio} onChange={e=>update(d=>{d.aspect_ratio=e.target.value;})}>
+                <option value="16:9">Wide · 16:9</option><option value="9:16">Vertical · 9:16</option><option value="1:1">Square · 1:1</option><option value="4:3">Classic · 4:3</option><option value="3:4">Portrait · 3:4</option>
+              </select></Field>
+            </div>
             {!!activeImages.length&&<ReferenceInsert project={p} onInsert={tag=>insertReference(tag)}/>}
+            <details className="simple-writing-tools"><summary>Help me write <span>optional</span></summary>
+              <PromptWorkbench project={p} update={props.checkpointUpdate}/>
+              <IdeaBuilder project={p} update={props.checkpointUpdate}/>
+            </details>
+            <details className="simple-scene-controls" open={p.shots.length > 1 || p.shots.some(s=>s.dialogue.length > 0)}>
+              <summary>Scene, camera &amp; sound controls <span>optional</span></summary>
             {!!people.length && (
               <details className="simple-people-actions">
                 <summary>
@@ -903,48 +900,14 @@ export default function SimpleStudio(props: SimpleStudioProps) {
                 </Field>
               </div>
             </details>
+            <TimelinePlanner project={p} update={update} checkpointUpdate={props.checkpointUpdate}/>
+            </details>
           </fieldset>
-          <TimelinePlanner project={p} update={update} checkpointUpdate={props.checkpointUpdate}/>
         </section>
         <section role="tabpanel" id="simple-panel-settings" hidden={editorTab !== 'settings'} aria-labelledby="simple-tab-settings" className="simple-section simple-settings-panel">
           <h2>Scene settings</h2>
           <fieldset disabled={unavailable}>
             <div className="simple-options">
-              <Field label="Video length">
-                <select
-                  value={p.duration}
-                  onChange={(e) =>
-                    update((d) => {
-                      d.duration = Number(e.target.value);
-                      d.shots = retime(d.shots, d.duration);
-                    })
-                  }
-                >
-                  {Array.from(new Set([5, 7, 10, 15, p.duration]))
-                    .sort((a, b) => a - b)
-                    .map((n) => (
-                      <option key={n} value={n}>
-                        {n} seconds
-                      </option>
-                    ))}
-                </select>
-              </Field>
-              <Field label="Shape">
-                <select
-                  value={p.aspect_ratio}
-                  onChange={(e) =>
-                    update((d) => {
-                      d.aspect_ratio = e.target.value;
-                    })
-                  }
-                >
-                  <option value="16:9">Wide · 16:9</option>
-                  <option value="9:16">Vertical · 9:16</option>
-                  <option value="1:1">Square · 1:1</option>
-                  <option value="4:3">Classic · 4:3</option>
-                  <option value="3:4">Portrait · 3:4</option>
-                </select>
-              </Field>
               <Field label="How should the video use your photos?">
                 <select
                   value={p.mode}
@@ -1028,7 +991,7 @@ export default function SimpleStudio(props: SimpleStudioProps) {
           <TemplateShelf project={p} update={props.checkpointUpdate} onRestore={props.onRestore} currentPrompt={props.currentPrompt} resultFresh={props.resultFresh} busy={unavailable}/>
           {props.settingsPanel}
         </section>
-        <div className="simple-editor-footer">
+        <div className="simple-editor-footer" id="simple-prepare">
           <div className="simple-generate-area">
             <button
               className="simple-generate"
@@ -1042,14 +1005,14 @@ export default function SimpleStudio(props: SimpleStudioProps) {
               ) : (
                 <Sparkles size={19} />
               )}
-              {unavailable ? "Working on your prompt…" : props.renderBusy ? "Video request in progress" : "Make my prompt"}
+              {unavailable ? "Preparing your prompt…" : props.renderBusy ? "Video request in progress" : "Prepare prompt"}
               {!unavailable && <ArrowRight size={18} />}
             </button>
-            <button className="simple-build" disabled={unavailable||props.renderBusy||!p.story.text.trim()} onClick={props.onBuild}>Build without AI</button>
+            <details className="simple-manual-build"><summary>Other options</summary><button className="simple-build" disabled={unavailable||props.renderBusy||!p.story.text.trim()} onClick={props.onBuild}>Build without AI</button></details>
             <p>
               {unavailable
                 ? props.progress || props.busy
-                : props.renderBusy ? "You can edit your next idea while the current request finishes. Check its status in Video." : "AI looks at your photos and turns your idea into a ready-to-use H3 prompt."}
+                : props.renderBusy ? "You can edit your next idea while the current request finishes. Check its status in Video." : "Qwen 3.8 27B turns your idea into a clear video prompt. Review it before rendering."}
             </p>
           </div>
           {props.error && (
@@ -1063,24 +1026,22 @@ export default function SimpleStudio(props: SimpleStudioProps) {
             </div>
           )}
         </div>
-        </div>
-
-        <aside className="simple-video-column" aria-label="Video and continuation">{props.comfyPanel}</aside>
-        </div>
         <section
           className="simple-section simple-result"
           id="simple-result"
           aria-labelledby="simple-result-title"
         >
           <div className="simple-section-heading">
-            <span className="simple-step">3</span>
+            <span className="simple-step">2</span>
             <div>
-              <h2 id="simple-result-title">Your prompt</h2>
+              <h2 id="simple-result-title">Prepared prompt</h2>
               <p>
-                {props.resultFresh
+                {props.promptLoading
+                  ? 'Opening your saved prompt…'
+                  : props.resultFresh
                   ? "Ready for Generate video. Your photos are connected automatically."
                   : props.currentPrompt
-                    ? "Your current draft. Use Make my prompt to improve it with AI."
+                    ? "Your idea changed. Prepare the prompt again to use your latest edits."
                     : "Your finished prompt will appear here."}
               </p>
             </div>
@@ -1159,15 +1120,18 @@ export default function SimpleStudio(props: SimpleStudioProps) {
                 })}</div>
               </details>}
               <div className="simple-result-buttons">
+                <button className="simple-copy" type="button" disabled={unavailable || props.renderBusy || !props.resultFresh}
+                  onClick={()=>document.getElementById('simple-video')?.scrollIntoView({behavior:'smooth',block:'start'})}>
+                  <Video size={17}/> Go to video <ArrowRight size={16}/>
+                </button>
                 <button
-                  className="simple-copy"
                   onClick={props.onCopy}
                   disabled={!props.resultFresh}
                 >
                   <Copy size={17} /> Copy prompt
                 </button>
                 <button onClick={props.onSave} disabled={!props.resultFresh}>
-                  <Download size={16} /> Save prompt
+                  <Download size={16} /> Download prompt
                 </button>
                 {props.canReturn && (
                   <button
@@ -1205,16 +1169,22 @@ export default function SimpleStudio(props: SimpleStudioProps) {
             <div className="simple-result-empty">
               <Sparkles size={26} />
               <p>
-                Add your idea above, then choose <strong>Make my prompt</strong>
-                .
+                {props.promptLoading ? 'Restoring the saved scene plan and checking its prompt.' : <>Your scene plan will appear here after you choose <strong>Prepare prompt</strong>.</>}
               </p>
             </div>
           )}
         </section>
+        </div>
+
+        <aside className="simple-video-column" id="simple-video" aria-label="Video and continuation">
+          <div className="simple-video-heading"><span className="simple-step">3</span><div><h2>Render &amp; review</h2><p>Generate your video, watch it, then decide what to improve.</p></div></div>
+          {props.comfyPanel}
+        </aside>
+        </div>
         <footer className="simple-footer">
           <span>Made locally with your LM Studio model.</span>
           <button onClick={props.onAdvanced}>
-            Need camera controls or the full editor? Open Advanced{" "}
+            Open Advanced editor{" "}
             <ArrowRight size={13} />
           </button>
         </footer>

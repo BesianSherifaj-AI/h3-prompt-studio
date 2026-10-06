@@ -265,7 +265,8 @@ describe("separate Game screen", () => {
     expect(html).toContain("Start game");
     expect(html).not.toContain("Arin");
     expect(html).not.toContain("A mysterious note arrives at the cafe.");
-    expect(html).toContain("Import current Studio cast &amp; photos");
+    expect(html).toContain("Your game keeps its own cast and photos.");
+    expect(html).not.toContain("Import current Studio cast");
     expect(html).toContain("8 steps");
     expect(html).not.toMatch(
       /<label class="game-checkbox"><input[^>]* checked/,

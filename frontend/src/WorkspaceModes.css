@@ -6,13 +6,38 @@
 @media(max-width:800px){.workspace-mode-bar{gap:10px;padding:8px 14px;min-height:70px}.workspace-brand strong{display:none}.workspace-switch>a{padding:7px 18px}.workspace-utilities button{font-size:12px;padding:8px}.workspace-switch small{display:none}.studio .simple-header{top:70px}}
 @media(max-width:480px){.workspace-mode-bar{padding:8px;gap:6px;flex-wrap:wrap;min-height:64px}.workspace-brand>span{width:30px;height:34px;font-size:15px}.workspace-switch{flex:1}.workspace-switch>a{padding:7px 9px;flex:1;font-size:14px;gap:6px;min-height:40px}.workspace-utilities{gap:3px}.workspace-utilities button{padding:8px;min-width:36px}.workspace-utilities span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.studio .simple-header{top:64px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}*,*::before,*::after{scroll-behavior:auto!important}}
-.studio:not(.simple-view):not(.workspace-game-active)>#studio-workspace{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}.studio:not(.simple-view)>.workspace-mode-bar{flex-shrink:0}
-.workspace-feedback{position:sticky;top:76px;z-index:130;flex-shrink:0;padding:0 18px;background:#101a19}
+.studio:not(.simple-view):not(.workspace-game-active):not(.workspace-film-active)>#video-workspace:not([hidden]){display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}.studio:not(.simple-view)>.workspace-mode-bar{flex-shrink:0}
+/* Editors and dialogs stay above feedback so their close controls remain usable. */
+.workspace-feedback{position:sticky;top:76px;z-index:110;flex-shrink:0;padding:0 18px;background:#101a19}
 .workspace-feedback-error,.workspace-feedback-notice{display:flex;align-items:center;gap:10px;max-width:1500px;margin:8px auto;padding:10px 14px;border:1px solid #ad7460;border-radius:10px;background:#38251f;color:#ffdacb;line-height:1.45;font-size:14px}
 .workspace-feedback-error>span,.workspace-feedback-notice>span{flex:1;min-width:0;overflow-wrap:anywhere}
 .workspace-feedback-error>svg,.workspace-feedback-notice>svg{flex-shrink:0}.workspace-feedback-error>button{display:grid;place-items:center;min-height:36px;min-width:36px;padding:5px}
 .workspace-feedback-notice{background:#17372b;border-color:#476e5b;color:#c4eddb}
 .studio .modal-backdrop{z-index:200}
-.studio .game-editor{z-index:150}
 @media(max-width:800px){.workspace-feedback{top:70px;padding:0 10px}}
 @media(max-width:480px){.workspace-feedback{top:64px;padding:0 6px}.workspace-feedback-error,.workspace-feedback-notice{font-size:13px;padding:9px}}
+
+/* All workspaces share a stable, legible navigation height. */
+:root{--workspace-bar-height:76px}
+.workspace-mode-bar{min-width:0;gap:18px}
+.workspace-switch{min-width:0}
+.workspace-switch>a{padding:8px 18px;min-width:0}
+.workspace-switch svg{flex-shrink:0}
+.workspace-switch small{white-space:nowrap}
+.studio .simple-header,.workspace-feedback{top:var(--workspace-bar-height)}
+.workspace-pane .game-view-tabs{top:calc(var(--workspace-bar-height) + 8px);z-index:60}
+.workspace-pane .game-studio button{min-height:44px}
+@media(max-width:1100px){.workspace-brand strong{display:none}.workspace-switch>a{padding:8px 13px}.workspace-utilities button{padding:8px;font-size:12px}}
+@media(max-width:800px){:root{--workspace-bar-height:70px}.workspace-mode-bar{gap:10px}.workspace-switch>a{padding:8px 14px}}
+@media(max-width:600px){.workspace-utilities span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.workspace-utilities button{display:grid;place-items:center;min-width:36px}}
+@media(max-width:480px){
+  :root{--workspace-bar-height:112px}
+  .workspace-mode-bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;min-height:112px;padding:10px 12px}
+  .workspace-brand strong{display:block;font-size:13px}.workspace-brand small{display:none}
+  .workspace-brand>span{width:30px;height:30px;font-size:15px}
+  .workspace-utilities{grid-column:2;grid-row:1;gap:5px}
+  .workspace-switch{grid-column:1/-1;grid-row:2;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:3px}
+  .workspace-switch>a{min-height:38px;padding:7px 4px;font-size:13px;gap:5px}
+  .workspace-switch svg{width:16px;height:16px}
+  .workspace-feedback{top:var(--workspace-bar-height)}
+}

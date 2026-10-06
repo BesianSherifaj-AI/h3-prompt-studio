@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 
-export type WorkspaceMode = "studio" | "game";
+export type WorkspaceMode = "video" | "studio" | "game";
 export function resolveWorkspace(href: string, remembered?: string | null): WorkspaceMode {
   const url = new URL(href, "http://localhost");
-  if (url.searchParams.has("continue_mmh3") || url.searchParams.has("continue_seed")) return "studio";
+  if (url.searchParams.has("continue_mmh3") || url.searchParams.has("continue_seed")) return "video";
   if (url.pathname.replace(/\/$/, "") === "/game") return "game";
   if (url.pathname.replace(/\/$/, "") === "/studio") return "studio";
+  if (url.pathname.replace(/\/$/, "") === "/video") return "video";
   if (url.searchParams.has("game")) return "game";
-  return remembered === "game" ? "game" : "studio";
+  return remembered === "game" || remembered === "studio" ? remembered : "video";
 }
 export function workspaceHref(mode: WorkspaceMode, href: string, preserveAction = false): string {
   const url = new URL(href, "http://localhost");
@@ -33,7 +34,7 @@ export function useWorkspaceRoute() {
     return () => window.removeEventListener("popstate", onBack);
   }, []);
   useEffect(() => {
-    document.title = mode === "game" ? "Game · H3 Prompt Studio" : "Studio · H3 Prompt Studio";
+    document.title = `${mode === 'game' ? 'Game' : mode === 'video' ? 'Video' : 'Studio'} · H3 Prompt Studio`;
     try { localStorage.setItem("h3-workspace-mode", mode); } catch { /* Storage is optional. */ }
   }, [mode]);
   const navigate = (next: WorkspaceMode) => {

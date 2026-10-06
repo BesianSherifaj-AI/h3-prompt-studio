@@ -25,6 +25,7 @@ from jsonschema import Draft202012Validator
 from PIL import Image
 
 from . import prompts
+from .assistant_profiles import QWEN_MODEL_POLICY, is_qwen_27b_model
 
 
 class LMStudioError(RuntimeError):
@@ -113,7 +114,7 @@ def _server_error(detail, status=None):
     if status in (401, 403):
         return 'authentication_required', 'LM Studio requires a valid API token.'
     if any(term in lower for term in ('out of memory', 'insufficient memory', 'failed to allocate', 'allocation failed')):
-        return 'model_out_of_memory', 'LM Studio ran out of memory. Use a smaller model or a shorter loaded context.'
+        return 'model_out_of_memory', 'LM Studio ran out of memory. Prepare a shorter loaded context or free available memory, then retry.'
     if (any(term in lower for term in ('context length', 'context_length', 'context window', 'context size', 'context overflow'))
             and any(term in lower for term in ('exceed', 'overflow', 'too long', 'too large', 'full', 'limit reached', 'cannot fit'))):
         return 'context_length_exceeded', 'This request exceeds the loaded model context. Shorten the scene/history or prepare a larger context.'
@@ -172,7 +173,7 @@ def _validated_content(content):
 
 
 class LMStudioClient:
-    def __init__(self, base_url="http://127.0.0.1:1234/v1", api_key="", timeout=180, *, sdk_factory=None):
+    def __init__(self, base_url="http://127.0.0.1:1234/v1", api_key="", timeout=180, *, sdk_factory=None, model_policy=''):
         parsed = parse.urlsplit(base_url)
         if (parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
                 or parsed.username or parsed.password or parsed.query or parsed.fragment
@@ -190,6 +191,9 @@ class LMStudioClient:
         self.base_url = self.origin + "/v1"
         self.api_key = api_key
         self.timeout = float(timeout)
+        if model_policy not in ('', QWEN_MODEL_POLICY):
+            raise ValueError('Unknown assistant model policy.')
+        self.model_policy = model_policy
         self._completion_context = contextvars.ContextVar('lmstudio_completion_info', default=None)
         self.last_completion_info = None
         self._sdk_factory = sdk_factory
@@ -312,6 +316,7 @@ class LMStudioClient:
             raise
 
     def _load_model(self, model, context_length=8192, *, offload_kv_cache_to_gpu=None):
+        self._check_model_policy(model)
         if not isinstance(model, str) or not model or len(model) > 512:
             raise LMStudioError("Select a valid local model", code="invalid_model")
         if isinstance(context_length, bool) or not isinstance(context_length, int) or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
@@ -341,6 +346,7 @@ class LMStudioClient:
         """
         submitted = False
         try:
+            self._check_model_policy(model)
             if type(context_length) is not int or not MIN_CONTEXT_TOKENS <= context_length <= MAX_CONTEXT_TOKENS:
                 raise LMStudioError(f'Choose a supported loaded context length between {MIN_CONTEXT_TOKENS} and {MAX_CONTEXT_TOKENS} tokens.', code='invalid_request')
             instance_id = instance_id or ASSISTANT_PREFIX + uuid.uuid4().hex
@@ -586,6 +592,8 @@ class LMStudioClient:
         """Explicit CPU load; the caller must hold the coordinator lock and verify idle."""
         submitted = False
         try:
+            if self.model_policy:
+                raise LMStudioError('Qwen 3.8 27B uses GPU mode with automatic H3 handoff; resident CPU loading is disabled.', code='model_policy_violation', load_submitted=False)
             if mode == 'resident_small':
                 context_length = 4096
             elif context_length is None:
@@ -623,6 +631,11 @@ class LMStudioClient:
             raise LMStudioError("Unload did not confirm the requested instance ID", code="invalid_response")
         return data
 
+    def _check_model_policy(self, model):
+        if self.model_policy == QWEN_MODEL_POLICY and not is_qwen_27b_model(model):
+            raise LMStudioError('This local app is locked to Qwen 3.8 27B. No smaller model fallback is allowed.',
+                                code='model_policy_violation', load_submitted=False)
+
     def _loaded_model(self, model, require_vision=False):
         if not isinstance(model, str) or not model or len(model) > 512:
             raise LMStudioError("Select a model", code="invalid_model")
@@ -631,6 +644,8 @@ class LMStudioClient:
             if entry.get('type') != 'llm':
                 continue
             instances = entry.get("loaded_instances", [])
+            if entry['key'] == model or any(x.get('id') == model for x in instances if isinstance(x, dict)):
+                self._check_model_policy(entry['key'])
             matches.extend((x['id'], entry.get('capabilities', {})) for x in instances
                            if isinstance(x, dict) and isinstance(x.get('id'), str)
                            and (entry['key'] == model or x['id'] == model))

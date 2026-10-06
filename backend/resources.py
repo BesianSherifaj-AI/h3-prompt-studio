@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import httpx
 from .lmstudio import RESIDENT_PREFIX, RESIDENT_CPU_PREFIX, ASSISTANT_PREFIX, MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS
 from .projects import atomic_json
+from .assistant_profiles import enforce_model_policy
 try:
     import psutil
 except ImportError:  # A partial installation still checks HTTP; it never assumes idle.
@@ -109,6 +110,12 @@ class ResourceManager:
             if not isinstance(profile, dict) or profile.get('model') != model:
                 raise ResourceError('The assistant profile must name the requested model.')
             settings.update({key: profile[key] for key in ('model', 'context_length', 'ai_memory_mode') if key in profile})
+        if settings.get('assistant_model_policy'):
+            try:
+                enforce_model_policy(settings, {'model': model, 'context_length': settings.get('context_length', 8192),
+                                                'ai_memory_mode': settings.get('ai_memory_mode', 'exclusive')})
+            except ValueError as exc:
+                raise ResourceError(str(exc)) from exc
         mode = settings.get('ai_memory_mode', 'exclusive')
         context = 4096 if mode == 'resident_small' else settings.get('context_length', 8192)
         if mode not in ('exclusive', 'resident_small', 'resident_cpu') or type(context) is not int or not MIN_CONTEXT_TOKENS <= context <= MAX_CONTEXT_TOKENS:

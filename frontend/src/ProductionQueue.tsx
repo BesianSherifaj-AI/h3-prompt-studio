@@ -52,7 +52,7 @@ export function productionStatus(status: string) {
 
 export function ProductionBatchView({ batch, pending = false, onAction, onRetry, onPreview, onOpenProject, onExport, balanceAudio = true, onBalanceAudioChange }: {
   batch: ProductionBatch; pending?: boolean; onAction: (action: string) => void;
-  onRetry: (index: number) => void; onPreview: (item: ProductionItem) => void; onOpenProject: (id: string) => void;
+  onRetry: (index: number) => void; onPreview: (item: ProductionItem) => void; onOpenProject?: (id: string) => void;
   onExport?: (kind: 'film' | 'clips', edits: ProductionEdit[]) => void;
   balanceAudio?: boolean; onBalanceAudioChange?: (value: boolean) => void;
 }) {
@@ -107,7 +107,7 @@ export function ProductionBatchView({ batch, pending = false, onAction, onRetry,
     {batch.error && <p className="production-error" role="alert">{batch.error}</p>}
     <ol className="production-items">{batch.items?.map(item => <li key={item.index} className={`production-item is-${item.status}`}>
       <span className="production-index">{item.index + 1}</span>
-      <div className="production-item-copy"><button className="production-project-link" onClick={() => onOpenProject(item.project_id)}>{item.title || `Video ${item.index + 1}`}</button>
+      <div className="production-item-copy">{onOpenProject ? <button className="production-project-link" onClick={() => onOpenProject(item.project_id)}>{item.title || `Video ${item.index + 1}`}</button> : <strong>{item.title || `Video ${item.index + 1}`}</strong>}
         <small>{productionStatus(item.status)}{item.stage && item.stage !== item.status ? ` · ${item.stage}` : ''}{item.duration ? ` · ${item.duration}s` : ''}</small>
         {(item.asset_url || (item.status === 'succeeded' && item.run_id)) && <div className="production-item-files">
           {item.asset_url && <a href={item.asset_url} target="_blank" rel="noopener noreferrer" aria-label={`First frame for ${item.title || `video ${item.index + 1}`}`}>First frame</a>}
@@ -164,7 +164,7 @@ export default function ProductionQueue({ active, currentProjectId, currentProje
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    api('/projects?workspace=studio', undefined, undefined, undefined, TIMEOUT)
+    api('/projects?workspace=video', undefined, undefined, undefined, TIMEOUT)
       .then(value => { if (alive) setProjects(value); }).catch(e => { if (alive) setError(e.message); });
     return () => { alive = false; };
   }, [open, currentProjectId]);

@@ -35,4 +35,35 @@ if (-not (Test-StudioResponse $studioValidHealth)) { throw 'Valid health respons
 foreach ($studioBadHealth in @($null, [pscustomobject]@{ version = '1.0.0' }, [pscustomobject]@{ version = 'other'; token = ('a' * 43); project = @{ schema_version = 1; id = 'project' } })) {
     if (Test-StudioResponse $studioBadHealth) { throw 'Unrelated service accepted as Studio.' }
 }
-Write-Output 'Launcher/setup syntax, argument forwarding, native exit failure gate and response identity checks passed. No server or model was started.'
+$studioFingerprint = Get-StudioFingerprint $studioTestRoot
+$studioIdentityHealth = [pscustomobject]@{ version = '1.7.0'; code_fingerprint = $studioFingerprint; workspace_root = $studioTestRoot; token = ('a' * 43); project = [pscustomobject]@{ schema_version = 1; id = 'project' }; settings = [pscustomobject]@{ assistant_model_policy = 'qwen3.8-27b' } }
+Assert-StudioIdentity $studioIdentityHealth $studioTestRoot '1.7.0' $studioFingerprint
+foreach ($studioIdentityChange in @(@('version', '1.6.1'), @('code_fingerprint', ('0' * 64)), @('code_fingerprint', $null), @('workspace_root', 'C:\other-studio'))) {
+    $studioWrongIdentity = $studioIdentityHealth | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+    $studioWrongIdentity.($studioIdentityChange[0]) = $studioIdentityChange[1]
+    $studioRejectedIdentity = $false
+    try { Assert-StudioIdentity $studioWrongIdentity $studioTestRoot '1.7.0' $studioFingerprint } catch { $studioRejectedIdentity = $_.Exception.Message -like 'Port 8766 *' }
+    if (-not $studioRejectedIdentity) { throw "Launcher accepted an outdated or unrelated server: $($studioIdentityChange[0])." }
+}
+$studioFingerprintScript = New-TemporaryFile
+try {
+    $studioFingerprintSource = @'
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend.runtime_identity import runtime_fingerprint
+print(runtime_fingerprint(sys.argv[1]))
+'@
+    [IO.File]::WriteAllText($studioFingerprintScript.FullName, $studioFingerprintSource, [Text.UTF8Encoding]::new($false))
+    $studioPythonFingerprint = Invoke-StudioNative $studioTestPython @($studioFingerprintScript.FullName, $studioTestRoot)
+    if ($studioPythonFingerprint.Trim() -ne $studioFingerprint) { throw 'Python and launcher source fingerprints disagree.' }
+} finally { Remove-Item -LiteralPath $studioFingerprintScript.FullName -Force }
+$studioTestSettings = New-TemporaryFile
+try {
+    [IO.File]::WriteAllText($studioTestSettings.FullName, '{"lm_url":"http://localhost:4321/v1"}', [Text.UTF8Encoding]::new($false))
+    if ((Get-StudioLMOrigin $studioTestSettings.FullName) -ne 'http://localhost:4321') { throw 'Launcher did not preserve the configured local LM Studio port.' }
+    [IO.File]::WriteAllText($studioTestSettings.FullName, '{"lm_url":"http://example.com:1234/v1"}', [Text.UTF8Encoding]::new($false))
+    $studioRejectedRemote = $false
+    try { Get-StudioLMOrigin $studioTestSettings.FullName } catch { $studioRejectedRemote = $_.Exception.Message -like '*local HTTP*' }
+    if (-not $studioRejectedRemote) { throw 'Launcher accepted a remote LM Studio URL.' }
+} finally { Remove-Item -LiteralPath $studioTestSettings.FullName -Force }
+Write-Output 'Launcher/setup syntax, argument forwarding, native exit failure gate, version/source identity, cross-language fingerprint and local LM configuration checks passed. No server or model was started.'

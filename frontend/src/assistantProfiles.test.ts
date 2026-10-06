@@ -7,6 +7,11 @@ const settings = {
   assistant_profiles:{studio:{model:'large',context_length:65536,ai_memory_mode:'exclusive'},game:{model:'small',context_length:8192,ai_memory_mode:'resident_cpu'}},
 };
 describe('independent assistant settings',()=>{
+  it('Video and Film Studio share the Studio assistant profile while Game remains separate',()=>{
+    expect(assistantProfile(settings,'video')).toEqual(assistantProfile(settings,'studio'));
+    expect(assistantProfilePatch(settings,'video',{context_length:16384})).toEqual({assistant_profiles:{studio:{model:'large',context_length:16384,ai_memory_mode:'exclusive'}}});
+    expect(assistantProfile(settings,'game').model).toBe('small');
+  });
   it('changing a model preserves context and only sends the selected workspace',()=>{
     expect(assistantProfilePatch(settings,'studio',{model:'larger'})).toEqual({assistant_profiles:{studio:{model:'larger',context_length:65536,ai_memory_mode:'exclusive'}}});
     expect(assistantProfile(settings,'game').model).toBe('small');

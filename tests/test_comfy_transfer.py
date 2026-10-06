@@ -41,7 +41,7 @@ def schema():
     format_spec = ['COMFY_DYNAMICCOMBO_V3', {'options': [{'key': 'mp4', 'inputs': {'required': {'codec': codec}}}]}]
     return {
         'UNETLoader': node_schema({'unet_name': enum('minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'), 'weight_dtype': enum('default')}, ['MODEL']),
-        'CLIPLoader': node_schema({'clip_name': enum(HERETIC), 'type': enum('minimax'), 'device': enum('default')}, ['CLIP']),
+        'CLIPLoader': node_schema({'clip_name': enum(HERETIC), 'type': enum('minimax'), 'device': enum('default', 'cpu')}, ['CLIP']),
         'VAELoader': node_schema({'vae_name': enum('minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae_fp32.safetensors')}, ['VAE']),
         'LoraLoaderModelOnly': node_schema(model_inputs(lora_name=enum(REF_LORA, FL_LORA), strength_model=spec('FLOAT')), ['MODEL']),
         'MiniMaxH3SigmaShift': node_schema(model_inputs(shift_video=spec('FLOAT'), shift_audio=spec('FLOAT')), ['MODEL']),
