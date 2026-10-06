@@ -158,6 +158,9 @@ try {
   await expect(studio.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film · copy');
   expect(films.size).toBe(2);
   await studio.locator('.film-project-bar').getByRole('button', { name: 'My films', exact: true }).click();
+  // The library mounts before its save/refresh operation finishes. Match the
+  // enabled upload button before setting its hidden input programmatically.
+  await expect(studio.getByRole('button', { name: 'Import storyboard', exact: true })).toBeEnabled();
   await studio.getByLabel('Import film storyboard file').setInputFiles(backupPath);
   await expect(studio.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film');
   expect(films.size).toBe(3);

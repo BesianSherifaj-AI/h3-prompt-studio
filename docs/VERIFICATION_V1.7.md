@@ -4,7 +4,7 @@ Validated on Windows on 6 October 2026. The local runtime and reviewed GitHub ch
 
 ## Automated checks
 
-- 1,979 backend tests passed, including direct-start Qwen policy, persistence, workspace separation, film planning, revision conflicts, request recovery, production and exports.
+- 1,977 published backend tests passed, including direct-start Qwen policy, persistence, workspace separation, film planning, revision conflicts, request recovery, production and exports. Two additional private media helper tests passed in the Windows runtime (1,979 total locally).
 - 505 frontend tests passed across 45 files; the TypeScript and Vite production build passed.
 - 44 ComfyUI bridge tests passed.
 - Windows launcher syntax, native exit handling, version/source fingerprint and local LM configuration checks passed.

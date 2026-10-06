@@ -63,7 +63,7 @@ try {
   await page.getByRole('button',{name:'Connections',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Connections & GPU'});
   await dialog.getByRole('combobox',{name:'Prompt assistant model',exact:true}).selectOption('large');
-  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
   await expect(studio.getByRole('combobox',{name:'Video assistant',exact:true})).toHaveValue('other');
   await page.getByRole('button',{name:'Connections',exact:true}).click();
   await expect(dialog.getByRole('combobox',{name:'Prompt assistant model',exact:true})).toHaveValue('other');
@@ -71,7 +71,7 @@ try {
   failSave=true;
   await dialog.getByRole('button',{name:'Save connection',exact:true}).click();
   await expect(dialog.getByRole('alert')).toContainText('Fixture settings save failed.');
-  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
   await expect(studio.getByRole('combobox',{name:'Video assistant',exact:true})).toHaveValue('other');
   failSave=false;
   await page.getByRole('navigation',{name:'Workspace mode'}).locator('a[href="/game"]').click();
@@ -116,7 +116,7 @@ try {
   await dialog.getByRole('button',{name:'Save connection',exact:true}).click();
   await expect(dialog.getByRole('status')).toHaveText('Connections saved.');
   assert.equal(settings.assistant_profiles.studio.context_length,32768);
-  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
   await editor.getByRole('button',{name:'Close game editor',exact:true}).click();
   await expect(game.getByRole('combobox',{name:'Context',exact:true})).toHaveValue('32768');
   await page.setViewportSize({width:390,height:844});
@@ -131,5 +131,5 @@ try {
   await expect(studio).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,'Studio must fit a narrow viewport');
   assert.deepEqual(errors,[],'No browser runtime errors');
-  console.log('PASS: Video resume, three workspace destinations, shared Video/Studio AI profile, independent Game profile, context preservation, cancel, failed/successful Save, verified readiness, reconnect recovery, visible Game error, reload, 390px layout, zero runtime errors.');
+  console.log('PASS: Video resume, three workspace destinations, shared Video/Studio AI profile, independent Game profile, context preservation, discarded connection drafts, failed/successful Save, verified readiness, reconnect recovery, visible Game error, reload, 390px layout, zero runtime errors.');
 }finally{await browser.close();await new Promise(done=>server.close(done));}
