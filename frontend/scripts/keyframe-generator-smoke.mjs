@@ -20,6 +20,7 @@ await new Promise(done => server.listen(0, '127.0.0.1', done));
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const videoPane = page.locator('#video-workspace');
   page.setDefaultTimeout(6000);
   const errors = [], writes = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -52,10 +53,10 @@ try {
     await route.fulfill({json:result});
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/video`);
-  await page.getByRole('button',{name:/Opening scene/}).click();
-  await page.getByRole('tab',{name:'Photos',exact:true}).click();
-  await page.locator('.keyframe-generator>summary').click();
-  const form=page.locator('.keyframe-generator');
+  await videoPane.getByRole('button',{name:/Opening scene/}).click();
+  await videoPane.getByRole('tab',{name:/^Photos(?:\s|$)/}).click();
+  await videoPane.locator('.keyframe-generator>summary').click();
+  const form=videoPane.locator('.keyframe-generator');
   await form.getByLabel('Keyframe model',{exact:true}).selectOption(mage);
   await form.getByLabel('Keyframe prompt',{exact:true}).fill('Keep the same character and lamp; reach toward the switch.');
   await form.getByRole('checkbox',{name:'Character',exact:true}).check();
@@ -67,9 +68,9 @@ try {
   await expect(form.getByLabel('Keyframe prompt',{exact:true})).toHaveValue('Keep the same character and lamp; reach toward the switch.');
   const ticket=assetWrites[0].request_id;
   await page.reload();
-  await page.getByRole('button',{name:/Opening scene/}).click();
-  await page.getByRole('tab',{name:'Photos',exact:true}).click();
-  await page.locator('.keyframe-generator>summary').click();
+  await videoPane.getByRole('button',{name:/Opening scene/}).click();
+  await videoPane.getByRole('tab',{name:/^Photos(?:\s|$)/}).click();
+  await videoPane.locator('.keyframe-generator>summary').click();
   await expect(form.getByRole('button',{name:'Check saved request',exact:true})).toBeEnabled();
   await expect(form.getByRole('button',{name:'Generate keyframe',exact:true})).toBeDisabled();
   await expect(form.getByLabel('Keyframe model',{exact:true})).toHaveValue(mage);

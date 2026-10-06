@@ -20,6 +20,7 @@ await new Promise(done=>server.listen(0,'127.0.0.1',done));
 const browser=await chromium.launch({headless:true});
 try {
   const page=await browser.newPage({viewport:{width:1280,height:900}});
+  const videoPane=page.locator('#video-workspace'), gamePane=page.locator('#game-workspace');
   page.setDefaultTimeout(6000);
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   let settings={lm_url:'http://127.0.0.1:1234/v1',comfy_urls:['http://127.0.0.1:8188'],model:'large',context_length:32768,ai_memory_mode:'exclusive',assistant_profiles:{studio:{model:'large',context_length:32768,ai_memory_mode:'exclusive'},game:{model:'small',context_length:8192,ai_memory_mode:'resident_cpu'}}};
@@ -50,9 +51,9 @@ try {
     await route.fulfill({json:result});
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/video`);
-  await page.getByRole('button',{name:/Fixture video/}).click();
-  await page.locator('.simple-ai-settings > summary').click();
-  const studio=page.getByRole('region',{name:'Video assistant model'});
+  await videoPane.getByRole('button',{name:/Fixture video/}).click();
+  await videoPane.locator('.simple-ai-settings > summary').click();
+  const studio=videoPane.getByRole('region',{name:'Video assistant model'});
   await expect(studio).toBeVisible();
   await expect(studio.getByRole('combobox',{name:'Context',exact:true})).toHaveValue('32768');
   await studio.getByRole('combobox',{name:'Video assistant',exact:true}).selectOption('other');
@@ -73,8 +74,8 @@ try {
   await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
   await expect(studio.getByRole('combobox',{name:'Video assistant',exact:true})).toHaveValue('other');
   failSave=false;
-  await page.getByRole('link',{name:'Game Play & explore'}).click();
-  const game=page.getByRole('region',{name:'Game assistant model'});
+  await page.getByRole('navigation',{name:'Workspace mode'}).locator('a[href="/game"]').click();
+  const game=gamePane.getByRole('region',{name:'Game assistant model'});
   await expect(game).toBeVisible();
   assert.ok((await game.boundingBox()).height<230,'Desktop Game assistant keeps room for the preview');
   await expect(game.getByRole('combobox',{name:'Game assistant',exact:true})).toHaveValue('small');
@@ -100,8 +101,8 @@ try {
   assert.equal(settings.assistant_profiles.studio.context_length,32768);
   await page.reload();
   await expect(game.getByRole('combobox',{name:'Context',exact:true})).toHaveValue('16384');
-  await page.getByRole('button',{name:'Game settings',exact:true}).click();
-  const editor=page.getByRole('complementary',{name:'Game editor',exact:true});
+  await gamePane.getByRole('button',{name:'Game settings',exact:true}).click();
+  const editor=gamePane.getByRole('complementary',{name:'Game editor',exact:true});
   await editor.getByRole('tab',{name:'Rendering',exact:true}).click();
   await editor.getByRole('button',{name:'Connection',exact:true}).click();
   await expect(dialog).toBeVisible();
@@ -122,11 +123,11 @@ try {
   await expect(game).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,'Game must fit a narrow viewport');
   await page.getByRole('navigation',{name:'Workspace mode'}).getByRole('link',{name:/^Studio/}).click();
-  await expect(page.locator('.film-studio')).toBeVisible();
-  await expect(page.getByRole('heading',{name:'From scenes to a story.'})).toBeVisible();
+  await expect(page.locator('#studio-workspace .film-studio')).toBeVisible();
+  await expect(page.locator('#studio-workspace').getByRole('heading',{name:'From scenes to a story.'})).toBeVisible();
   await page.getByRole('navigation',{name:'Workspace mode'}).getByRole('link',{name:/^Video/}).click();
-  await page.getByRole('button',{name:/Fixture video/}).click();
-  await page.locator('.simple-ai-settings > summary').click();
+  await videoPane.getByRole('button',{name:/Fixture video/}).click();
+  await videoPane.locator('.simple-ai-settings > summary').click();
   await expect(studio).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true,'Studio must fit a narrow viewport');
   assert.deepEqual(errors,[],'No browser runtime errors');

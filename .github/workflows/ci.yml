@@ -50,13 +50,15 @@ jobs:
         run: node --test comfy_extension/tests/*.test.mjs
       - name: Smoke test built Video, film Studio and Game with isolated data
         run: |
-          node tools/browser_game_smoke.mjs
-          node tools/browser_game_smoke.mjs --player-picker-recovery
-          node tools/browser_game_smoke.mjs --workspace-scenes
-          node tools/browser_film_smoke.mjs
-          node tools/browser_scene_continuity_smoke.mjs
-          node frontend/scripts/assistant-settings-smoke.mjs
-          node frontend/scripts/production-queue-smoke.mjs
-          node frontend/scripts/keyframe-generator-smoke.mjs
+          failures=0
+          node tools/browser_game_smoke.mjs || failures=1
+          node tools/browser_game_smoke.mjs --player-picker-recovery || failures=1
+          node tools/browser_game_smoke.mjs --workspace-scenes || failures=1
+          node tools/browser_film_smoke.mjs || failures=1
+          node tools/browser_scene_continuity_smoke.mjs || failures=1
+          node frontend/scripts/assistant-settings-smoke.mjs || failures=1
+          node frontend/scripts/production-queue-smoke.mjs || failures=1
+          node frontend/scripts/keyframe-generator-smoke.mjs || failures=1
+          exit "$failures"
       - name: Verify distributable packaging
         run: python tools/package_release.py --version 1.7.0 --output-dir release/ci

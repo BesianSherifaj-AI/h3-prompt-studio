@@ -33,6 +33,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
+  const studio = page.locator('#studio-workspace');
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem('h3-workspace-mode', 'studio'));
   await page.route('**/api/**', async route => {
@@ -46,7 +47,7 @@ try {
       return route.fulfill({ status: 503, json: { detail: 'Film smoke forbids AI, image generation, Game actions and GPU batch starts.' } });
     }
     if (endpoint === '/bootstrap') return json({ token: 'a'.repeat(43), project: video, video_project: video, game_project: game, projects: [video], settings: { model: 'test', persona: 'universal', last_video_project: video.id }, personas: [] });
-    if (endpoint === '/connections') return json({ lm: { online: true, models: [] }, comfy: { online: false } });
+    if (endpoint === '/connections') return json({ lm: { online: true, models: [] }, comfy: [] });
     if (endpoint === '/projects') {
       if (method === 'POST') { const draft=request.postDataJSON(); expect(draft.id).toBe(video.id);expect(draft.workspace).toBe('video');expect(draft.story.text).toBe(video.story.text);return json(draft); }
       return json([video]);
@@ -94,45 +95,45 @@ try {
   await expect(page.locator('#studio-workspace')).toBeVisible();
   await expect(page.locator('#video-workspace')).not.toBeVisible();
   await expect(page.locator('#game-workspace')).not.toBeVisible();
-  await page.getByRole('button', { name: 'New film', exact: true }).first().click();
-  await page.getByLabel('Film name', { exact: true }).fill('Lantern film');
-  await expect(page.getByLabel('Film length').locator('option')).toHaveCount(10);
-  await page.getByLabel('Story idea').fill('A red paper lantern moves in a garden, then settles.');
-  await page.getByRole('button', { name: 'Create film', exact: true }).click();
-  await expect(page.getByLabel('Film idea')).toHaveValue('A red paper lantern moves in a garden, then settles.');
+  await studio.getByRole('button', { name: 'New film', exact: true }).first().click();
+  await studio.getByLabel('Film name', { exact: true }).fill('Lantern film');
+  await expect(studio.getByLabel('Film length').locator('option')).toHaveCount(10);
+  await studio.getByLabel('Story idea').fill('A red paper lantern moves in a garden, then settles.');
+  await studio.getByRole('button', { name: 'Create film', exact: true }).click();
+  await expect(studio.getByLabel('Film idea')).toHaveValue('A red paper lantern moves in a garden, then settles.');
   const originalId = [...films.keys()][0];
-  await expect(page.getByRole('button', { name: 'Create render queue', exact: true })).toBeDisabled();
+  await expect(studio.getByRole('button', { name: 'Create render queue', exact: true })).toBeDisabled();
   for (let index = 0; index < 4; index++) {
-    await page.getByRole('button', { name: `Edit clip ${index + 1}: Clip ${index + 1}`, exact: true }).click();
-    await page.getByLabel('Clip action', { exact: true }).fill(`Beat ${index + 1}: the same red lantern sways, then settles.`);
+    await studio.getByRole('button', { name: `Edit clip ${index + 1}: Clip ${index + 1}`, exact: true }).click();
+    await studio.getByLabel('Clip action', { exact: true }).fill(`Beat ${index + 1}: the same red lantern sways, then settles.`);
   }
-  await page.getByText('Camera, sound & spoken lines', { exact: true }).click();
-  await page.getByRole('button', { name: 'Add spoken line', exact: true }).click();
-  await page.getByLabel('Clip speaker 1', { exact: true }).fill('Mira');
-  await page.getByLabel('Clip spoken line 1', { exact: true }).fill('Mirëmbrëma.');
-  await page.getByLabel('Clip dialogue language 1', { exact: true }).fill('Albanian');
-  await page.locator('.film-project-bar').getByRole('button', { name: 'Save now', exact: true }).click();
+  await studio.getByText('Camera, sound & spoken lines', { exact: true }).click();
+  await studio.getByRole('button', { name: 'Add spoken line', exact: true }).click();
+  await studio.getByLabel('Clip speaker 1', { exact: true }).fill('Mira');
+  await studio.getByLabel('Clip spoken line 1', { exact: true }).fill('Mirëmbrëma.');
+  await studio.getByLabel('Clip dialogue language 1', { exact: true }).fill('Albanian');
+  await studio.locator('.film-project-bar').getByRole('button', { name: 'Save now', exact: true }).click();
   await expect.poll(() => films.get(originalId).shots[3].dialogue[0]?.language).toBe('Albanian');
-  await page.locator('.film-project-bar').getByRole('button', { name: 'My films', exact: true }).click();
-  await page.locator('.film-library > button').filter({ has: page.locator('strong', { hasText: /^Lantern film$/ }) }).click();
-  await expect(page.getByLabel('Clip action', { exact: true })).toHaveValue('Beat 1: the same red lantern sways, then settles.');
-  await page.getByRole('button', { name: 'Create render queue', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('retry to recover the same request');
-  await page.getByRole('button', { name: 'Create render queue', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Start batch', exact: true })).toBeVisible();
+  await studio.locator('.film-project-bar').getByRole('button', { name: 'My films', exact: true }).click();
+  await studio.locator('.film-library > button').filter({ has: page.locator('strong', { hasText: /^Lantern film$/ }) }).click();
+  await expect(studio.getByLabel('Clip action', { exact: true })).toHaveValue('Beat 1: the same red lantern sways, then settles.');
+  await studio.getByRole('button', { name: 'Create render queue', exact: true }).click();
+  await expect(studio.getByRole('alert')).toContainText('retry to recover the same request');
+  await studio.getByRole('button', { name: 'Create render queue', exact: true }).click();
+  await expect(studio.getByRole('button', { name: 'Start batch', exact: true })).toBeVisible();
   expect(batches.size).toBe(1);
   const firstQueue = [...batches.keys()][0], frozenOpening = frozen.get(firstQueue)[0].action;
-  await page.getByLabel('Clip action', { exact: true }).fill('The lantern brightens before the breeze begins.');
-  await expect(page.locator('.film-queue-warning')).toBeVisible();
-  await page.getByRole('button', { name: 'Create render queue', exact: true }).click();
+  await studio.getByLabel('Clip action', { exact: true }).fill('The lantern brightens before the breeze begins.');
+  await expect(studio.locator('.film-queue-warning')).toBeVisible();
+  await studio.getByRole('button', { name: 'Create render queue', exact: true }).click();
   await expect.poll(() => batches.size).toBe(2);
-  await page.getByLabel('Saved film render queue').selectOption(firstQueue);
-  await expect(page.locator('.film-queue-warning')).toBeVisible();
+  await studio.getByLabel('Saved film render queue').selectOption(firstQueue);
+  await expect(studio.locator('.film-queue-warning')).toBeVisible();
   expect(frozen.get(firstQueue)[0].action).toBe(frozenOpening);
   expect([...batches.values()].every(batch => batch.status === 'draft')).toBe(true);
-  await page.locator('.film-backup-tools > summary').click();
+  await studio.locator('.film-backup-tools > summary').click();
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download storyboard', exact: true }).click();
+  await studio.getByRole('button', { name: 'Download storyboard', exact: true }).click();
   const download = await downloadPromise;
   await mkdir(results, { recursive: true });
   const backupPath = path.join(results, 'film-storyboard-smoke.h3film.json');
@@ -141,8 +142,8 @@ try {
   expect(backup.format).toBe('h3-film-storyboard'); expect(backup.film.shots).toHaveLength(4);
   expect(backup.film).not.toHaveProperty('latest_batch_id'); expect(backup.film).not.toHaveProperty('id');
   const originalShotIds = films.get(originalId).shots.map(shot => shot.id);
-  await page.getByRole('button', { name: 'Duplicate film', exact: true }).click();
-  await expect(page.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film · copy');
+  await studio.getByRole('button', { name: 'Duplicate film', exact: true }).click();
+  await expect(studio.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film · copy');
   expect(films.size).toBe(2);
   const copied = [...films.values()].find(film => film.id !== originalId);
   expect(copied.batch_history).toEqual([]);
@@ -154,11 +155,11 @@ try {
       else await expect(page.locator(`#${pane}-workspace`)).not.toBeVisible();
     }
   }
-  await expect(page.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film · copy');
+  await expect(studio.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film · copy');
   expect(films.size).toBe(2);
-  await page.locator('.film-project-bar').getByRole('button', { name: 'My films', exact: true }).click();
-  await page.getByLabel('Import film storyboard file').setInputFiles(backupPath);
-  await expect(page.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film');
+  await studio.locator('.film-project-bar').getByRole('button', { name: 'My films', exact: true }).click();
+  await studio.getByLabel('Import film storyboard file').setInputFiles(backupPath);
+  await expect(studio.getByLabel('Film name', { exact: true })).toHaveValue('Lantern film');
   expect(films.size).toBe(3);
   const imported=[...films.values()].at(-1);
   expect(imported.shots.map(shot=>shot.action)).toEqual(backup.film.shots.map(shot=>shot.action));

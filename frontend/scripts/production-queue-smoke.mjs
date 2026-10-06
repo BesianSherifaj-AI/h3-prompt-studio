@@ -20,6 +20,8 @@ await new Promise(done => server.listen(0, '127.0.0.1', done));
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const videoPane = page.locator('#video-workspace');
+  const queue = videoPane.locator('.production-queue');
   page.setDefaultTimeout(6000);
   const errors = [], writes = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -39,15 +41,15 @@ try {
     else if (path === '/production' && body) {
       writes.push(body);
       if (failCreate) { await route.fulfill({ status: 503, json: { detail: 'Production storage temporarily unavailable.' } }); return; }
-      const batch = { id: body.request_id, name: body.name, status: 'draft', completed: 0, total: 1, items: [{ index: 0, project_id: project.id, title: project.title, status: 'queued' }] };
+      const batch = { id: body.request_id, name: body.name, status: 'draft', completed: 0, total: 1, items: [{ index: 0, project_id: project.id, title: project.title, status: 'pending', duration: 5, run_id: 'fixture-video-run' }] };
       batches = [batch]; result = batch;
     } else if (path === '/production') result = { batches };
     else if (path.startsWith('/production/')) {
       const action = path.split('/')[3];
       if (body) {
         writes.push({ action, ...body });
-        if (action === 'start' || action === 'resume') batches[0].status = 'running';
-        if (action === 'cancel') batches[0].status = 'cancelled';
+        if (action === 'start' || action === 'resume') { batches[0].status = 'running'; batches[0].items[0].status = 'queued'; }
+        if (action === 'cancel') { batches[0].status = 'cancelled'; batches[0].items[0].status = 'cancelled'; }
         if (action === 'export') {
           result = { url: '/exports/' + body.kind, filename: body.kind === 'film' ? 'film.mp4' : 'clips.zip', kind: body.kind, export_id: 'export-fixture', clip_count: 1, normalize_audio: body.normalize_audio };
           batches[0].latest_export = result;
@@ -59,43 +61,43 @@ try {
     await route.fulfill({ json: result });
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/video`);
-  await page.getByRole('button',{name:/Opening scene/}).click();
-  await page.locator('.simple-editor-tools > summary').click();
-  await page.getByRole('button',{name:'Advanced editor',exact:true}).click();
-  await page.locator('.production-queue > summary').click();
-  await page.locator('.production-create > summary').click();
-  await page.getByLabel('Batch name', { exact: true }).fill('Film test');
-  await page.getByRole('button', { name: 'Queue current project', exact: true }).click();
-  await expect(page.locator('.production-error')).toContainText('Production storage temporarily unavailable.');
+  await videoPane.getByRole('button',{name:/Opening scene/}).click();
+  await videoPane.locator('.simple-editor-tools > summary').click();
+  await videoPane.getByRole('button',{name:'Advanced editor',exact:true}).click();
+  await queue.locator(':scope > summary').click();
+  await queue.locator('.production-create > summary').click();
+  await queue.getByLabel('Batch name', { exact: true }).fill('Film test');
+  await queue.getByRole('button', { name: 'Queue current project', exact: true }).click();
+  await expect(queue.locator('.production-error')).toContainText('Production storage temporarily unavailable.');
   failCreate = false;
-  await page.getByRole('button', { name: 'Queue current project', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Start batch', exact: true })).toBeEnabled();
+  await queue.getByRole('button', { name: 'Queue current project', exact: true }).click();
+  await expect(queue.getByRole('button', { name: 'Start batch', exact: true })).toBeEnabled();
   assert.equal(writes[0].request_id, writes[1].request_id, 'Retry a failed create with the original idempotency key');
-  await page.getByRole('button', { name: 'Start batch', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Stop queue', exact: true })).toBeEnabled();
+  await queue.getByRole('button', { name: 'Start batch', exact: true }).click();
+  await expect(queue.getByRole('button', { name: 'Stop queue', exact: true })).toBeEnabled();
   await page.reload();
-  await page.getByRole('button',{name:/Opening scene/}).click();
-  await page.locator('.production-queue > summary').click();
-  await expect(page.getByRole('button', { name: 'Stop queue', exact: true })).toBeEnabled();
+  await videoPane.getByRole('button',{name:/Opening scene/}).click();
+  await queue.locator(':scope > summary').click();
+  await expect(queue.getByRole('button', { name: 'Stop queue', exact: true })).toBeEnabled();
   assert.equal(writes.filter(item => item.action === 'start').length, 1, 'Refreshing never starts another worker');
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, 'Production controls fit 390px');
-  await page.getByRole('button', { name: 'Stop queue', exact: true }).click();
-  await expect(page.locator('.production-batch-heading')).toContainText('Stopped');
+  await queue.getByRole('button', { name: 'Stop queue', exact: true }).click();
+  await expect(queue.locator('.production-batch-heading')).toContainText('Stopped');
   batches[0].status = 'succeeded'; batches[0].completed = 1; batches[0].items[0].status = 'succeeded';
-  await page.getByRole('button', { name: 'Refresh production queue', exact: true }).click();
-  const balance = page.getByRole('checkbox', { name: 'Balance clip volume', exact: true });
+  await queue.getByRole('button', { name: 'Refresh production queue', exact: true }).click();
+  const balance = queue.getByRole('checkbox', { name: 'Balance clip volume', exact: true });
   await expect(balance).toBeChecked();
-  await page.getByRole('button', { name: 'Export clips ZIP', exact: true }).click();
-  await expect(page.getByRole('link', { name: 'Download latest export: clips.zip', exact: true })).toBeVisible();
+  await queue.getByRole('button', { name: 'Export clips ZIP', exact: true }).click();
+  await expect(queue.getByRole('link', { name: 'Download latest export: clips.zip', exact: true })).toBeVisible();
   assert.equal(writes.at(-1).normalize_audio, true);
-  await expect(page.locator('.production-export')).toContainText('Balanced audio');
-  await page.getByRole('button', { name: 'Export film', exact: true }).click();
-  await expect(page.getByRole('link', { name: 'Download latest export: film.mp4', exact: true })).toBeVisible();
+  await expect(queue.locator('.production-export')).toContainText('Balanced audio');
+  await queue.getByRole('button', { name: 'Export film', exact: true }).click();
+  await expect(queue.getByRole('link', { name: 'Download latest export: film.mp4', exact: true })).toBeVisible();
   assert.equal(writes.at(-1).normalize_audio, false);
   await balance.uncheck();
-  await page.getByRole('button', { name: 'Export clips ZIP', exact: true }).click();
-  await expect(page.getByRole('link', { name: 'Download latest export: clips.zip', exact: true })).toBeVisible();
+  await queue.getByRole('button', { name: 'Export clips ZIP', exact: true }).click();
+  await expect(queue.getByRole('link', { name: 'Download latest export: clips.zip', exact: true })).toBeVisible();
   assert.equal(writes.at(-1).normalize_audio, false);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, 'Export controls fit 390px');
   assert.deepEqual(errors, []);
