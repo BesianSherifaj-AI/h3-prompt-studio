@@ -419,8 +419,21 @@ export default function App() {
   }, [view]);
   useEffect(() => {
     api("/bootstrap?workspace=video")
-      .then((data) => {
+      .then(async (data) => {
         setToken(data.token);
+        const linkedProject = new URLSearchParams(window.location.search).get("project");
+        if (linkedProject && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(linkedProject)) {
+          try {
+            const requested = await api("/projects/" + linkedProject);
+            if (requested.workspace === "video") {
+              data.project = requested;
+              setStudioScreen('editor');
+              setView('simple');
+            }
+          } catch {
+            toast("That video draft is unavailable. Your current project is still open.");
+          }
+        }
         ensurePromptTags(data.project);
         setP(data.project);
         setProjects(data.projects);

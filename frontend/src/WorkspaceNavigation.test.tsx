@@ -11,6 +11,6 @@ describe('three distinct workspaces',()=>{
     expect(html).toContain('Connected films · 1–10 min');
     expect(html).toContain('href="/video" aria-current="page"');
     expect(html).toContain('href="#video-workspace"');
-    expect(html).toContain('Connections');expect(html).toContain('Help');
+    expect(html).toContain('http://127.0.0.1:8790');expect(html).toContain('Image editor');expect(html).toContain('noopener noreferrer');expect(html).toContain('Connections');expect(html).toContain('Help');
   });
 });

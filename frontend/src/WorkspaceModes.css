@@ -41,3 +41,5 @@
   .workspace-switch svg{width:16px;height:16px}
   .workspace-feedback{top:var(--workspace-bar-height)}
 }
+
+.workspace-image-link{display:flex;align-items:center;gap:7px;padding:8px 12px;border:1px solid #34483d;border-radius:8px;color:inherit;text-decoration:none;min-height:40px}.workspace-image-link:hover{background:#294235}

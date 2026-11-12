@@ -61,4 +61,4 @@ jobs:
           node frontend/scripts/keyframe-generator-smoke.mjs || failures=1
           exit "$failures"
       - name: Verify distributable packaging
-        run: python tools/package_release.py --version 1.7.0 --output-dir release/ci
+        run: python tools/package_release.py --version 1.7.1 --output-dir release/ci

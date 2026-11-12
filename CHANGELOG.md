@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.1
+
+- Add the Atelier image-editor reference bridge and companion navigation.
+- Repeated transfers reuse the same draft and preserve subsequent edits.
+- Open transferred drafts directly in the simple video editor.
+- Keep active projects and rendering unchanged during a transfer.
+
+
 ## 1.7.0 — Video, film Studio and Game
 
 - Separate single-video, 1–10 minute film and interactive Game workflows in one responsive GUI.

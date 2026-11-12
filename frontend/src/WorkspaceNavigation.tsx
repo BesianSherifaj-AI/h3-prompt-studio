@@ -1,4 +1,4 @@
-import { Clapperboard, Gamepad2, HelpCircle, Plug, Video } from "lucide-react";
+import { Clapperboard, Gamepad2, HelpCircle, Image, Plug, Video } from "lucide-react";
 import type { WorkspaceMode } from "./workspaceRoutes";
 
 export default function WorkspaceNavigation({ mode, onNavigate, onConnections, onHelp }: {
@@ -15,6 +15,6 @@ export default function WorkspaceNavigation({ mode, onNavigate, onConnections, o
         <span>{value === "video" ? "Video" : value === "studio" ? "Studio" : "Game"}<small>{value === "video" ? "One clip · up to 15s" : value === "studio" ? "Connected films · 1–10 min" : "Play & explore"}</small></span>
       </a>)}
     </nav>
-    <div className="workspace-utilities"><button onClick={onConnections}><Plug size={16}/><span>Connections</span></button><button onClick={onHelp}><HelpCircle size={16}/><span>Help</span></button></div>
+    <div className="workspace-utilities"><a className="workspace-image-link" href="http://127.0.0.1:8790" target="_blank" rel="noopener noreferrer" title="Open Atelier image editor"><Image size={16}/><span>Image editor</span></a><button onClick={onConnections}><Plug size={16}/><span>Connections</span></button><button onClick={onHelp}><HelpCircle size={16}/><span>Help</span></button></div>
   </header>;
 }

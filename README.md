@@ -180,3 +180,7 @@ The package includes the prebuilt `dist/` frontend, source, launchers, dependenc
 This is an independent community tool and is not affiliated with MiniMax, ComfyUI, or LM Studio.
 
 See [v1.1 live validation and visual limitations](VERIFICATION_V1.1.md) for the measured Studio/Game, image-generation, playback and recovery checks.
+
+## Image editor companion (1.7.1)
+
+[Atelier · H3 Image Editor](https://github.com/BesianSherifaj-AI/h3-image-editor) runs separately on localhost:8790. Use **H3 video** in Atelier to copy the current image composition into a new video draft here, then open the returned draft link. The reference transfer is idempotent, requires the local session token, preserves your active project, and never starts a render. The **Image editor** navigation link returns to Atelier. Both services must be running locally.

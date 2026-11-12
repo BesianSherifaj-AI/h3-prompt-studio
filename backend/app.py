@@ -71,7 +71,7 @@ def client():
     return _assistant_client(SETTINGS['lm_url'], SETTINGS.get('assistant_model_policy', ''))
 
 RESOURCES = ResourceManager(lambda: copy.deepcopy(SETTINGS), client, state_path=DATA / 'resource_state.json')
-app = FastAPI(title='H3 Prompt Studio', version='1.7.0', docs_url='/api/docs')
+app = FastAPI(title='H3 Prompt Studio', version='1.7.1', docs_url='/api/docs')
 BRIDGE_PORTS = ('8188', '8000', '8010')
 LOCAL_ORIGINS = [f'http://{host}:{port}' for host in ('127.0.0.1', 'localhost') for port in (8766, 8188, 8010, 8000)]
 app.add_middleware(CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=['GET', 'POST', 'PUT', 'PATCH'], allow_headers=['Content-Type', 'X-H3-Bridge', 'X-H3-Token'])
@@ -1593,6 +1593,10 @@ async def import_project(file: UploadFile = File(...), workspace: str | None = N
         for subject in project['subjects']:
             subject['asset_ids'] = [id_map.get(a, a) for a in subject.get('asset_ids', [])]
         return save_import(project)
+
+from .atelier_bridge import install as install_atelier_bridge
+import sys as _sys
+install_atelier_bridge(app, _sys.modules[__name__])
 
 @app.get('/{path:path}')
 def frontend(path: str):
